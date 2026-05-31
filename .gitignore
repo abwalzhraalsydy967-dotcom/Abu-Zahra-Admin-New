@@ -1,7 +1,11 @@
 # Built application files
-*.apk
 *.ap_
 *.aab
+
+# APK files - except in Releases folder
+/*.apk
+Android-App/**/*.apk
+!Releases/*.apk
 
 # Files for the ART/Dalvik VM
 *.dex
