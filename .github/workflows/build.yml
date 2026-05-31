@@ -1,0 +1,55 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x Abu-Zahra-App/gradlew
+
+    - name: Build Debug APK
+      run: |
+        cd Abu-Zahra-App
+        ./gradlew assembleDebug --stacktrace
+
+    - name: Build Release APK
+      run: |
+        cd Abu-Zahra-App
+        ./gradlew assembleRelease --stacktrace
+
+    - name: Upload Debug APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: Abu-Zahra-App/app/build/outputs/apk/debug/*.apk
+
+    - name: Upload Release APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-release
+        path: Abu-Zahra-App/app/build/outputs/apk/release/*.apk
+
+    - name: List built files
+      run: |
+        echo "=== Debug APK ==="
+        ls -la Abu-Zahra-App/app/build/outputs/apk/debug/ 2>/dev/null || echo "No debug APK"
+        echo "=== Release APK ==="
+        ls -la Abu-Zahra-App/app/build/outputs/apk/release/ 2>/dev/null || echo "No release APK"
