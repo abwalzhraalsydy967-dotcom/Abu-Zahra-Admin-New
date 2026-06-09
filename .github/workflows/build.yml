@@ -3,8 +3,6 @@ name: Build APK
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -22,34 +20,24 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+
     - name: Grant execute permission for gradlew
-      run: chmod +x Abu-Zahra-App/gradlew
+      run: chmod +x Android-App/gradlew
 
     - name: Build Debug APK
       run: |
-        cd Abu-Zahra-App
+        cd Android-App
         ./gradlew assembleDebug --stacktrace
-
-    - name: Build Release APK
-      run: |
-        cd Abu-Zahra-App
-        ./gradlew assembleRelease --stacktrace
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
       with:
         name: app-debug
-        path: Abu-Zahra-App/app/build/outputs/apk/debug/*.apk
-
-    - name: Upload Release APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-release
-        path: Abu-Zahra-App/app/build/outputs/apk/release/*.apk
+        path: Android-App/app/build/outputs/apk/debug/*.apk
 
     - name: List built files
       run: |
         echo "=== Debug APK ==="
-        ls -la Abu-Zahra-App/app/build/outputs/apk/debug/ 2>/dev/null || echo "No debug APK"
-        echo "=== Release APK ==="
-        ls -la Abu-Zahra-App/app/build/outputs/apk/release/ 2>/dev/null || echo "No release APK"
+        ls -la Android-App/app/build/outputs/apk/debug/ 2>/dev/null || echo "No debug APK"
