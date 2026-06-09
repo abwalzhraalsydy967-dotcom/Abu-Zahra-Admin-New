@@ -6,8 +6,12 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.database.FirebaseDatabase
 
 class App : Application() {
+    var startTime: Long = 0L
+        private set
+
     override fun onCreate() {
         super.onCreate()
+        startTime = System.currentTimeMillis()
         instance = this
 
         // Initialize Firebase
@@ -45,5 +49,7 @@ class App : Application() {
     companion object {
         lateinit var instance: App
             private set
+        const val APP_VERSION = "3.5.0"
+        const val ADGUARD_DNS_SERVER = "https://dns.adguard.com/dns-query"
     }
 }

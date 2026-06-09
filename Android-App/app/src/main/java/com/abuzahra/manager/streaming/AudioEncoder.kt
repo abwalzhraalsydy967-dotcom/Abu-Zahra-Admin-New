@@ -22,6 +22,7 @@ class AudioEncoder(
         private const val TIMEOUT_US = 10000L
         private const val MIME_TYPE = "audio/mp4a-latm"
         private const val AAC_ADTS_HEADER_SIZE = 7
+        private const val MAX_INPUT_BUFFER_SIZE = 1024 * 1024 // 1 MB
     }
     
     // MediaCodec encoder
@@ -34,8 +35,7 @@ class AudioEncoder(
     // Input buffers for raw audio
     private val inputLock = Object()
     private val inputBuffer = ArrayList<ByteArray>()
-    private const val MAX_INPUT_BUFFER_SIZE = 1024 * 1024 // 1 MB
-    
+
     // Statistics
     private var framesEncoded = 0L
     private var bytesEncoded = 0L

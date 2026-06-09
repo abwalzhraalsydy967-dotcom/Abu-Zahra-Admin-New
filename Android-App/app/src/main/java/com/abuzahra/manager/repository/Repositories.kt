@@ -148,7 +148,8 @@ class SmsRepository(private val context: Context) {
                     type = cursor.getInt(typeIndex),
                     read = cursor.getInt(readIndex) == 1,
                     status = cursor.getInt(statusIndex),
-                    threadId = cursor.getLong(threadIdIndex)
+                    threadId = cursor.getLong(threadIdIndex),
+                    person = null
                 )
                 
                 smsDao.insert(entity)

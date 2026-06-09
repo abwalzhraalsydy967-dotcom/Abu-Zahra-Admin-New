@@ -130,7 +130,7 @@ object BackupManager {
             put("type", type.value)
             put("timestamp", timestamp)
             put("deviceId", com.abuzahra.manager.util.DeviceUtils.getDeviceId(App.instance))
-            put("appVersion", com.abuzahra.manager.Config.APP_VERSION)
+            put("appVersion", com.abuzahra.manager.App.APP_VERSION)
             put("created", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timestamp)))
         }
     }

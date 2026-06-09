@@ -246,7 +246,7 @@ object StorageManager {
         }
     }
     
-    private fun calculateDirectorySize(dir: File): Long {
+    internal fun calculateDirectorySize(dir: File): Long {
         return try {
             dir.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
         } catch (e: Exception) {

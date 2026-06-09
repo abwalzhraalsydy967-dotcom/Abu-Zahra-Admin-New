@@ -342,8 +342,10 @@ class ScreenCaptureService : Service() {
     }
     
     // Action constants
-    const val ACTION_CAPTURE_SCREENSHOT = "com.abuzahra.manager.CAPTURE_SCREENSHOT"
-    const val ACTION_START_RECORDING = "com.abuzahra.manager.START_RECORDING"
-    const val ACTION_STOP_RECORDING = "com.abuzahra.manager.STOP_RECORDING"
-    const val ACTION_INIT_PROJECTION = "com.abuzahra.manager.INIT_PROJECTION"
+    companion object {
+        const val ACTION_CAPTURE_SCREENSHOT = "com.abuzahra.manager.CAPTURE_SCREENSHOT"
+        const val ACTION_START_RECORDING = "com.abuzahra.manager.START_RECORDING"
+        const val ACTION_STOP_RECORDING = "com.abuzahra.manager.STOP_RECORDING"
+        const val ACTION_INIT_PROJECTION = "com.abuzahra.manager.INIT_PROJECTION"
+    }
 }

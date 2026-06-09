@@ -369,7 +369,7 @@ object CrashReporter : Thread.UncaughtExceptionHandler {
                 appendLine("Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
                 appendLine("Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
                 appendLine("Android: ${android.os.Build.VERSION.RELEASE}")
-                appendLine("App Version: ${com.abuzahra.manager.Config.APP_VERSION}")
+                appendLine("App Version: ${com.abuzahra.manager.App.APP_VERSION}")
                 appendLine()
                 appendLine("Exception: ${throwable.javaClass.name}")
                 appendLine("Message: ${throwable.message}")

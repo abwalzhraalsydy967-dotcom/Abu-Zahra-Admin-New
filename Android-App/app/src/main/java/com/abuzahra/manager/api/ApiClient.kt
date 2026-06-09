@@ -198,8 +198,8 @@ object ApiClient {
     }
 
     // ===== SEND DATA =====
-    suspend fun sendData(context: Context, command: String, data: Any?) {
-        withContext(Dispatchers.IO) {
+    suspend fun sendData(context: Context, command: String, data: Any?): Boolean {
+        return withContext(Dispatchers.IO) {
             try {
                 val deviceId = DeviceUtils.getDeviceId(context)
                 val body = mapOf(
@@ -210,8 +210,10 @@ object ApiClient {
                 )
                 val response = post("/data", body)
                 Log.d(TAG, "sendData response: '${response.take(200)}'")
+                true
             } catch (e: Exception) {
                 Log.e(TAG, "sendData error", e)
+                false
             }
         }
     }
@@ -313,6 +315,17 @@ object ApiClient {
         } catch (e: Exception) {
             Log.e(TAG, "uploadFile error for $command", e)
                 "{\"error\":\"${e.message}\"}"
+        }
+    }
+
+    // ===== SEND HEALTH REPORT =====
+    suspend fun sendHealthReport(report: Map<String, Any>) {
+        withContext(Dispatchers.IO) {
+            try {
+                post("/health", report)
+            } catch (e: Exception) {
+                Log.e(TAG, "sendHealthReport error", e)
+            }
         }
     }
 
