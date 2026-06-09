@@ -402,7 +402,8 @@ object SyncManager {
             dataId = dataId,
             dataPayload = payload,
             priority = priority,
-            nextAttempt = System.currentTimeMillis()
+            nextAttempt = System.currentTimeMillis(),
+            error = null
         )
         return database.syncQueueDao().insert(item)
     }

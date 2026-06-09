@@ -1,6 +1,7 @@
 package com.abuzahra.manager.executor
 
 import android.app.DownloadManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller

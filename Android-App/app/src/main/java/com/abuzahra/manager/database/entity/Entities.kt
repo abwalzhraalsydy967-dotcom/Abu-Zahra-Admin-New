@@ -10,13 +10,13 @@ import java.util.Date
 data class ContactEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val contactId: String,
-    val name: String?,
+    val name: String? = null,
     val phoneNumber: String,
-    val email: String?,
-    val photoUri: String?,
+    val email: String? = null,
+    val photoUri: String? = null,
     val starred: Boolean = false,
     val timesContacted: Int = 0,
-    val lastContacted: Long?,
+    val lastContacted: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val synced: Boolean = false
@@ -53,12 +53,12 @@ data class CallEntity(
     val date: Long,
     val duration: Long,
     val type: Int, // 1=incoming, 2=outgoing, 3=missed, 4=voicemail, 5=rejected, 6=blocked
-    val name: String?,
-    val cachedNumberType: Int?,
-    val cachedNumberLabel: String?,
-    val countryIso: String?,
-    val voicemailUri: String?,
-    val transcription: String?,
+    val name: String? = null,
+    val cachedNumberType: Int? = null,
+    val cachedNumberLabel: String? = null,
+    val countryIso: String? = null,
+    val voicemailUri: String? = null,
+    val transcription: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val synced: Boolean = false
 )
@@ -123,10 +123,10 @@ data class DeviceEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val eventType: String,
     val eventCategory: String,
-    val eventData: String?, // JSON string
+    val eventData: String? = null, // JSON string
     val timestamp: Long,
-    val deviceId: String?,
-    val sessionId: String?,
+    val deviceId: String? = null,
+    val sessionId: String? = null,
     val severity: Int = 0, // 0=info, 1=warning, 2=error, 3=critical
     val acknowledged: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
@@ -166,10 +166,10 @@ data class SyncQueueEntity(
     val priority: Int = 0,
     val retryCount: Int = 0,
     val maxRetries: Int = 5,
-    val lastAttempt: Long?,
+    val lastAttempt: Long? = null,
     val nextAttempt: Long,
     val status: String = "pending", // pending, in_progress, failed, completed
-    val error: String?,
+    val error: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
