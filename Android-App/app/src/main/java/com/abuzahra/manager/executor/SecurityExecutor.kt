@@ -362,25 +362,34 @@ object SecurityExecutor {
         }
     }
 
-    fun disableBiometric(context: Context): String {
-        // Biometric cannot be disabled programmatically for security reasons
+    fun disableBiometric(context: Context): Map<String, Any> {
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                context.startActivity(Intent(Settings.ACTION_FACE_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                context.startActivity(Intent(Settings.ACTION_FINGERPRINT_ENROLL).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-            } else {
-                context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
+            val intent = when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
+                    Intent(Settings.ACTION_BIOMETRIC_ENROLL).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        putExtra("biometric_enroll", true)
+                    }
+                }
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> {
+                    Intent(Settings.ACTION_FINGERPRINT_ENROLL).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                }
+                else -> {
+                    Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                }
             }
-            "Opening security settings to disable biometric"
+            context.startActivity(intent)
+            mapOf(
+                "status" to "opened_settings",
+                "message" to "Opening security/biometric settings. Biometric cannot be disabled programmatically for security reasons - user must manually remove biometric data.",
+                "action_required" to "user_manual_removal"
+            )
         } catch (e: Exception) {
-            "Error: ${e.message}"
+            mapOf("error" to (e.message ?: "Failed to open settings"))
         }
     }
     
@@ -561,10 +570,16 @@ object SecurityExecutor {
     // ===== SCREEN LOCK =====
     fun setScreenLock(context: Context): String {
         return try {
-            val intent = Intent(Settings.ACTION_SECURITY_SETTINGS)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            if (km.isDeviceSecure) {
+                return "Screen lock is already configured (device is secure)"
+            }
+            // Open lock screen settings to let user set up a lock
+            val intent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
             context.startActivity(intent)
-            "Opening security settings"
+            "Opening security settings to set screen lock"
         } catch (e: Exception) {
             Log.e(TAG, "Set screen lock error", e)
             "Error: ${e.message}"
@@ -572,7 +587,37 @@ object SecurityExecutor {
     }
 
     fun removeScreenLock(context: Context): String {
-        return setScreenLock(context) // Requires manual removal
+        return try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+
+            if (!dpm.isAdminActive(adminComponent)) {
+                // Try opening settings directly for lock screen removal
+                val intent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                return "Opening security settings - Device Admin not active. Remove lock manually or activate Device Admin first."
+            }
+
+            // Reset password to empty to remove screen lock
+            val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                dpm.resetPassword("", DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+            } else {
+                @Suppress("DEPRECATION")
+                dpm.resetPassword("", DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+            }
+
+            if (result) {
+                dpm.lockNow()
+                "Screen lock removed (password reset to empty via Device Admin)"
+            } else {
+                "Failed to remove screen lock - device may have additional restrictions"
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Remove screen lock error", e)
+            "Error: ${e.message}"
+        }
     }
     
     fun isScreenLockEnabled(context: Context): Map<String, Any> {

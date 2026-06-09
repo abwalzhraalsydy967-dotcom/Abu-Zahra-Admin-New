@@ -781,14 +781,42 @@ object ControlExecutor {
     // ===== SET RINGTONE =====
     fun setRingtone(context: Context, params: Map<String, Any>): String {
         val arg = params["arg"]?.toString() ?: ""
-        return if (arg.isNotBlank()) {
-            try {
-                // Ringtone setting requires file URI
-                "Ringtone setting requires a valid media file URI"
-            } catch (e: Exception) {
-                "Error: ${e.message}"
+        if (arg.isBlank()) return "No ringtone URI provided"
+        return try {
+            if (!Settings.System.canWrite(context)) {
+                context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                return "Opening write settings permission - grant WRITE_SETTINGS first"
             }
-        } else "No ringtone URI provided"
+            val ringtoneUri = android.net.Uri.parse(arg)
+            // Validate the URI by checking if we can open it
+            val ringtone = android.media.RingtoneManager.getRingtone(context, ringtoneUri)
+            if (ringtone != null) {
+                // Set as default ringtone
+                Settings.System.putString(context.contentResolver, Settings.System.RINGTONE, ringtoneUri.toString())
+                // Preview the ringtone briefly
+                val player = android.media.MediaPlayer.create(context, ringtoneUri)
+                player?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                player?.setOnCompletionListener { mp -> mp.release() }
+                player?.start()
+                Thread { Thread.sleep(5000); try { player?.stop(); player?.release() } catch (_: Exception) {} }.start()
+                "Ringtone set and previewing"
+            } else {
+                "Failed to load ringtone from URI: $arg - ensure it points to a valid audio file"
+            }
+        } catch (e: SecurityException) {
+            "Error: Permission denied - WRITE_SETTINGS required: ${e.message}"
+        } catch (e: Exception) {
+            Log.e(TAG, "Set ringtone error", e)
+            "Error: ${e.message}"
+        }
     }
 
     // ===== WIFI CONTROL =====
@@ -897,17 +925,46 @@ object ControlExecutor {
     // ===== HOTSPOT =====
     fun enableHotspot(context: Context): String {
         return try {
-            context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            })
-            "Opening hotspot settings"
+            // Try WifiManager.setWifiApEnabled via reflection (requires system/root)
+            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val method = wm.javaClass.getDeclaredMethod("setWifiApEnabled", android.net.wifi.WifiConfiguration::class.java, Boolean::class.javaPrimitiveType)
+            method.isAccessible = true
+            method.invoke(wm, null, true)
+            "Hotspot enabled via reflection"
         } catch (e: Exception) {
-            Log.e(TAG, "Enable hotspot error", e)
-            "Error: ${e.message}"
+            Log.w(TAG, "Hotspot reflection failed: ${e.message}")
+            try {
+                context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                "Hotspot control requires WRITE_SETTINGS and system-level WiFi AP API (only available with root or system app privileges). Opening WiFi settings."
+            } catch (e2: Exception) {
+                Log.e(TAG, "Enable hotspot error", e2)
+                "Error: ${e2.message}"
+            }
         }
     }
 
-    fun disableHotspot(context: Context): String = enableHotspot(context)
+    fun disableHotspot(context: Context): String {
+        return try {
+            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val method = wm.javaClass.getDeclaredMethod("setWifiApEnabled", android.net.wifi.WifiConfiguration::class.java, Boolean::class.javaPrimitiveType)
+            method.isAccessible = true
+            method.invoke(wm, null, false)
+            "Hotspot disabled via reflection"
+        } catch (e: Exception) {
+            Log.w(TAG, "Hotspot disable reflection failed: ${e.message}")
+            try {
+                context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                "Hotspot control requires WRITE_SETTINGS and system-level WiFi AP API (only available with root or system app privileges). Opening WiFi settings."
+            } catch (e2: Exception) {
+                Log.e(TAG, "Disable hotspot error", e2)
+                "Error: ${e2.message}"
+            }
+        }
+    }
 
     // ===== AIRPLANE MODE =====
     fun airplaneOn(context: Context): String {
@@ -1295,22 +1352,45 @@ object ControlExecutor {
 
     // ===== DNS CHANGE =====
     fun dnsChange(context: Context, params: Map<String, Any>): String {
-        return "DNS change requires VPN service implementation"
+        val dns = params["arg"]?.toString() ?: params["dns"]?.toString() ?: ""
+        if (dns.isBlank()) return "No DNS server address provided (e.g., 8.8.8.8)"
+        return try {
+            // Try setting via Settings.Global (requires WRITE_SECURE_SETTINGS for system app)
+            Settings.Global.putString(context.contentResolver, Settings.Global.ADGUARD_DNS_SERVER, dns)
+            "DNS set to $dns via Settings.Global (may require system app or root for full effect; VPN-based DNS is recommended)"
+        } catch (e: SecurityException) {
+            "DNS change failed: WRITE_SECURE_SETTINGS permission required. VPN-based DNS override is recommended as an alternative."
+        } catch (e: Exception) {
+            Log.e(TAG, "DNS change error", e)
+            "DNS change requires VPN service implementation for reliable results. Error: ${e.message}"
+        }
     }
 
     // ===== PROXY =====
     fun proxySet(context: Context, params: Map<String, Any>): String {
+        val arg = params["arg"]?.toString() ?: ""
+        if (arg.isBlank()) {
+            // Clear proxy if no arg
+            return try {
+                Settings.Global.putString(context.contentResolver, "global_http_proxy_host", null as String?)
+                Settings.Global.putInt(context.contentResolver, "global_http_proxy_port", 0)
+                Settings.Global.putString(context.contentResolver, "global_http_proxy_exclusion_list", null as String?)
+                "Proxy cleared"
+            } catch (e: Exception) {
+                "Error clearing proxy: ${e.message}"
+            }
+        }
         return try {
-            val arg = params["arg"]?.toString() ?: ""
-            if (arg.isNotBlank()) {
-                val parts = arg.split(":")
-                val host = parts.getOrNull(0) ?: ""
-                val port = parts.getOrNull(1)?.toIntOrNull() ?: 8080
-                
-                Settings.Global.putString(context.contentResolver, "global_http_proxy_host", host)
-                Settings.Global.putInt(context.contentResolver, "global_http_proxy_port", port)
-                "Proxy set to $host:$port"
-            } else "No proxy address provided"
+            val parts = arg.split(":")
+            val host = parts.getOrNull(0) ?: ""
+            val port = parts.getOrNull(1)?.toIntOrNull() ?: 8080
+
+            Settings.Global.putString(context.contentResolver, "global_http_proxy_host", host)
+            Settings.Global.putInt(context.contentResolver, "global_http_proxy_port", port)
+            Log.d(TAG, "Proxy set to $host:$port via Settings.Global")
+            "Proxy set to $host:$port via Settings.Global (requires WRITE_SECURE_SETTINGS for system-wide effect)"
+        } catch (e: SecurityException) {
+            "Proxy set failed: WRITE_SECURE_SETTINGS required. System app or root needed for global proxy. Error: ${e.message}"
         } catch (e: Exception) {
             Log.e(TAG, "Proxy set error", e)
             "Error: ${e.message}"

