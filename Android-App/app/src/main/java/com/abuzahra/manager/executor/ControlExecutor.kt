@@ -272,7 +272,7 @@ object ControlExecutor {
                     } catch (_: Exception) {}
                 }
                 
-                mapOf(
+                return mapOf(
                     "status" to "success",
                     "message" to "Screenshot captured",
                     "width" to resultBitmap!!.width,
@@ -282,11 +282,11 @@ object ControlExecutor {
                     "base64_preview" to base64.take(500) + "..."
                 )
             } else {
-                mapOf("error" to (error ?: "Failed to capture screen"))
+                return mapOf("error" to (error ?: "Failed to capture screen"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Screen capture error", e)
-            return mapOf("error" to e.message)
+            return mapOf("error" to (e.message ?: "Unknown error"))
         }
     }
 
@@ -428,7 +428,7 @@ object ControlExecutor {
                 resultBitmap!!.compress(Bitmap.CompressFormat.JPEG, 80, stream)
                 val base64 = Base64.encodeToString(stream.toByteArray(), Base64.DEFAULT)
                 
-                mapOf(
+                return mapOf(
                     "status" to "success",
                     "message" to "Photo captured from ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"} camera",
                     "width" to resultBitmap!!.width,
@@ -437,11 +437,11 @@ object ControlExecutor {
                     "base64_preview" to base64.take(500) + "..."
                 )
             } else {
-                mapOf("error" to (errorMessage ?: "Failed to capture photo"))
+                return mapOf("error" to (errorMessage ?: "Failed to capture photo"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Camera capture error", e)
-            mapOf("error" to (e.message ?: "Camera capture failed"))
+            return mapOf("error" to (e.message ?: "Camera capture failed"))
         }
     }
 

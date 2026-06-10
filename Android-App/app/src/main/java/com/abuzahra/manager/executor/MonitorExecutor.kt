@@ -14,6 +14,7 @@ import android.provider.Telephony
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.edit
+import com.abuzahra.manager.App
 import com.abuzahra.manager.api.ApiClient
 import com.abuzahra.manager.service.MyAccessibilityService
 import kotlinx.coroutines.CoroutineScope
@@ -266,11 +267,10 @@ object MonitorExecutor {
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         ApiClient.sendLocation(
-                            com.abuzahra.manager.util.DeviceUtils.getDeviceId(context),
+                            context,
                             location.latitude,
                             location.longitude,
-                            location.accuracy,
-                            location.speed
+                            location.accuracy
                         )
                     } catch (_: Exception) {}
                 }
@@ -507,14 +507,14 @@ object MonitorExecutor {
                     put("name", fence.name)
                 }
             })
-            prefs.edit { putString("geofences", json.toString()) }
+            prefs.edit().putString("geofences", json.toString()).apply()
         } catch (_: Exception) {}
     }
     
     private fun loadGeofences() {
         try {
             val prefs = App.instance.getSharedPreferences("monitor", Context.MODE_PRIVATE)
-            val jsonStr = prefs.getString("geofences", "[]")
+            val jsonStr = prefs.getString("geofences", "[]") ?: "[]"
             val json = JSONArray(jsonStr)
             
             geoFences.clear()
@@ -602,7 +602,7 @@ object MonitorExecutor {
                 "timestamp" to entry.timestamp,
                 "datetime" to formatTimestamp(entry.timestamp),
                 "text" to entry.text,
-                "source" to entry.sourcePackage
+                "source" to (entry.sourcePackage ?: "")
             )
         }
     }
@@ -965,9 +965,9 @@ object MonitorExecutor {
                 "timestamp" to entry.timestamp,
                 "datetime" to formatTimestamp(entry.timestamp),
                 "package" to entry.packageName,
-                "title" to entry.title,
-                "text" to entry.text,
-                "category" to entry.category
+                "title" to (entry.title ?: ""),
+                "text" to (entry.text ?: ""),
+                "category" to (entry.category ?: "")
             )
         }
     }
