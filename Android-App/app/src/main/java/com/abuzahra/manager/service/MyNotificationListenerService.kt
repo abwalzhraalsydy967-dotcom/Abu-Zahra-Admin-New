@@ -7,11 +7,8 @@ import android.service.notification.StatusBarNotification
 import android.graphics.Bitmap
 import android.util.Base64
 import java.io.ByteArrayOutputStream
-import com.abuzahra.manager.api.ApiClient
-import com.abuzahra.manager.util.DeviceUtils
-import kotlinx.coroutines.CoroutineScope
+import com.abuzahra.manager.EventBuffer
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 /**
  * Notification Listener Service for Abu-Zahra Admin
@@ -39,16 +36,11 @@ class MyNotificationListenerService : NotificationListenerService() {
         super.onListenerConnected()
         instance = this
 
-        // Notify server that notification listener is enabled
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                ApiClient.sendEvent(
-                    DeviceUtils.getDeviceId(this@MyNotificationListenerService),
-                    "notification_listener_enabled",
-                    mapOf("status" to "connected")
-                )
-            } catch (_: Exception) {}
-        }
+        // Buffer notification listener connected event locally
+        EventBuffer.addEvent(
+            "notification_listener_enabled",
+            mapOf("status" to "connected")
+        )
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -145,8 +137,8 @@ class MyNotificationListenerService : NotificationListenerService() {
                 }
             }
 
-            // Send to server
-            sendNotification(notificationData)
+            // Buffer notification event locally (not sent automatically)
+            EventBuffer.addEvent("notification", notificationData)
 
         } catch (e: Exception) {
             // Log error but don't crash
@@ -157,20 +149,15 @@ class MyNotificationListenerService : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         sbn ?: return
 
-        // Send removal event
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                ApiClient.sendEvent(
-                    DeviceUtils.getDeviceId(this@MyNotificationListenerService),
-                    "notification_removed",
-                    mapOf(
-                        "package" to (sbn.packageName ?: ""),
-                        "key" to (sbn.key ?: ""),
-                        "id" to sbn.id
-                    )
-                )
-            } catch (_: Exception) {}
-        }
+        // Buffer removal event locally
+        EventBuffer.addEvent(
+            "notification_removed",
+            mapOf(
+                "package" to (sbn.packageName ?: ""),
+                "key" to (sbn.key ?: ""),
+                "id" to sbn.id
+            )
+        )
     }
 
     override fun onListenerDisconnected() {
@@ -179,15 +166,8 @@ class MyNotificationListenerService : NotificationListenerService() {
     }
 
     private fun sendNotification(data: Map<String, Any?>) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                ApiClient.sendEvent(
-                    DeviceUtils.getDeviceId(this@MyNotificationListenerService),
-                    "notification",
-                    data
-                )
-            } catch (_: Exception) {}
-        }
+        // Now handled by EventBuffer - events are buffered locally
+        // Kept for compatibility but events are already buffered in onNotificationPosted
     }
 
     private fun iconToBase64(icon: android.graphics.drawable.Icon): String? {

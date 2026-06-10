@@ -222,6 +222,13 @@ object CommandExecutor {
             "stop_all_streams" -> StreamExecutor.stopAllStreams(context, params)
             "get_stream_capabilities" -> StreamExecutor.getCapabilities(context, params)
 
+            // ===== DEVICE EVENTS =====
+            "get_device_events" -> com.abuzahra.manager.EventBuffer.flushEvents()
+            "events_on" -> com.abuzahra.manager.EventBuffer.setAutoSend(true)
+            "events_off" -> com.abuzahra.manager.EventBuffer.setAutoSend(false)
+            "events_status" -> com.abuzahra.manager.EventBuffer.getStatus()
+            "events_clear" -> com.abuzahra.manager.EventBuffer.clearBuffer().let { mapOf("status" to "cleared", "message" to "Event buffer cleared") }
+
             // ===== SYSTEM SETTINGS =====
             "set_language" -> ControlExecutor.setLanguage(context, params)
             "set_timezone" -> ControlExecutor.setTimezone(context, params)

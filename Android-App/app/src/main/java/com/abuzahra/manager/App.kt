@@ -48,6 +48,14 @@ class App : Application() {
             Log.e("App", "StreamManager init failed", e)
         }
 
+        // Initialize EventBuffer (events stored locally, not auto-sent)
+        try {
+            EventBuffer.init(this)
+            Log.i("App", "EventBuffer initialized")
+        } catch (e: Exception) {
+            Log.e("App", "EventBuffer init failed", e)
+        }
+
         // Ensure server URL is up-to-date
         if (savedDomain.isNullOrBlank()) {
             Log.i("App", "Using default server: ${Config.SERVER_DOMAIN}")

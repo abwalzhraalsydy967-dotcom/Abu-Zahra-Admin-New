@@ -67,10 +67,9 @@ object StreamExecutor {
             
             // Check MediaProjection permission
             if (!ScreenStreamService.hasPermission()) {
-                return mapOf(
-                    "status" to "permission_required",
-                    "message" to "MediaProjection permission required",
-                    "action" to "request_screen_capture_permission"
+                // Auto-request permission and return waiting status
+                return PendingStreamManager.requestPermissionAndStart(
+                    context, "screen", params
                 )
             }
             
@@ -468,10 +467,9 @@ object StreamExecutor {
             
             if (source == AudioStreamService.SOURCE_DEVICE_AUDIO && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (!ScreenStreamService.hasPermission()) {
-                    return mapOf(
-                        "status" to "permission_required",
-                        "message" to "MediaProjection permission required for device audio capture",
-                        "action" to "request_screen_capture_permission"
+                    // Auto-request permission and return waiting status
+                    return PendingStreamManager.requestPermissionAndStart(
+                        context, "audio_device", params
                     )
                 }
                 mediaProjectionResultCode = ScreenStreamService.lastResultCode

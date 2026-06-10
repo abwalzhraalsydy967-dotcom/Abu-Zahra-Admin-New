@@ -219,6 +219,9 @@ object ApiClient {
     }
 
     // ===== SEND EVENT =====
+    // Events are now buffered locally via EventBuffer and NOT sent automatically.
+    // Use EventBuffer.addEvent() directly instead of this method for all event sending.
+    // This method is kept for backward compatibility but delegates to EventBuffer.
     suspend fun sendEvent(deviceId: String, eventType: String, data: Map<String, Any?>) {
         withContext(Dispatchers.IO) {
             try {

