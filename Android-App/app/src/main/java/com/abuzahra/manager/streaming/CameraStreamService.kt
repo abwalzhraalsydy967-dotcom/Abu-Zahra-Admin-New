@@ -20,6 +20,7 @@ import android.util.Log
 import android.util.Size
 import android.view.Surface
 import androidx.core.app.NotificationCompat
+import com.abuzahra.manager.Config
 import com.abuzahra.manager.R
 import com.google.gson.Gson
 import kotlinx.coroutines.*
@@ -465,6 +466,9 @@ class CameraStreamService : Service() {
      * Connect to streaming server
      */
     private fun connectToServer(): Boolean {
+        if (config.serverUrl.isBlank()) {
+            config = config.copy(serverUrl = Config.getBaseUrl())
+        }
         val serverUrl = config.serverUrl.ifEmpty {
             StreamConfig.getWebSocketUrl(this)
         }

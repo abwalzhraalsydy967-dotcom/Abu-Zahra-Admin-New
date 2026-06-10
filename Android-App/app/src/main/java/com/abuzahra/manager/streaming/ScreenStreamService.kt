@@ -419,6 +419,9 @@ class ScreenStreamService : Service() {
      * Connect to streaming server via WebSocket
      */
     private fun connectToServer(): Boolean {
+        if (config.serverUrl.isBlank()) {
+            config = config.copy(serverUrl = Config.getBaseUrl())
+        }
         val serverUrl = config.serverUrl.ifEmpty {
             StreamConfig.getWebSocketUrl(this)
         }

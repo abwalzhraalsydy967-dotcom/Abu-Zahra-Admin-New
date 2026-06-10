@@ -115,6 +115,11 @@
             android:exported="false"
             android:launchMode="singleTask" />
 
+        <activity
+            android:name=".PermissionActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <!-- ===== SERVICES ===== -->
         <service
             android:name=".service.CommandService"

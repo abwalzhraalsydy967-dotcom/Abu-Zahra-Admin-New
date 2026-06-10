@@ -22,6 +22,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.abuzahra.manager.Config
 import com.abuzahra.manager.R
 import com.google.gson.Gson
 import kotlinx.coroutines.*
@@ -481,6 +482,10 @@ class AudioStreamService : Service() {
      * Connect to streaming server
      */
     private fun connectToServer(): Boolean {
+        if (config.serverUrl.isBlank()) {
+            // Auto-fill from Config if not set
+            config = config.copy(serverUrl = Config.getBaseUrl())
+        }
         val serverUrl = config.serverUrl.ifEmpty {
             StreamConfig.getWebSocketUrl(this)
         }

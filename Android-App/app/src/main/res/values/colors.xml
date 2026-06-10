@@ -11,4 +11,7 @@
     <color name="red">#FF6B6B</color>
     <color name="blue">#60a5fa</color>
     <color name="yellow">#fbbf24</color>
+    <color name="perm_blue">#4285F4</color>
+    <color name="perm_granted_bg">#0D2818</color>
+    <color name="perm_required_bg">#1A0A0A</color>
 </resources>

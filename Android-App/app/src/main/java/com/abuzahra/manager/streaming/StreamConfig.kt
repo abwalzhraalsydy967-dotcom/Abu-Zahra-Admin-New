@@ -310,9 +310,8 @@ object StreamConfig {
         if (config.audioBitrate < MIN_AUDIO_BITRATE || config.audioBitrate > MAX_AUDIO_BITRATE) {
             errors.add("Invalid audio bitrate: ${config.audioBitrate}")
         }
-        if (config.videoEnabled && config.serverUrl.isBlank()) {
-            errors.add("Server URL is required")
-        }
+        // Note: serverUrl is auto-filled by StreamExecutor from Config.getBaseUrl()
+        // We no longer require it in validation to avoid false errors
         
         return errors
     }
@@ -325,42 +324,48 @@ object StreamConfig {
             streamType = StreamType.SCREEN,
             quality = Quality.LOW,
             fps = 15,
-            videoBitrate = 1_000_000
+            videoBitrate = 1_000_000,
+            serverUrl = Config.getBaseUrl()
         )
         
         fun screenShareMedium() = Configuration(
             streamType = StreamType.SCREEN,
             quality = Quality.MEDIUM,
             fps = 30,
-            videoBitrate = 2_500_000
+            videoBitrate = 2_500_000,
+            serverUrl = Config.getBaseUrl()
         )
         
         fun screenShareHigh() = Configuration(
             streamType = StreamType.SCREEN,
             quality = Quality.HIGH,
             fps = 30,
-            videoBitrate = 5_000_000
+            videoBitrate = 5_000_000,
+            serverUrl = Config.getBaseUrl()
         )
         
         fun cameraStream() = Configuration(
             streamType = StreamType.CAMERA_BACK,
             quality = Quality.MEDIUM,
             fps = 30,
-            videoBitrate = 2_000_000
+            videoBitrate = 2_000_000,
+            serverUrl = Config.getBaseUrl()
         )
         
         fun audioOnlyMic() = Configuration(
             streamType = StreamType.AUDIO_MIC,
             videoEnabled = false,
             audioEnabled = true,
-            audioBitrate = 128_000
+            audioBitrate = 128_000,
+            serverUrl = Config.getBaseUrl()
         )
         
         fun audioOnlyDevice() = Configuration(
             streamType = StreamType.AUDIO_DEVICE,
             videoEnabled = false,
             audioEnabled = true,
-            audioBitrate = 192_000
+            audioBitrate = 192_000,
+            serverUrl = Config.getBaseUrl()
         )
     }
 }
