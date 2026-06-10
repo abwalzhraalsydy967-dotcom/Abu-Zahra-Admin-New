@@ -21,7 +21,9 @@ class AudioEncoder(
         val data: ByteArray,
         val presentationTimeUs: Long,
         val isKeyFrame: Boolean
-    )
+    ) {
+        val size: Int get() = data.size
+    }
 
     fun setEncodedDataCallback(cb: (EncodedAudioFrame) -> Unit) {
         callback = cb
