@@ -427,7 +427,8 @@ object PermissionChecker {
     /**
      * Check if a runtime permission should show rationale (was denied before)
      */
-    fun shouldShowRationale(activity: android.app.Activity, permission: String): Boolean {
+    fun shouldShowRationale(context: Context, permission: String): Boolean {
+        val activity = context as? android.app.Activity ?: return false
         return androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
     }
 
