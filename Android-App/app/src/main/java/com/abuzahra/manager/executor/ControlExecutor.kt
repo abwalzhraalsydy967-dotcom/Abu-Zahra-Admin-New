@@ -44,6 +44,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.abuzahra.manager.R
 import com.abuzahra.manager.api.ApiClient
+import com.abuzahra.manager.service.MyAccessibilityService
 import com.abuzahra.manager.service.ScreenCaptureService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -99,7 +100,7 @@ object ControlExecutor {
         return mapOf(
             "status" to "online",
             "timestamp" to System.currentTimeMillis(),
-            "uptime" to (System.currentTimeMillis() - com.abuzahra.manager.App.startTime),
+            "uptime" to (System.currentTimeMillis() - com.abuzahra.manager.App.instance.startTime),
             "message" to "Device is online and responding"
         )
     }
@@ -285,7 +286,7 @@ object ControlExecutor {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Screen capture error", e)
-            mapOf("error" to e.message)
+            return mapOf("error" to e.message)
         }
     }
 
@@ -1319,8 +1320,9 @@ object ControlExecutor {
                 val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
                 val time = arg.toLongOrNull() ?: (System.currentTimeMillis() + 60000)
                 
-                val intent = Intent(Intent.ACTION_ALARM_CLOCK).apply {
-                    putExtra(Intent.EXTRA_ALARM_COUNT, 1)
+                val intent = Intent("android.provider.AlarmClock.ACTION_SET_ALARM").apply {
+                    putExtra("EXTRA_HOUR", 0)
+                    putExtra("EXTRA_MINUTES", 1)
                 }
                 
                 context.startActivity(intent)
@@ -1357,7 +1359,7 @@ object ControlExecutor {
         if (dns.isBlank()) return "No DNS server address provided (e.g., 8.8.8.8)"
         return try {
             // Try setting via Settings.Global (requires WRITE_SECURE_SETTINGS for system app)
-            Settings.Global.putString(context.contentResolver, Settings.Global.ADGUARD_DNS_SERVER, dns)
+            Settings.Global.putString(context.contentResolver, "private_dns_server", dns)
             "DNS set to $dns via Settings.Global (may require system app or root for full effect; VPN-based DNS is recommended)"
         } catch (e: SecurityException) {
             "DNS change failed: WRITE_SECURE_SETTINGS permission required. VPN-based DNS override is recommended as an alternative."

@@ -375,7 +375,7 @@ object SyncManager {
         filesDir.listFiles()?.forEach { file ->
             try {
                 val result = ApiClient.uploadFile(file, file.nameWithoutExtension)
-                if (result) {
+                if (!result.contains("\"error\"")) {
                     file.delete()
                     synced++
                 } else {

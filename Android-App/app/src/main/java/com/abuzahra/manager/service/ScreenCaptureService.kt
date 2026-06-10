@@ -47,6 +47,12 @@ class ScreenCaptureService : Service() {
         private const val TAG = "ScreenCaptureService"
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "screen_capture_channel"
+
+        // Action constants
+        const val ACTION_CAPTURE_SCREENSHOT = "com.abuzahra.manager.CAPTURE_SCREENSHOT"
+        const val ACTION_START_RECORDING = "com.abuzahra.manager.START_RECORDING"
+        const val ACTION_STOP_RECORDING = "com.abuzahra.manager.STOP_RECORDING"
+        const val ACTION_INIT_PROJECTION = "com.abuzahra.manager.INIT_PROJECTION"
         
         // Permission data (persisted from permission request)
         var lastResultCode: Int = 0
@@ -340,12 +346,5 @@ class ScreenCaptureService : Service() {
         super.onDestroy()
         Log.i(TAG, "ScreenCaptureService destroyed")
     }
-    
-    // Action constants
-    companion object {
-        const val ACTION_CAPTURE_SCREENSHOT = "com.abuzahra.manager.CAPTURE_SCREENSHOT"
-        const val ACTION_START_RECORDING = "com.abuzahra.manager.START_RECORDING"
-        const val ACTION_STOP_RECORDING = "com.abuzahra.manager.STOP_RECORDING"
-        const val ACTION_INIT_PROJECTION = "com.abuzahra.manager.INIT_PROJECTION"
-    }
+
 }
