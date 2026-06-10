@@ -100,14 +100,8 @@ class MyAccessibilityService : AccessibilityService() {
             // Listen to all packages
             packageNames = null
             
-            // Additional capabilities for Android 8+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                capabilities = AccessibilityServiceInfo.CAPABILITY_CAN_RETRIEVE_WINDOW_CONTENT or
-                        AccessibilityServiceInfo.CAPABILITY_CAN_REQUEST_TOUCH_EXPLORATION or
-                        AccessibilityServiceInfo.CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS or
-                        AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES or
-                        AccessibilityServiceInfo.CAPABILITY_CAN_CAPTURE_GESTURES
-            }
+            // Additional capabilities are configured in accessibility_service_config.xml
+            // (canPerformGestures, canRetrieveWindowContent, etc.)
         }
         serviceInfo = info
 

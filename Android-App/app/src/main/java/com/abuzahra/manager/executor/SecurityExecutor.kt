@@ -1,6 +1,7 @@
 package com.abuzahra.manager.executor
 
 import android.Manifest
+import android.app.Activity
 import android.app.KeyguardManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
@@ -489,7 +490,9 @@ object SecurityExecutor {
                 "is_device_owner" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) dpm.isDeviceOwnerApp(context.packageName) else false,
                 "is_profile_owner" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) dpm.isProfileOwnerApp(context.packageName) else false,
                 "policies" to policies,
-                "device_owner_name" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) (dpm.deviceOwnerName ?: "") else ""
+                "device_owner_name" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try { dpm.getDeviceOwnerName() ?: "" } catch (e: Exception) { "" }
+                } else ""
             )
         } catch (e: Exception) {
             Log.e(TAG, "Device admin status error", e)
@@ -769,8 +772,9 @@ object SecurityExecutor {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+                val activity = context as? Activity ?: return "error_not_activity"
                 km.requestDismissKeyguard(
-                    context as? FragmentActivity,
+                    activity,
                     object : KeyguardManager.KeyguardDismissCallback() {
                         override fun onDismissSucceeded() {
                             // Keyguard dismissed

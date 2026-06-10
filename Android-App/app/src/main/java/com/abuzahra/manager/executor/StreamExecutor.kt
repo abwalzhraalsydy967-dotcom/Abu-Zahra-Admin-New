@@ -8,6 +8,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import com.abuzahra.manager.streaming.*
+import com.google.gson.Gson
 import kotlinx.coroutines.*
 
 /**
@@ -577,7 +578,7 @@ object StreamExecutor {
                     "bytes_sent" to session.state.totalBytesSent,
                     "frames_encoded" to session.state.totalFramesEncoded,
                     "current_bitrate" to session.state.currentBitrate,
-                    "last_error" to session.state.lastError,
+                    "last_error" to (session.state.lastError ?: ""),
                     "config" to session.config.toMap()
                 )
             }
@@ -589,8 +590,8 @@ object StreamExecutor {
             mapOf(
                 "active_stream_count" to sessions.size,
                 "active_stream_ids" to sessions.keys.toList(),
-                "total_bytes_sent" to statistics["total_bytes_sent"],
-                "total_frames_encoded" to statistics["total_frames_encoded"],
+                "total_bytes_sent" to (statistics["total_bytes_sent"] ?: 0L),
+                "total_frames_encoded" to (statistics["total_frames_encoded"] ?: 0),
                 "streams" to sessions.mapValues { (_, session) ->
                     mapOf(
                         "type" to session.streamType.name,
@@ -672,7 +673,7 @@ object StreamExecutor {
                     StreamConfig.StreamType.SCREEN -> {
                         val intent = Intent(context, ScreenStreamService::class.java).apply {
                             action = ScreenStreamService.ACTION_UPDATE_CONFIG
-                            putExtra(ScreenStreamService.EXTRA_CONFIG, newConfig)
+                            putExtra(ScreenStreamService.EXTRA_CONFIG, Gson().toJson(newConfig))
                         }
                         context.startService(intent)
                     }
@@ -723,7 +724,7 @@ object StreamExecutor {
                             StreamConfig.StreamType.SCREEN -> {
                                 val intent = Intent(context, ScreenStreamService::class.java).apply {
                                     action = ScreenStreamService.ACTION_UPDATE_CONFIG
-                                    putExtra(ScreenStreamService.EXTRA_CONFIG, newConfig)
+                                    putExtra(ScreenStreamService.EXTRA_CONFIG, Gson().toJson(newConfig))
                                 }
                                 context.startService(intent)
                             }
@@ -976,17 +977,17 @@ object StreamExecutor {
             val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
             val cameraIds = cameraManager?.cameraIdList ?: emptyArray()
             val hasFrontCamera = cameraIds.any { id ->
-                cameraManager.getCameraCharacteristics(id)
+                cameraManager!!.getCameraCharacteristics(id)
                     .get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == 
                     android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
             }
             val hasBackCamera = cameraIds.any { id ->
-                cameraManager.getCameraCharacteristics(id)
+                cameraManager!!.getCameraCharacteristics(id)
                     .get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == 
                     android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
             }
             val hasFlash = cameraIds.any { id ->
-                cameraManager.getCameraCharacteristics(id)
+                cameraManager!!.getCameraCharacteristics(id)
                     .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             }
             
