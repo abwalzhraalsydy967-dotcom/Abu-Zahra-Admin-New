@@ -490,9 +490,7 @@ object SecurityExecutor {
                 "is_device_owner" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) dpm.isDeviceOwnerApp(context.packageName) else false,
                 "is_profile_owner" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) dpm.isProfileOwnerApp(context.packageName) else false,
                 "policies" to policies,
-                "device_owner_name" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    try { dpm.deviceOwnerName ?: "" } catch (e: Exception) { "" }
-                } else ""
+                "device_owner_name" to try { @Suppress("DEPRECATION") (java.lang.reflect.Method::class.java.getDeclaredMethod("getDeviceOwnerName")).let { m -> m.invoke(dpm)?.toString() ?: "" } } catch (e: Exception) { "" }
             )
         } catch (e: Exception) {
             Log.e(TAG, "Device admin status error", e)

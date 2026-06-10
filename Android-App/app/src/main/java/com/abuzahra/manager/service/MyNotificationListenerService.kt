@@ -78,7 +78,7 @@ class MyNotificationListenerService : NotificationListenerService() {
 
             // Get priority
             val priority = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                notification.extras?.getInt(android.app.Notification.EXTRA_PRIORITY, notification.priority) ?: notification.priority
+                notification.extras?.getInt("priority", notification.priority) ?: notification.priority
             } else {
                 @Suppress("DEPRECATION")
                 notification.priority
