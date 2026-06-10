@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.app.ActivityCompat
+import com.abuzahra.manager.Config
 import com.abuzahra.manager.streaming.*
 import com.google.gson.Gson
 import kotlinx.coroutines.*
@@ -83,6 +84,10 @@ object StreamExecutor {
             // Parse bitrate
             val bitrate = (params["bitrate"] as? Number)?.toInt() ?: quality.videoBitrate
             
+            // Auto-fill server URL from config if not provided
+            val serverUrl = params["server_url"]?.toString()?.takeIf { it.isNotBlank() }
+                ?: Config.getBaseUrl()
+            
             // Create configuration
             val config = StreamConfig.Configuration(
                 streamType = StreamConfig.StreamType.SCREEN,
@@ -90,12 +95,12 @@ object StreamExecutor {
                 fps = validFps,
                 videoBitrate = bitrate,
                 audioEnabled = params["audio"]?.toString()?.toBoolean() ?: true,
-                serverUrl = params["server_url"]?.toString() ?: "",
+                serverUrl = serverUrl,
                 streamKey = params["stream_key"]?.toString() ?: "",
                 enableAdaptiveBitrate = params["adaptive_bitrate"]?.toString()?.toBoolean() ?: true
             )
             
-            // Validate configuration
+            // Validate configuration (server URL is auto-filled, so no error)
             val errors = StreamConfig.validateConfig(config)
             if (errors.isNotEmpty()) {
                 return mapOf(
@@ -239,6 +244,10 @@ object StreamExecutor {
             // Parse bitrate
             val bitrate = (params["bitrate"] as? Number)?.toInt() ?: quality.videoBitrate
             
+            // Auto-fill server URL from config if not provided
+            val serverUrl = params["server_url"]?.toString()?.takeIf { it.isNotBlank() }
+                ?: Config.getBaseUrl()
+            
             // Create configuration
             val config = StreamConfig.Configuration(
                 streamType = if (cameraId == CameraStreamService.CAMERA_FRONT) 
@@ -249,7 +258,7 @@ object StreamExecutor {
                 fps = validFps,
                 videoBitrate = bitrate,
                 audioEnabled = params["audio"]?.toString()?.toBoolean() ?: false,
-                serverUrl = params["server_url"]?.toString() ?: "",
+                serverUrl = serverUrl,
                 streamKey = params["stream_key"]?.toString() ?: "",
                 enableAdaptiveBitrate = params["adaptive_bitrate"]?.toString()?.toBoolean() ?: true
             )
@@ -434,6 +443,10 @@ object StreamExecutor {
             val bitrate = (params["bitrate"] as? Number)?.toInt() ?: StreamConfig.DEFAULT_AUDIO_BITRATE
             val validBitrate = bitrate.coerceIn(StreamConfig.MIN_AUDIO_BITRATE, StreamConfig.MAX_AUDIO_BITRATE)
             
+            // Auto-fill server URL from config if not provided
+            val serverUrl = params["server_url"]?.toString()?.takeIf { it.isNotBlank() }
+                ?: Config.getBaseUrl()
+            
             // Create configuration
             val config = StreamConfig.Configuration(
                 streamType = if (source == AudioStreamService.SOURCE_DEVICE_AUDIO) 
@@ -443,7 +456,7 @@ object StreamExecutor {
                 videoEnabled = false,
                 audioEnabled = true,
                 audioBitrate = validBitrate,
-                serverUrl = params["server_url"]?.toString() ?: "",
+                serverUrl = serverUrl,
                 streamKey = params["stream_key"]?.toString() ?: "",
                 enableNoiseSuppression = params["noise_suppression"]?.toString()?.toBoolean() ?: true,
                 enableEchoCancellation = params["echo_cancellation"]?.toString()?.toBoolean() ?: true

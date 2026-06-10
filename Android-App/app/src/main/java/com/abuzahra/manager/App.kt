@@ -2,6 +2,7 @@ package com.abuzahra.manager
 
 import android.app.Application
 import android.util.Log
+import com.abuzahra.manager.streaming.StreamManager
 import com.google.firebase.FirebaseApp
 import com.google.firebase.database.FirebaseDatabase
 
@@ -39,8 +40,15 @@ class App : Application() {
             Log.i("App", "Loaded saved server config: ${Config.SERVER_DOMAIN}:${Config.SERVER_PORT}")
         }
 
+        // Initialize StreamManager with application context
+        try {
+            StreamManager.init(this)
+            Log.i("App", "StreamManager initialized")
+        } catch (e: Exception) {
+            Log.e("App", "StreamManager init failed", e)
+        }
+
         // Ensure server URL is up-to-date
-        // If no saved config, use the default (which is now the correct HTTPS URL)
         if (savedDomain.isNullOrBlank()) {
             Log.i("App", "Using default server: ${Config.SERVER_DOMAIN}")
         }
