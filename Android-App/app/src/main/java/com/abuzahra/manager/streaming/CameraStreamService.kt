@@ -156,13 +156,8 @@ class CameraStreamService : Service() {
         
         when (intent?.action) {
             ACTION_START_STREAM -> {
-                val configExtra = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getSerializableExtra(EXTRA_CONFIG, StreamConfig.Configuration::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getSerializableExtra(EXTRA_CONFIG) as? StreamConfig.Configuration
-                }
-                configExtra?.let { config = it }
+                val configJson = intent.getStringExtra(EXTRA_CONFIG)
+                configJson?.let { try { config = com.google.gson.Gson().fromJson(it, StreamConfig.Configuration::class.java) } catch(_ : Exception) {} }
                 
                 val cameraId = intent.getStringExtra(EXTRA_CAMERA_ID) ?: CAMERA_BACK
                 startStreaming(cameraId)

@@ -182,13 +182,8 @@ class ScreenStreamService : Service() {
         
         when (intent?.action) {
             ACTION_START_STREAM -> {
-                val configExtra = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getSerializableExtra(EXTRA_CONFIG, StreamConfig.Configuration::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getSerializableExtra(EXTRA_CONFIG) as? StreamConfig.Configuration
-                }
-                configExtra?.let { config = it }
+                val configJson = intent.getStringExtra(EXTRA_CONFIG)
+                configJson?.let { try { config = com.google.gson.Gson().fromJson(it, StreamConfig.Configuration::class.java) } catch(_ : Exception) {} }
                 
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, lastResultCode)
                 val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -204,13 +199,8 @@ class ScreenStreamService : Service() {
             ACTION_PAUSE_STREAM -> pauseStreaming()
             ACTION_RESUME_STREAM -> resumeStreaming()
             ACTION_UPDATE_CONFIG -> {
-                val newConfig = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getSerializableExtra(EXTRA_CONFIG, StreamConfig.Configuration::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getSerializableExtra(EXTRA_CONFIG) as? StreamConfig.Configuration
-                }
-                newConfig?.let { updateConfig(it) }
+                val newConfigJson = intent.getStringExtra(EXTRA_CONFIG)
+                newConfigJson?.let { try { updateConfig(com.google.gson.Gson().fromJson(it, StreamConfig.Configuration::class.java)) } catch(_ : Exception) {} }
             }
         }
         

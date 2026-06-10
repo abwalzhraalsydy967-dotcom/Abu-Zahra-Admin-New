@@ -375,7 +375,7 @@ object CrashReporter : Thread.UncaughtExceptionHandler {
                 appendLine("Message: ${throwable.message}")
                 appendLine()
                 appendLine("Stack Trace:")
-                throwable.printStackTrace(java.io.PrintWriter(this))
+                throwable.printStackTrace(java.io.PrintWriter(java.io.StringWriter().also { append(it.toString()) }))
             }
             
             crashFile.writeText(report)

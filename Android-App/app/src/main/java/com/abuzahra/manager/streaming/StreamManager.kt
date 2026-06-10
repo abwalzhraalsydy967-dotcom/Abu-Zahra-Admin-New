@@ -133,7 +133,7 @@ object StreamManager {
         // Start service
         val intent = Intent(appContext, ScreenStreamService::class.java).apply {
             action = ScreenStreamService.ACTION_START_STREAM
-            putExtra(ScreenStreamService.EXTRA_CONFIG, config)
+            putExtra(ScreenStreamService.EXTRA_CONFIG, gson.toJson(config))
             putExtra(ScreenStreamService.EXTRA_RESULT_CODE, resultCode)
             putExtra(ScreenStreamService.EXTRA_RESULT_DATA, resultData)
         }
@@ -205,7 +205,7 @@ object StreamManager {
         // Start service
         val intent = Intent(appContext, CameraStreamService::class.java).apply {
             action = CameraStreamService.ACTION_START_STREAM
-            putExtra(CameraStreamService.EXTRA_CONFIG, config)
+            putExtra(CameraStreamService.EXTRA_CONFIG, gson.toJson(config))
             putExtra(CameraStreamService.EXTRA_CAMERA_ID, cameraId)
         }
         
@@ -302,7 +302,7 @@ object StreamManager {
         // Start service
         val intent = Intent(appContext, AudioStreamService::class.java).apply {
             action = AudioStreamService.ACTION_START_STREAM
-            putExtra(AudioStreamService.EXTRA_CONFIG, config)
+            putExtra(AudioStreamService.EXTRA_CONFIG, gson.toJson(config))
             putExtra(AudioStreamService.EXTRA_SOURCE, source)
             putExtra(AudioStreamService.EXTRA_MEDIA_PROJECTION_RESULT_CODE, mediaProjectionResultCode)
             putExtra(AudioStreamService.EXTRA_MEDIA_PROJECTION_DATA, mediaProjectionData)
@@ -587,7 +587,8 @@ object StreamManager {
         // Update screen stream state
         ScreenStreamService.getStreamState()?.let { state ->
             activeSessions[state.streamId]?.let { session ->
-                session.state = state
+                session.state.isActive = state.isActive
+                session.state.paused = state.isPaused
                 saveStates()
             }
         }
@@ -596,7 +597,7 @@ object StreamManager {
         CameraStreamService.getStreamState()?.let { state ->
             activeSessions[state.streamId]?.let { session ->
                 session.state.isActive = state.isActive
-                session.state.isPaused = state.isPaused
+                session.state.paused = state.isPaused
                 saveStates()
             }
         }
@@ -605,7 +606,7 @@ object StreamManager {
         AudioStreamService.getStreamState()?.let { state ->
             activeSessions[state.streamId]?.let { session ->
                 session.state.isActive = state.isActive
-                session.state.isPaused = state.isPaused
+                session.state.paused = state.isPaused
                 saveStates()
             }
         }
