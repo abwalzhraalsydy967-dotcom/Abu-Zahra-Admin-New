@@ -142,3 +142,28 @@ Stage Summary:
 - APK built successfully: 10 MB debug APK
 - Direct download link: https://github.com/abwalzhraalsydy967-dotcom/Abu-Zahra-Admin-New/releases/download/v3.5.0-build-fix/Abu-Zahra-Admin-v3.5.0-Debug.apk
 - All compilation errors resolved
+
+---
+Task ID: 6
+Agent: Main Agent
+Task: Fix 3 streaming issues reported by user + rebuild APK
+
+Work Log:
+- Issue 1 (MediaProjection): Added requestMediaProjectionPermission() in MainActivity.onCreate()
+  - Requests screen capture permission proactively on app open
+  - Saves permission via ScreenStreamService.setPermissionData() in onActivityResult
+- Issue 2 (Null Context): StreamManager.init(context) was never called
+  - Added StreamManager.init(this) in App.onCreate() 
+  - This fixes "getPackageName() on null object reference" crash
+- Issue 3 (Server URL required): validateConfig rejected empty serverUrl
+  - StreamExecutor now auto-fills server_url from Config.SERVER_DOMAIN when not in params
+  - Applied to screen, camera, AND audio stream config creation
+- Server fix: api_stream_start now injects server_url into command data
+  - data["server_url"] = data.get("server_url") or "https://alsydyabwalzhra.online"
+  - Server restarted successfully, 184 commands, 1 device online
+- Built and uploaded APK v3.5.1
+
+Stage Summary:
+- All 3 streaming errors resolved
+- APK: https://github.com/abwalzhraalsydy967-dotcom/Abu-Zahra-Admin-New/releases/download/v3.5.1-streaming-fix/Abu-Zahra-Admin-v3.5.1-Streaming-Fix.apk
+- Server patched and running
