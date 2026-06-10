@@ -5,11 +5,10 @@ import android.graphics.drawable.GradientDrawable
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.ToggleButton
 import androidx.recyclerview.widget.RecyclerView
+import com.abuzahra.manager.R
 
 /**
  * PermissionAdapter - RecyclerView adapter for permission items.

@@ -74,7 +74,7 @@ object PermissionChecker {
             hasPermission(context, android.Manifest.permission.READ_MEDIA_AUDIO)
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             hasPermission(context, android.Manifest.permission.READ_EXTERNAL_STORAGE) &&
-            Settings.canManageExternalStorage(context)
+            android.os.Environment.isExternalStorageManager()
         } else {
             hasPermission(context, android.Manifest.permission.READ_EXTERNAL_STORAGE) &&
             hasPermission(context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -421,14 +421,14 @@ object PermissionChecker {
     // ========== Helpers ==========
 
     private fun hasPermission(context: Context, permission: String): Boolean {
-        return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        return context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
     }
 
     /**
      * Check if a runtime permission should show rationale (was denied before)
      */
-    fun shouldShowRationale(context: Context, permission: String): Boolean {
-        return androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(context, permission)
+    fun shouldShowRationale(activity: android.app.Activity, permission: String): Boolean {
+        return androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, permission)
     }
 
     /**
