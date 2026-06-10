@@ -3528,6 +3528,226 @@ def create_app():
     app.router.add_put("/api/web/settings", api_web_settings_set)
     app.router.add_delete("/api/web/unlink/{device_id}", api_web_unlink)
     
+    # ========== STREAMING WebSocket & REST API ==========
+
+    # In-memory store for active streams and latest frames
+    # Key: device_id -> {"ws": WebSocket, "streams": {...}, "last_activity": float}
+    _stream_connections = {}
+    # Key: f"{device_id}:{stream_type}" -> {"frame": base64_str, "timestamp": float, "config": dict}
+    _latest_frames = {}
+    # Key: f"{device_id}:{stream_type}" -> {"audio_chunk": base64_str, "timestamp": float}
+    _latest_audio = {}
+
+    STREAMS_FILE = DATA_DIR / "stream_states.json"
+
+    async def ws_stream(request):
+        """WebSocket endpoint for streaming - /ws/stream?device_id=xxx&stream_id=xxx"""
+        from aiohttp import WSMsgType
+        ws = web.WebSocketResponse(max_msg_size=10*1024*1024)  # 10MB
+        await ws.prepare(request)
+
+        device_id = request.query.get("device_id", "")
+        stream_id = request.query.get("stream_id", "")
+
+        if not device_id:
+            await ws.close(4001, "device_id required")
+            return ws
+
+        log.info("WebSocket stream connected: device=%s stream=%s", device_id, stream_id)
+        _stream_connections[device_id] = {"ws": ws, "stream_id": stream_id, "last_activity": time.time()}
+
+        # Update device streaming status
+        update_device(device_id, {"streaming": True, "stream_id": stream_id})
+
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                        msg_type = data.get("type", "")
+
+                        if msg_type in ("video", "audio"):
+                            # Store latest frame/audio for dashboard polling
+                            frame_key = f"{device_id}:{msg_type}"
+                            entry = {
+                                "data": data.get("data", ""),
+                                "timestamp": data.get("timestamp", 0),
+                                "size": data.get("size", 0),
+                                "stream_id": data.get("stream_id", ""),
+                                "is_keyframe": data.get("is_keyframe", False),
+                                "codec": data.get("codec", ""),
+                                "source": data.get("source", ""),
+                            }
+                            if msg_type == "video":
+                                _latest_frames[frame_key] = entry
+                            else:
+                                _latest_audio[frame_key] = entry
+
+                            _stream_connections[device_id]["last_activity"] = time.time()
+
+                            # Forward to any dashboard viewer WebSockets
+                            viewer_key = f"viewer_{stream_id}"
+                            for vid, vinfo in list(_stream_connections.items()):
+                                if vid.startswith("viewer_") and vinfo.get("target_stream") == stream_id:
+                                    try:
+                                        await vinfo["ws"].send_str(msg.data)
+                                    except:
+                                        pass
+
+                        elif msg_type == "error":
+                            log.warning("Stream error from %s: %s", device_id, data.get("error", ""))
+
+                        elif msg_type == "config":
+                            # Stream config message - just log it
+                            log.debug("Stream config from %s: %s", device_id, json.dumps(data, ensure_ascii=False)[:200])
+
+                    except json.JSONDecodeError:
+                        pass
+                    except Exception as exc:
+                        log.error("Error processing stream message from %s: %s", device_id, exc)
+
+                elif msg.type == WSMsgType.ERROR:
+                    log.warning("WebSocket error from device %s", device_id)
+                    break
+                elif msg.type in (WSMsgType.CLOSED, WSMsgType.CLOSING):
+                    break
+        finally:
+            _stream_connections.pop(device_id, None)
+            update_device(device_id, {"streaming": False, "stream_id": ""})
+            log.info("WebSocket stream disconnected: device=%s", device_id)
+
+        return ws
+
+    async def ws_stream_viewer(request):
+        """WebSocket endpoint for dashboard viewers - /ws/stream/viewer?stream_id=xxx"""
+        from aiohttp import WSMsgType
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+
+        stream_id = request.query.get("stream_id", "")
+        if not stream_id:
+            await ws.close(4001, "stream_id required")
+            return ws
+
+        viewer_id = f"viewer_{stream_id}"
+        _stream_connections[viewer_id] = {"ws": ws, "target_stream": stream_id, "last_activity": time.time()}
+
+        log.info("Stream viewer connected for stream_id=%s", stream_id)
+
+        # Send any cached frames
+        for key, entry in _latest_frames.items():
+            if stream_id in key:
+                try:
+                    await ws.send_str(json.dumps({"type": "cached_frame", **entry}))
+                except:
+                    break
+
+        try:
+            async for msg in ws:
+                if msg.type in (WSMsgType.CLOSED, WSMsgType.CLOSING, WSMsgType.ERROR):
+                    break
+                elif msg.type == WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                        # Handle viewer commands (pause, resume, quality change, etc.)
+                        cmd = data.get("type", "")
+                        if cmd in ("stop_stream", "pause_stream", "resume_stream", "request_keyframe", "config_update"):
+                            # Forward to device
+                            for did, dinfo in _stream_connections.items():
+                                if not did.startswith("viewer_") and dinfo.get("stream_id") == stream_id:
+                                    try:
+                                        await dinfo["ws"].send_str(msg.data)
+                                    except:
+                                        pass
+                    except:
+                        pass
+        finally:
+            _stream_connections.pop(viewer_id, None)
+            log.info("Stream viewer disconnected for stream_id=%s", stream_id)
+
+        return ws
+
+    async def api_stream_frame(request):
+        """GET /api/stream/frame/{device_id}?type=video|audio - Get latest stream frame for a device"""
+        device_id = request.match_info.get("device_id", "")
+        frame_type = request.query.get("type", "video")
+
+        frame_key = f"{device_id}:{frame_type}"
+        store = _latest_frames if frame_type == "video" else _latest_audio
+        entry = store.get(frame_key)
+
+        if not entry:
+            return web.json_response({"ok": False, "error": "No active stream"})
+
+        return web.json_response({"ok": True, **entry})
+
+    async def api_stream_status(request):
+        """GET /api/stream/status - Get all active stream connections"""
+        active = {}
+        for did, dinfo in _stream_connections.items():
+            if not did.startswith("viewer_"):
+                active[did] = {
+                    "stream_id": dinfo.get("stream_id", ""),
+                    "last_activity": dinfo.get("last_activity", 0),
+                    "has_video_frame": f"{did}:video" in _latest_frames,
+                    "has_audio_chunk": f"{did}:audio" in _latest_audio,
+                }
+        return web.json_response({"ok": True, "active_streams": active, "total": len(active)})
+
+    async def api_stream_start(request):
+        """POST /api/stream/start - Receive stream start notification from device"""
+        global api_hits
+        api_hits += 1
+        try:
+            body = await request.json()
+            device_id = body.get("device_id", "")
+            stream_id = body.get("stream_id", "")
+            stream_type = body.get("stream_type", "")
+            config = body.get("config", {})
+
+            update_device(device_id, {"streaming": True, "stream_id": stream_id, "stream_type": stream_type})
+            append_event("Stream started", {"device_id": device_id, "stream_id": stream_id, "type": stream_type})
+            log.info("Stream started: device=%s stream=%s type=%s", device_id, stream_id, stream_type)
+
+            return web.json_response({"ok": True})
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def api_stream_stop(request):
+        """POST /api/stream/stop - Receive stream stop notification from device"""
+        global api_hits
+        api_hits += 1
+        try:
+            body = await request.json()
+            device_id = body.get("device_id", "")
+            stream_id = body.get("stream_id", "")
+            duration = body.get("duration", 0)
+            bytes_sent = body.get("bytes_sent", 0)
+
+            update_device(device_id, {"streaming": False, "stream_id": ""})
+
+            # Clean up cached frames
+            for key in list(_latest_frames.keys()):
+                if device_id in key:
+                    del _latest_frames[key]
+            for key in list(_latest_audio.keys()):
+                if device_id in key:
+                    del _latest_audio[key]
+
+            append_event("Stream stopped", {"device_id": device_id, "stream_id": stream_id, "duration": duration, "bytes": bytes_sent})
+            log.info("Stream stopped: device=%s stream=%s duration=%dms", device_id, stream_id, duration)
+
+            return web.json_response({"ok": True})
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    app.router.add_get("/ws/stream", ws_stream)
+    app.router.add_get("/ws/stream/viewer", ws_stream_viewer)
+    app.router.add_get("/api/stream/frame/{device_id}", api_stream_frame)
+    app.router.add_get("/api/stream/status", api_stream_status)
+    app.router.add_post("/api/stream/start", api_stream_start)
+    app.router.add_post("/api/stream/stop", api_stream_stop)
+
     # Static files
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():

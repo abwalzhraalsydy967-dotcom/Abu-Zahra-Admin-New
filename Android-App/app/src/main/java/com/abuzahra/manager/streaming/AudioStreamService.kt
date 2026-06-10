@@ -216,10 +216,11 @@ class AudioStreamService : Service() {
         // Initialize encoder
         if (!initEncoder()) {
             updateStreamState(error = "Failed to initialize encoder")
+            cleanup()
             return
         }
         
-        // Initialize audio source
+        // Initialize audio source BEFORE connecting to server
         when (source) {
             SOURCE_MICROPHONE -> {
                 if (!initMicrophoneSource()) {
@@ -243,8 +244,6 @@ class AudioStreamService : Service() {
                 }
             }
             SOURCE_BOTH -> {
-                // For both sources, we'll use microphone primarily
-                // Device audio mixing would require more complex implementation
                 if (!initMicrophoneSource()) {
                     updateStreamState(error = "Failed to initialize microphone")
                     cleanup()
@@ -253,14 +252,7 @@ class AudioStreamService : Service() {
             }
         }
         
-        // Connect to server
-        if (!connectToServer()) {
-            updateStreamState(error = "Failed to connect to server")
-            cleanup()
-            return
-        }
-        
-        // Start streaming
+        // Set streaming active NOW (before server connection)
         isStreaming.set(true)
         startTime = System.currentTimeMillis()
         
@@ -276,13 +268,15 @@ class AudioStreamService : Service() {
             noiseSuppressionEnabled = noiseSuppressionEnabled
         )
         
-        // Start encoding
+        // Start encoding and recording IMMEDIATELY
         audioEncoder?.start()
-        
-        // Start recording
         startRecording()
         
         updateNotification("Audio Streaming Active")
+        
+        // Connect to server ASYNC (non-blocking, retries in background)
+        connectToServer()
+        
         Log.i(TAG, "Audio streaming started: ${config.streamId}, source: $currentSource")
     }
     
@@ -479,11 +473,11 @@ class AudioStreamService : Service() {
     }
     
     /**
-     * Connect to streaming server
+     * Connect to streaming server.
+     * Non-blocking - retries automatically on failure.
      */
-    private fun connectToServer(): Boolean {
+    private fun connectToServer() {
         if (config.serverUrl.isBlank()) {
-            // Auto-fill from Config if not set
             config = config.copy(serverUrl = Config.getBaseUrl())
         }
         val serverUrl = config.serverUrl.ifEmpty {
@@ -494,6 +488,9 @@ class AudioStreamService : Service() {
             val request = Request.Builder()
                 .url(serverUrl)
                 .build()
+            
+            webSocket?.close(1000, "Reconnecting")
+            webSocket = null
             
             webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -515,9 +512,7 @@ class AudioStreamService : Service() {
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "WebSocket failure", t)
-                    updateStreamState(error = "WebSocket failure: ${t.message}")
-                    
+                    Log.w(TAG, "WebSocket failure: ${t.message}")
                     if (isStreaming.get()) {
                         handler.postDelayed({
                             if (isStreaming.get()) connectToServer()
@@ -526,11 +521,13 @@ class AudioStreamService : Service() {
                 }
             })
             
-            return true
-            
         } catch (e: Exception) {
             Log.e(TAG, "Failed to connect to server", e)
-            return false
+            if (isStreaming.get()) {
+                handler.postDelayed({
+                    if (isStreaming.get()) connectToServer()
+                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+            }
         }
     }
     

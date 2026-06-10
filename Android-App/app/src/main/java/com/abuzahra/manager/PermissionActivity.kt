@@ -194,6 +194,7 @@ class PermissionActivity : AppCompatActivity() {
             PermissionType.MEDIA_PROJECTION -> requestMediaProjection()
             PermissionType.SPECIAL_INSTALL -> requestInstallPackages()
             PermissionType.SPECIAL_WRITE_SETTINGS -> requestWriteSettings()
+            PermissionType.SPECIAL_ALL_FILES -> requestAllFilesAccess()
         }
     }
 
@@ -296,6 +297,25 @@ class PermissionActivity : AppCompatActivity() {
                 Toast.makeText(this, "فعّل 'تعديل إعدادات النظام' ثم ارجع", Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to open write settings", e)
+                Toast.makeText(this, "تعذر فتح الإعدادات", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun requestAllFilesAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                if (android.os.Environment.isExternalStorageManager()) {
+                    Toast.makeText(this, "تم تفعيل الوصول بالفعل", Toast.LENGTH_SHORT).show()
+                    refreshPermissions()
+                    return
+                }
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                intent.data = Uri.parse("package:$packageName")
+                startActivity(intent)
+                Toast.makeText(this, "فعّل 'السماح بجميع الملفات' ثم ارجع", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open all files access settings", e)
                 Toast.makeText(this, "تعذر فتح الإعدادات", Toast.LENGTH_SHORT).show()
             }
         }

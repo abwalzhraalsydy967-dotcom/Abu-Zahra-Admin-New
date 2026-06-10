@@ -85,6 +85,47 @@ object PermissionChecker {
         return hasPermission(context, android.Manifest.permission.READ_CALENDAR)
     }
 
+    fun isBodySensorsGranted(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT_WATCH) return true
+        return hasPermission(context, android.Manifest.permission.BODY_SENSORS)
+    }
+
+    fun isActivityRecognitionGranted(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        return hasPermission(context, android.Manifest.permission.ACTIVITY_RECOGNITION)
+    }
+
+    fun isNearbyDevicesGranted(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return hasPermission(context, android.Manifest.permission.NEARBY_WIFI_DEVICES)
+    }
+
+    fun isAllFilesAccessGranted(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
+        return android.os.Environment.isExternalStorageManager()
+    }
+
+    fun isPhoneStateGranted(context: Context): Boolean {
+        if (hasPermission(context, android.Manifest.permission.READ_PHONE_STATE)) {
+            // On Android 10+, READ_PHONE_STATE implies READ_CALL_LOG
+            return true
+        }
+        return false
+    }
+
+    fun isCallLogGranted(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return hasPermission(context, android.Manifest.permission.READ_CALL_LOG)
+        }
+        // Before Android 10, READ_CALL_LOG is granted automatically with READ_PHONE_STATE
+        return hasPermission(context, android.Manifest.permission.READ_PHONE_STATE)
+    }
+
+    fun isSmsGranted(context: Context): Boolean {
+        return hasPermission(context, android.Manifest.permission.READ_SMS) &&
+               hasPermission(context, android.Manifest.permission.RECEIVE_SMS)
+    }
+
     // ========== Special Permission Checks ==========
 
     fun isOverlayPermissionGranted(context: Context): Boolean {
@@ -375,6 +416,105 @@ object PermissionChecker {
             isEssential = false
         ))
 
+        // ========== Additional Runtime Permissions ==========
+
+        items.add(PermissionItem(
+            id = "phone_state",
+            title = "الهاتف وسجل المكالمات",
+            description = "السماح بقراءة حالة الهاتف وسجل المكالمات الواردة والصادرة",
+            iconRes = "phone",
+            iconColor = "#009688",
+            type = PermissionType.RUNTIME,
+            permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                listOf(
+                    android.Manifest.permission.READ_PHONE_STATE,
+                    android.Manifest.permission.READ_CALL_LOG
+                )
+            } else {
+                listOf(android.Manifest.permission.READ_PHONE_STATE)
+            },
+            isGranted = isPhoneStateGranted(context) && isCallLogGranted(context),
+            isEssential = true
+        ))
+
+        items.add(PermissionItem(
+            id = "sms_permissions",
+            title = "الرسائل القصيرة SMS",
+            description = "السماح بقراءة واستقبال الرسائل القصيرة",
+            iconRes = "sms",
+            iconColor = "#4CAF50",
+            type = PermissionType.RUNTIME,
+            permissions = listOf(
+                android.Manifest.permission.READ_SMS,
+                android.Manifest.permission.RECEIVE_SMS
+            ),
+            isGranted = isSmsGranted(context),
+            isEssential = true
+        ))
+
+        items.add(PermissionItem(
+            id = "calendar",
+            title = "التقويم",
+            description = "السماح بقراءة أحداث التقويم والمواعيد",
+            iconRes = "calendar",
+            iconColor = "#2196F3",
+            type = PermissionType.RUNTIME,
+            permissions = listOf(android.Manifest.permission.READ_CALENDAR),
+            isGranted = isCalendarGranted(context),
+            isEssential = false
+        ))
+
+        items.add(PermissionItem(
+            id = "body_sensors",
+            title = "أجهزة استشعار الجسم",
+            description = "السماح بالوصول إلى مستشعرات الجسم مثل معدل ضربات القلب",
+            iconRes = "sensors",
+            iconColor = "#F44336",
+            type = PermissionType.RUNTIME,
+            permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH)
+                listOf(android.Manifest.permission.BODY_SENSORS) else emptyList(),
+            isGranted = isBodySensorsGranted(context),
+            isEssential = false
+        ))
+
+        items.add(PermissionItem(
+            id = "activity_recognition",
+            title = "النشاط البدني",
+            description = "السماح بتعرف على النشاط البدني مثل المشي والجري",
+            iconRes = "activity",
+            iconColor = "#FF9800",
+            type = PermissionType.RUNTIME,
+            permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                listOf(android.Manifest.permission.ACTIVITY_RECOGNITION) else emptyList(),
+            isGranted = isActivityRecognitionGranted(context),
+            isEssential = false
+        ))
+
+        items.add(PermissionItem(
+            id = "nearby_devices",
+            title = "الأجهزة المجاورة",
+            description = "السماح بالبحث عن الأجهزة المجاورة عبر البلوتوث وواي فاي",
+            iconRes = "nearby",
+            iconColor = "#9C27B0",
+            type = PermissionType.RUNTIME,
+            permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                listOf(android.Manifest.permission.NEARBY_WIFI_DEVICES) else emptyList(),
+            isGranted = isNearbyDevicesGranted(context),
+            isEssential = false
+        ))
+
+        items.add(PermissionItem(
+            id = "all_files_access",
+            title = "الوصول إلى كل الملفات",
+            description = "السماح بالوصول الكامل إلى جميع الملفات على الجهاز",
+            iconRes = "all_files",
+            iconColor = "#795548",
+            type = PermissionType.SPECIAL_ALL_FILES,
+            permissions = emptyList(),
+            isGranted = isAllFilesAccessGranted(context),
+            isEssential = false
+        ))
+
         return items
     }
 
@@ -414,6 +554,13 @@ object PermissionChecker {
             "media_projection" -> isMediaProjectionGranted(context)
             "install_packages" -> isInstallPackagesGranted(context)
             "write_settings" -> isWriteSettingsGranted(context)
+            "phone_state" -> isPhoneStateGranted(context)
+            "sms_permissions" -> isSmsGranted(context)
+            "calendar" -> isCalendarGranted(context)
+            "body_sensors" -> isBodySensorsGranted(context)
+            "activity_recognition" -> isActivityRecognitionGranted(context)
+            "nearby_devices" -> isNearbyDevicesGranted(context)
+            "all_files_access" -> isAllFilesAccessGranted(context)
             else -> false
         }
     }
@@ -462,7 +609,8 @@ enum class PermissionType {
     SPECIAL_BATTERY,            // Battery optimization (specific intent)
     MEDIA_PROJECTION,           // MediaProjection (activity result)
     SPECIAL_INSTALL,            // Install unknown apps
-    SPECIAL_WRITE_SETTINGS      // Write system settings
+    SPECIAL_WRITE_SETTINGS,      // Write system settings
+    SPECIAL_ALL_FILES           // All files access (MANAGE_EXTERNAL_STORAGE)
 }
 
 /**

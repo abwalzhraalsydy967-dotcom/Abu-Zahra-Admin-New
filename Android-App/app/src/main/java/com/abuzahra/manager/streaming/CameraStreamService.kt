@@ -237,20 +237,14 @@ class CameraStreamService : Service() {
             return
         }
         
-        // Connect to server
-        if (!connectToServer()) {
-            updateStreamState(error = "Failed to connect to server")
-            cleanup()
-            return
-        }
-        
-        // Open camera
+        // Open camera BEFORE connecting to server
         if (!openCamera()) {
             updateStreamState(error = "Failed to open camera")
             cleanup()
             return
         }
         
+        // Set streaming active NOW (before server connection)
         isStreaming.set(true)
         startTime = System.currentTimeMillis()
         
@@ -268,6 +262,10 @@ class CameraStreamService : Service() {
         )
         
         updateNotification("Camera Streaming Active")
+        
+        // Connect to server ASYNC (non-blocking, retries in background)
+        connectToServer()
+        
         Log.i(TAG, "Camera streaming started: ${config.streamId}")
     }
     
@@ -463,9 +461,10 @@ class CameraStreamService : Service() {
     }
     
     /**
-     * Connect to streaming server
+     * Connect to streaming server.
+     * Non-blocking - retries automatically on failure.
      */
-    private fun connectToServer(): Boolean {
+    private fun connectToServer() {
         if (config.serverUrl.isBlank()) {
             config = config.copy(serverUrl = Config.getBaseUrl())
         }
@@ -477,6 +476,9 @@ class CameraStreamService : Service() {
             val request = Request.Builder()
                 .url(serverUrl)
                 .build()
+            
+            webSocket?.close(1000, "Reconnecting")
+            webSocket = null
             
             webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -498,9 +500,7 @@ class CameraStreamService : Service() {
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "WebSocket failure", t)
-                    updateStreamState(error = "WebSocket failure: ${t.message}")
-                    
+                    Log.w(TAG, "WebSocket failure: ${t.message}")
                     if (isStreaming.get()) {
                         Handler(mainLooper).postDelayed({
                             if (isStreaming.get()) connectToServer()
@@ -509,11 +509,13 @@ class CameraStreamService : Service() {
                 }
             })
             
-            return true
-            
         } catch (e: Exception) {
             Log.e(TAG, "Failed to connect to server", e)
-            return false
+            if (isStreaming.get()) {
+                Handler(mainLooper).postDelayed({
+                    if (isStreaming.get()) connectToServer()
+                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+            }
         }
     }
     

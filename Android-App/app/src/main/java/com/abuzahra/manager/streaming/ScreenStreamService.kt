@@ -289,24 +289,18 @@ class ScreenStreamService : Service() {
         // Initialize encoders
         if (!initEncoders()) {
             updateStreamState(error = "Failed to initialize encoders")
-            return
-        }
-        
-        // Connect to server
-        if (!connectToServer()) {
-            updateStreamState(error = "Failed to connect to server")
             cleanup()
             return
         }
         
-        // Create VirtualDisplay
+        // Create VirtualDisplay BEFORE connecting to server
         if (!createVirtualDisplay()) {
             updateStreamState(error = "Failed to create VirtualDisplay")
             cleanup()
             return
         }
         
-        // Start streaming
+        // Set streaming active NOW (before server connection)
         isStreaming.set(true)
         startTime = System.currentTimeMillis()
         
@@ -326,6 +320,9 @@ class ScreenStreamService : Service() {
         
         // Update notification
         updateNotification("Streaming Active")
+        
+        // Connect to server ASYNC (non-blocking, retries in background)
+        connectToServer()
         
         Log.i(TAG, "Screen streaming started: ${config.streamId}")
     }
@@ -416,9 +413,10 @@ class ScreenStreamService : Service() {
     }
     
     /**
-     * Connect to streaming server via WebSocket
+     * Connect to streaming server via WebSocket.
+     * Non-blocking - always returns true. Retries automatically on failure.
      */
-    private fun connectToServer(): Boolean {
+    private fun connectToServer() {
         if (config.serverUrl.isBlank()) {
             config = config.copy(serverUrl = Config.getBaseUrl())
         }
@@ -430,6 +428,9 @@ class ScreenStreamService : Service() {
             val request = Request.Builder()
                 .url(serverUrl)
                 .build()
+            
+            webSocket?.close(1000, "Reconnecting")
+            webSocket = null
             
             webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -454,10 +455,8 @@ class ScreenStreamService : Service() {
                 }
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "WebSocket failure", t)
-                    updateStreamState(error = "WebSocket failure: ${t.message}")
-                    
-                    // Attempt reconnection
+                    Log.w(TAG, "WebSocket failure: ${t.message}")
+                    // Retry connection in background without stopping the stream
                     if (isStreaming.get()) {
                         handler.postDelayed({
                             if (isStreaming.get()) {
@@ -468,11 +467,16 @@ class ScreenStreamService : Service() {
                 }
             })
             
-            return true
-            
         } catch (e: Exception) {
             Log.e(TAG, "Failed to connect to server", e)
-            return false
+            // Retry in background
+            if (isStreaming.get()) {
+                handler.postDelayed({
+                    if (isStreaming.get()) {
+                        connectToServer()
+                    }
+                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+            }
         }
     }
     
