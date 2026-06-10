@@ -39,7 +39,6 @@ android {
             java {
                 exclude '**/streaming/RtmpStreamer.kt'
                 exclude '**/streaming/AdaptiveBitrateController.kt'
-                exclude '**/streaming/AudioEncoder.kt'
             }
         }
     }
