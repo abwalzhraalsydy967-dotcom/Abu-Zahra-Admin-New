@@ -491,7 +491,7 @@ object SecurityExecutor {
                 "is_profile_owner" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) dpm.isProfileOwnerApp(context.packageName) else false,
                 "policies" to policies,
                 "device_owner_name" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    try { dpm.getDeviceOwnerName() ?: "" } catch (e: Exception) { "" }
+                    try { dpm.deviceOwnerName ?: "" } catch (e: Exception) { "" }
                 } else ""
             )
         } catch (e: Exception) {

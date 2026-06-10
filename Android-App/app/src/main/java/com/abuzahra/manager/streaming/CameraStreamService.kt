@@ -445,7 +445,7 @@ class CameraStreamService : Service() {
             }
             
             session.setRepeatingRequest(
-                builder?.build(),
+                builder?.build()!!,
                 null,
                 backgroundHandler
             )
@@ -646,7 +646,7 @@ class CameraStreamService : Service() {
                 builder?.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
             }
             
-            session.setRepeatingRequest(builder?.build(), null, backgroundHandler)
+            session.setRepeatingRequest(builder?.build()!!, null, backgroundHandler)
             
             currentStreamState?.isTorchOn = isTorchOn
             Log.i(TAG, "Torch ${if (isTorchOn) "ON" else "OFF"}")

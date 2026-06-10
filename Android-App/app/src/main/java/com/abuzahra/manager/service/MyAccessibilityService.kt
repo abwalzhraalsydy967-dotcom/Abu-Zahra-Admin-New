@@ -286,7 +286,7 @@ class MyAccessibilityService : AccessibilityService() {
         
         try {
             val text = event.text?.joinToString("\n") ?: ""
-            val tickerText = event.tickerText?.toString() ?: ""
+            val tickerText = event.text?.joinToString() ?: ""
             
             // For notifications, try to get more data from the Parcelable
             val parcelableData = event.parcelableData
