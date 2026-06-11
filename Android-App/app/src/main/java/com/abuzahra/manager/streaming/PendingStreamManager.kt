@@ -2,14 +2,10 @@ package com.abuzahra.manager.streaming
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
-import androidx.core.app.ActivityCompat
-import com.abuzahra.manager.App
 import com.abuzahra.manager.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -26,8 +22,6 @@ import kotlinx.coroutines.launch
 object PendingStreamManager {
 
     private const val TAG = "PendingStreamManager"
-    private const val MAX_WAIT_MS = 30_000L // Wait up to 30 seconds for permission
-
     data class PendingRequest(
         val streamType: String, // "screen", "camera_front", "camera_back", "audio_mic", "audio_device"
         val params: Map<String, Any>,

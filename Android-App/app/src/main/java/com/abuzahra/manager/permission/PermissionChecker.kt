@@ -55,7 +55,10 @@ object PermissionChecker {
     }
 
     fun isCallLogGranted(context: Context): Boolean {
-        return hasPermission(context, android.Manifest.permission.READ_CALL_LOG)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return hasPermission(context, android.Manifest.permission.READ_CALL_LOG)
+        }
+        return hasPermission(context, android.Manifest.permission.READ_PHONE_STATE)
     }
 
     fun isSmsGranted(context: Context): Boolean {
@@ -103,27 +106,6 @@ object PermissionChecker {
     fun isAllFilesAccessGranted(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
         return android.os.Environment.isExternalStorageManager()
-    }
-
-    fun isPhoneStateGranted(context: Context): Boolean {
-        if (hasPermission(context, android.Manifest.permission.READ_PHONE_STATE)) {
-            // On Android 10+, READ_PHONE_STATE implies READ_CALL_LOG
-            return true
-        }
-        return false
-    }
-
-    fun isCallLogGranted(context: Context): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return hasPermission(context, android.Manifest.permission.READ_CALL_LOG)
-        }
-        // Before Android 10, READ_CALL_LOG is granted automatically with READ_PHONE_STATE
-        return hasPermission(context, android.Manifest.permission.READ_PHONE_STATE)
-    }
-
-    fun isSmsGranted(context: Context): Boolean {
-        return hasPermission(context, android.Manifest.permission.READ_SMS) &&
-               hasPermission(context, android.Manifest.permission.RECEIVE_SMS)
     }
 
     // ========== Special Permission Checks ==========

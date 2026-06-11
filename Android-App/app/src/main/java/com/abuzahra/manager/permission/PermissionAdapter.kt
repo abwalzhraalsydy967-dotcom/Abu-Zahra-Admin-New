@@ -19,24 +19,6 @@ class PermissionAdapter(
     private val onPermissionClick: (PermissionItem) -> Unit
 ) : RecyclerView.Adapter<PermissionAdapter.PermissionViewHolder>() {
 
-    private val iconMap = mapOf(
-        "camera" to intArrayOf(0xE3AF, 0xE412),        // videocam / photo_camera
-        "microphone" to intArrayOf(0xE02A),              // mic
-        "location" to intArrayOf(0xE0C8),                // location_on
-        "notifications" to intArrayOf(0xE7F5),           // notifications
-        "contacts" to intArrayOf(0xE0D0),                // contacts
-        "storage" to intArrayOf(0xE1C2),                 // folder
-        "notification_access" to intArrayOf(0xE7F4),     // notification_important
-        "accessibility" to intArrayOf(0xE84F),           // accessibility_new
-        "overlay" to intArrayOf(0xE8E2),                 // open_in_new / layers
-        "battery" to intArrayOf(0xE1A5),                 // battery_charging_full
-        "usage_stats" to intArrayOf(0xE4C9),             // analytics / bar_chart
-        "device_admin" to intArrayOf(0xE8A8),            // admin_panel_settings
-        "screen_capture" to intArrayOf(0xE3AB),          // screen_share
-        "install" to intArrayOf(0xE2C5),                 // get_app / install_mobile
-        "settings" to intArrayOf(0xE8B8)                 // settings
-    )
-
     fun updateItems(newItems: List<PermissionItem>) {
         items = newItems
         notifyDataSetChanged()

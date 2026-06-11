@@ -21,7 +21,6 @@ import android.util.Size
 import android.view.Surface
 import androidx.core.app.NotificationCompat
 import com.abuzahra.manager.Config
-import com.abuzahra.manager.R
 import com.google.gson.Gson
 import kotlinx.coroutines.*
 import okhttp3.*

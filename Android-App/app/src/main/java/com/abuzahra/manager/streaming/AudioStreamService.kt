@@ -10,7 +10,6 @@ import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -23,12 +22,9 @@ import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.abuzahra.manager.Config
-import com.abuzahra.manager.R
 import com.google.gson.Gson
 import kotlinx.coroutines.*
 import okhttp3.*
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
