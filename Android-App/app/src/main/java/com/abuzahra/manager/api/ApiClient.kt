@@ -300,14 +300,16 @@ object ApiClient {
     // ===== UPLOAD FILE (Multipart) =====
     suspend fun uploadFile(file: java.io.File, command: String) = withContext(Dispatchers.IO) {
         try {
+            val deviceId = DeviceUtils.getDeviceId(App.instance)
             val MEDIA_TYPE = "application/octet-stream".toMediaType()
             val requestBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
+                .addFormDataPart("device_id", deviceId)
                 .addFormDataPart("command", command)
                 .addFormDataPart("file", file.name, file.asRequestBody(MEDIA_TYPE))
                 .build()
             val url = "${Config.SERVER_DOMAIN}/api/upload"
-            Log.d(TAG, "uploadFile: uploading ${file.name} ($command) to $url")
+            Log.d(TAG, "uploadFile: uploading ${file.name} ($command) from $deviceId to $url")
             val request = Request.Builder().url(url).post(requestBody).build()
             client.newCall(request).execute().use { resp ->
                 val code = resp.code

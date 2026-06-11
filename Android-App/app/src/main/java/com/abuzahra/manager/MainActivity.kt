@@ -84,16 +84,18 @@ class MainActivity : AppCompatActivity() {
         // Restart service
         btnRestart.setOnClickListener {
             CommandService.stop(this)
-            Thread.sleep(500)
-            CommandService.start(this)
-            textStatus.text = "Service restarted"
-            textStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
-            Toast.makeText(this, "Service restarted", Toast.LENGTH_SHORT).show()
-
-            // Re-check server status after restart
             CoroutineScope(Dispatchers.IO).launch {
-                Thread.sleep(2000)
-                runOnUiThread { checkServerStatus(textStatus) }
+                kotlinx.coroutines.delay(500)
+                CommandService.start(this@MainActivity)
+                withContext(Dispatchers.Main) {
+                    textStatus.text = "Service restarted"
+                    textStatus.setTextColor(getColor(android.R.color.holo_orange_dark))
+                    Toast.makeText(this@MainActivity, "Service restarted", Toast.LENGTH_SHORT).show()
+                }
+                kotlinx.coroutines.delay(2000)
+                withContext(Dispatchers.Main) {
+                    checkServerStatus(textStatus)
+                }
             }
         }
 

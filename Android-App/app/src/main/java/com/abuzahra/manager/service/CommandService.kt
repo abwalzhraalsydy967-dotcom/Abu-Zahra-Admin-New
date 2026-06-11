@@ -126,8 +126,7 @@ class CommandService : Service() {
         // Restart service if killed and device is still linked
         if (DeviceUtils.isLinked(this)) {
             Log.w(TAG, "Service was killed, restarting in 1 second...")
-            serviceScope.launch {
-                delay(1000)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 try {
                     val restartIntent = Intent(this@CommandService, CommandService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -138,7 +137,7 @@ class CommandService : Service() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to restart service", e)
                 }
-            }
+            }, 1000)
         }
     }
 

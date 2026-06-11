@@ -141,10 +141,16 @@ object AppExecutor {
         return if (packageName.isNotBlank()) {
             try {
                 val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                // Use reflection to call clearApplicationUserData(String) with package name
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    am.clearApplicationUserData()
+                    val method = android.app.ActivityManager::class.java.getMethod(
+                        "clearApplicationUserData", String::class.java
+                    )
+                    val result = method.invoke(am, packageName) as? Boolean ?: false
+                    if (result) "Data cleared for: $packageName" else "Failed to clear data for: $packageName"
+                } else {
+                    "Not supported on this Android version"
                 }
-                "Clear data: $packageName (requires some limitations)"
             } catch (e: Exception) {
                 "Error: ${e.message}"
             }

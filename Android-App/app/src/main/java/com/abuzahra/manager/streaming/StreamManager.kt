@@ -232,6 +232,9 @@ object StreamManager {
             ?: findActiveStreamId(StreamConfig.StreamType.CAMERA_FRONT)
         
         if (id != null) {
+            val session = activeSessions[id]  // Get session BEFORE removing
+            val streamType = session?.streamType ?: StreamConfig.StreamType.CAMERA_BACK
+            
             val intent = Intent(appContext, CameraStreamService::class.java).apply {
                 action = CameraStreamService.ACTION_STOP_STREAM
             }
@@ -240,8 +243,7 @@ object StreamManager {
             activeSessions.remove(id)
             saveStates()
             
-            val session = activeSessions[id]
-            eventListener?.onStreamStopped(id, session?.streamType ?: StreamConfig.StreamType.CAMERA_BACK)
+            eventListener?.onStreamStopped(id, streamType)
             Log.i(TAG, "Camera stream stopped: $id")
         }
     }
