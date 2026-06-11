@@ -2,6 +2,7 @@ package com.abuzahra.manager.api
 
 import android.content.Context
 import android.util.Log
+import com.abuzahra.manager.App
 import com.abuzahra.manager.Config
 import com.abuzahra.manager.model.Command
 import com.abuzahra.manager.model.LinkResult
