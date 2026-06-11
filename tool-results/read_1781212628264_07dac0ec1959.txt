@@ -1,0 +1,809 @@
+     1→package com.abuzahra.manager.streaming
+     2→
+     3→import android.app.Notification
+     4→import android.app.NotificationChannel
+     5→import android.app.NotificationManager
+     6→import android.app.Service
+     7→import android.content.Context
+     8→import android.content.Intent
+     9→import android.content.SharedPreferences
+    10→import android.content.pm.ServiceInfo
+    11→import android.media.AudioAttributes
+    12→import android.media.AudioFormat
+    13→import android.media.AudioPlaybackCaptureConfiguration
+    14→import android.media.AudioRecord
+    15→import android.media.MediaRecorder
+    16→import android.media.projection.MediaProjection
+    17→import android.media.projection.MediaProjectionManager
+    18→import android.os.Build
+    19→import android.os.Handler
+    20→import android.os.IBinder
+    21→import android.os.Looper
+    22→import android.util.Log
+    23→import androidx.core.app.NotificationCompat
+    24→import com.abuzahra.manager.Config
+    25→import com.google.gson.Gson
+    26→import kotlinx.coroutines.*
+    27→import okhttp3.*
+    28→import java.util.concurrent.atomic.AtomicBoolean
+    29→
+    30→/**
+    31→ * AudioStreamService - Service for microphone and device audio streaming
+    32→ * Supports both microphone audio and device audio (AudioPlaybackCapture for Android 10+), noise suppression
+    33→ */
+    34→class AudioStreamService : Service() {
+    35→    
+    36→    companion object {
+    37→        private const val TAG = "AudioStreamService"
+    38→        private const val NOTIFICATION_ID = 2003
+    39→        private const val CHANNEL_ID = "audio_stream_channel"
+    40→        
+    41→        // Intent actions
+    42→        const val ACTION_START_STREAM = "com.abuzahra.manager.START_AUDIO_STREAM"
+    43→        const val ACTION_STOP_STREAM = "com.abuzahra.manager.STOP_AUDIO_STREAM"
+    44→        const val ACTION_PAUSE_STREAM = "com.abuzahra.manager.PAUSE_AUDIO_STREAM"
+    45→        const val ACTION_RESUME_STREAM = "com.abuzahra.manager.RESUME_AUDIO_STREAM"
+    46→        const val ACTION_SWITCH_SOURCE = "com.abuzahra.manager.SWITCH_AUDIO_SOURCE"
+    47→        const val ACTION_TOGGLE_NOISE_SUPPRESSION = "com.abuzahra.manager.TOGGLE_NOISE_SUPPRESSION"
+    48→        
+    49→        // Intent extras
+    50→        const val EXTRA_CONFIG = "config"
+    51→        const val EXTRA_SOURCE = "source"
+    52→        const val EXTRA_MEDIA_PROJECTION_RESULT_CODE = "result_code"
+    53→        const val EXTRA_MEDIA_PROJECTION_DATA = "result_data"
+    54→        
+    55→        // Audio sources
+    56→        const val SOURCE_MICROPHONE = "microphone"
+    57→        const val SOURCE_DEVICE_AUDIO = "device_audio"
+    58→        const val SOURCE_BOTH = "both"
+    59→        
+    60→        // Stream state
+    61→        private var currentStreamState: StreamState? = null
+    62→        
+    63→        /**
+    64→         * Get current stream state
+    65→         */
+    66→        fun getStreamState(): StreamState? = currentStreamState
+    67→        
+    68→        /**
+    69→         * Check if streaming is active
+    70→         */
+    71→        fun isStreaming(): Boolean = currentStreamState?.isActive ?: false
+    72→    }
+    73→    
+    74→    // Service scope
+    75→    private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    76→    
+    77→    // Audio configuration
+    78→    private var config: StreamConfig.Configuration = StreamConfig.Presets.audioOnlyMic()
+    79→    private var currentSource: String = SOURCE_MICROPHONE
+    80→    
+    81→    // Audio components
+    82→    private var audioRecord: AudioRecord? = null
+    83→    private var audioEncoder: AudioEncoder? = null
+    84→    private var mediaProjection: MediaProjection? = null
+    85→    
+    86→    // Audio settings
+    87→    private val sampleRate = StreamConfig.AUDIO_SAMPLE_RATE
+    88→    private val channelCount = StreamConfig.AUDIO_CHANNEL_COUNT
+    89→    private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+    90→    
+    91→    // Buffer sizes
+    92→    private var bufferSize = 0
+    93→    private var frameBufferSize = 0
+    94→    
+    95→    // Stream state
+    96→    private val isStreaming = AtomicBoolean(false)
+    97→    private val isPaused = AtomicBoolean(false)
+    98→    private var streamingJob: Job? = null
+    99→    
+   100→    // Noise suppression
+   101→    private var noiseSuppressionEnabled = true
+   102→    private var noiseSuppressor: Any? = null // android.media.audiofx.NoiseSuppressor
+   103→    
+   104→    // WebSocket
+   105→    private var webSocket: WebSocket? = null
+   106→    private var okHttpClient: OkHttpClient? = null
+   107→    
+   108→    // Statistics
+   109→    private var startTime = 0L
+   110→    private var totalBytesSent = 0L
+   111→    private var totalFramesEncoded = 0L
+   112→    
+   113→    // Handler
+   114→    private val handler = Handler(Looper.getMainLooper())
+   115→    
+   116→    // SharedPreferences
+   117→    private lateinit var prefs: SharedPreferences
+   118→    
+   119→    /**
+   120→     * Stream state
+   121→     */
+   122→    data class StreamState(
+   123→        val streamId: String,
+   124→        var isActive: Boolean,
+   125→        var isPaused: Boolean,
+   126→        val startTime: Long,
+   127→        var totalBytesSent: Long,
+   128→        var totalFramesEncoded: Long,
+   129→        var currentSource: String,
+   130→        var noiseSuppressionEnabled: Boolean,
+   131→        var lastError: String? = null
+   132→    )
+   133→    
+   134→    override fun onCreate() {
+   135→        super.onCreate()
+   136→        createNotificationChannel()
+   137→        prefs = getSharedPreferences("audio_stream_prefs", Context.MODE_PRIVATE)
+   138→        
+   139→        // Initialize HTTP client
+   140→        okHttpClient = OkHttpClient.Builder()
+   141→            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+   142→            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+   143→            .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+   144→            .build()
+   145→        
+   146→        // Calculate buffer sizes
+   147→        bufferSize = AudioRecord.getMinBufferSize(
+   148→            sampleRate,
+   149→            if (channelCount == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO,
+   150→            audioFormat
+   151→        )
+   152→        frameBufferSize = bufferSize * 2
+   153→        
+   154→        Log.i(TAG, "AudioStreamService created. Buffer size: $bufferSize")
+   155→    }
+   156→    
+   157→    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+   158→        // Start as foreground service
+   159→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   160→            val foregroundType = if (currentSource == SOURCE_MICROPHONE) {
+   161→                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+   162→            } else {
+   163→                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+   164→            }
+   165→            startForeground(NOTIFICATION_ID, createNotification(), foregroundType)
+   166→        } else {
+   167→            startForeground(NOTIFICATION_ID, createNotification())
+   168→        }
+   169→        
+   170→        when (intent?.action) {
+   171→            ACTION_START_STREAM -> {
+   172→                val configJson = intent.getStringExtra(EXTRA_CONFIG)
+   173→                configJson?.let { try { config = com.google.gson.Gson().fromJson(it, StreamConfig.Configuration::class.java) } catch(_ : Exception) {} }
+   174→                
+   175→                val source = intent.getStringExtra(EXTRA_SOURCE) ?: SOURCE_MICROPHONE
+   176→                val resultCode = intent.getIntExtra(EXTRA_MEDIA_PROJECTION_RESULT_CODE, 0)
+   177→                val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+   178→                    intent.getParcelableExtra(EXTRA_MEDIA_PROJECTION_DATA, Intent::class.java)
+   179→                } else {
+   180→                    @Suppress("DEPRECATION")
+   181→                    intent.getParcelableExtra(EXTRA_MEDIA_PROJECTION_DATA)
+   182→                }
+   183→                
+   184→                startStreaming(source, resultCode, resultData)
+   185→            }
+   186→            ACTION_STOP_STREAM -> stopStreaming()
+   187→            ACTION_PAUSE_STREAM -> pauseStreaming()
+   188→            ACTION_RESUME_STREAM -> resumeStreaming()
+   189→            ACTION_SWITCH_SOURCE -> {
+   190→                val source = intent.getStringExtra(EXTRA_SOURCE) ?: SOURCE_MICROPHONE
+   191→                switchSource(source)
+   192→            }
+   193→            ACTION_TOGGLE_NOISE_SUPPRESSION -> toggleNoiseSuppression()
+   194→        }
+   195→        
+   196→        return START_STICKY
+   197→    }
+   198→    
+   199→    override fun onBind(intent: Intent?): IBinder? = null
+   200→    
+   201→    /**
+   202→     * Start audio streaming
+   203→     */
+   204→    private fun startStreaming(source: String, mediaProjectionResultCode: Int = 0, mediaProjectionData: Intent? = null) {
+   205→        if (isStreaming.get()) {
+   206→            Log.w(TAG, "Already streaming")
+   207→            return
+   208→        }
+   209→        
+   210→        currentSource = source
+   211→        
+   212→        // Initialize encoder
+   213→        if (!initEncoder()) {
+   214→            updateStreamState(error = "Failed to initialize encoder")
+   215→            cleanup()
+   216→            return
+   217→        }
+   218→        
+   219→        // Initialize audio source BEFORE connecting to server
+   220→        when (source) {
+   221→            SOURCE_MICROPHONE -> {
+   222→                if (!initMicrophoneSource()) {
+   223→                    updateStreamState(error = "Failed to initialize microphone")
+   224→                    cleanup()
+   225→                    return
+   226→                }
+   227→            }
+   228→            SOURCE_DEVICE_AUDIO -> {
+   229→                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   230→                    if (!initDeviceAudioSource(mediaProjectionResultCode, mediaProjectionData)) {
+   231→                        updateStreamState(error = "Failed to initialize device audio capture")
+   232→                        cleanup()
+   233→                        return
+   234→                    }
+   235→                } else {
+   236→                    Log.e(TAG, "Device audio capture requires Android 10+")
+   237→                    updateStreamState(error = "Device audio capture requires Android 10+")
+   238→                    cleanup()
+   239→                    return
+   240→                }
+   241→            }
+   242→            SOURCE_BOTH -> {
+   243→                if (!initMicrophoneSource()) {
+   244→                    updateStreamState(error = "Failed to initialize microphone")
+   245→                    cleanup()
+   246→                    return
+   247→                }
+   248→            }
+   249→        }
+   250→        
+   251→        // Set streaming active NOW (before server connection)
+   252→        isStreaming.set(true)
+   253→        startTime = System.currentTimeMillis()
+   254→        
+   255→        // Initialize state
+   256→        currentStreamState = StreamState(
+   257→            streamId = config.streamId,
+   258→            isActive = true,
+   259→            isPaused = false,
+   260→            startTime = startTime,
+   261→            totalBytesSent = 0,
+   262→            totalFramesEncoded = 0,
+   263→            currentSource = currentSource,
+   264→            noiseSuppressionEnabled = noiseSuppressionEnabled
+   265→        )
+   266→        
+   267→        // Start encoding and recording IMMEDIATELY
+   268→        audioEncoder?.start()
+   269→        startRecording()
+   270→        
+   271→        updateNotification("Audio Streaming Active")
+   272→        
+   273→        // Connect to server ASYNC (non-blocking, retries in background)
+   274→        connectToServer()
+   275→        
+   276→        Log.i(TAG, "Audio streaming started: ${config.streamId}, source: $currentSource")
+   277→    }
+   278→    
+   279→    /**
+   280→     * Initialize audio encoder
+   281→     */
+   282→    private fun initEncoder(): Boolean {
+   283→        audioEncoder = AudioEncoder(
+   284→            sampleRate = sampleRate,
+   285→            channelCount = channelCount,
+   286→            bitrate = config.audioBitrate
+   287→        )
+   288→        
+   289→        if (!audioEncoder!!.init()) {
+   290→            Log.e(TAG, "Failed to initialize audio encoder")
+   291→            return false
+   292→        }
+   293→        
+   294→        audioEncoder!!.setEncodedDataCallback { frame ->
+   295→            onAudioFrameEncoded(frame)
+   296→        }
+   297→        
+   298→        return true
+   299→    }
+   300→    
+   301→    /**
+   302→     * Initialize microphone source
+   303→     */
+   304→    private fun initMicrophoneSource(): Boolean {
+   305→        try {
+   306→            val channelConfig = if (channelCount == 1) {
+   307→                AudioFormat.CHANNEL_IN_MONO
+   308→            } else {
+   309→                AudioFormat.CHANNEL_IN_STEREO
+   310→            }
+   311→            
+   312→            audioRecord = AudioRecord(
+   313→                MediaRecorder.AudioSource.MIC,
+   314→                sampleRate,
+   315→                channelConfig,
+   316→                audioFormat,
+   317→                frameBufferSize
+   318→            )
+   319→            
+   320→            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+   321→                Log.e(TAG, "AudioRecord not initialized")
+   322→                return false
+   323→            }
+   324→            
+   325→            // Enable noise suppression if available
+   326→            if (noiseSuppressionEnabled) {
+   327→                enableNoiseSuppression()
+   328→            }
+   329→            
+   330→            return true
+   331→            
+   332→        } catch (e: SecurityException) {
+   333→            Log.e(TAG, "Microphone permission not granted", e)
+   334→            return false
+   335→        } catch (e: Exception) {
+   336→            Log.e(TAG, "Failed to initialize microphone", e)
+   337→            return false
+   338→        }
+   339→    }
+   340→    
+   341→    /**
+   342→     * Initialize device audio capture (Android 10+)
+   343→     */
+   344→    private fun initDeviceAudioSource(resultCode: Int, data: Intent?): Boolean {
+   345→        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+   346→            return false
+   347→        }
+   348→        
+   349→        if (resultCode == 0 || data == null) {
+   350→            Log.e(TAG, "Invalid MediaProjection data for device audio capture")
+   351→            return false
+   352→        }
+   353→        
+   354→        try {
+   355→            // Get MediaProjection
+   356→            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+   357→            mediaProjection = mpm.getMediaProjection(resultCode, data)
+   358→            
+   359→            // Configure audio playback capture
+   360→            val audioPlaybackCaptureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection!!)
+   361→                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+   362→                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+   363→                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+   364→                .build()
+   365→            
+   366→            val channelConfig = if (channelCount == 1) {
+   367→                AudioFormat.CHANNEL_IN_MONO
+   368→            } else {
+   369→                AudioFormat.CHANNEL_IN_STEREO
+   370→            }
+   371→            
+   372→            audioRecord = AudioRecord.Builder()
+   373→                .setAudioPlaybackCaptureConfig(audioPlaybackCaptureConfig)
+   374→                .setAudioFormat(
+   375→                    AudioFormat.Builder()
+   376→                        .setSampleRate(sampleRate)
+   377→                        .setChannelMask(channelConfig)
+   378→                        .setEncoding(audioFormat)
+   379→                        .build()
+   380→                )
+   381→                .setBufferSizeInBytes(frameBufferSize)
+   382→                .build()
+   383→            
+   384→            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+   385→                Log.e(TAG, "AudioRecord for device audio not initialized")
+   386→                return false
+   387→            }
+   388→            
+   389→            return true
+   390→            
+   391→        } catch (e: Exception) {
+   392→            Log.e(TAG, "Failed to initialize device audio capture", e)
+   393→            return false
+   394→        }
+   395→    }
+   396→    
+   397→    /**
+   398→     * Enable noise suppression
+   399→     */
+   400→    private fun enableNoiseSuppression() {
+   401→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+   402→            try {
+   403→                val audioSessionId = audioRecord?.audioSessionId ?: return
+   404→                
+   405→                // Check if noise suppression is available
+   406→                if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
+   407→                    noiseSuppressor = android.media.audiofx.NoiseSuppressor.create(audioSessionId)
+   408→                    Log.i(TAG, "Noise suppression enabled")
+   409→                } else {
+   410→                    Log.w(TAG, "Noise suppression not available on this device")
+   411→                }
+   412→            } catch (e: Exception) {
+   413→                Log.e(TAG, "Failed to enable noise suppression", e)
+   414→            }
+   415→        }
+   416→    }
+   417→    
+   418→    /**
+   419→     * Disable noise suppression
+   420→     */
+   421→    private fun disableNoiseSuppression() {
+   422→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+   423→            try {
+   424→                (noiseSuppressor as? android.media.audiofx.NoiseSuppressor)?.release()
+   425→                noiseSuppressor = null
+   426→                Log.i(TAG, "Noise suppression disabled")
+   427→            } catch (e: Exception) {
+   428→                Log.e(TAG, "Failed to disable noise suppression", e)
+   429→            }
+   430→        }
+   431→    }
+   432→    
+   433→    /**
+   434→     * Start recording audio
+   435→     */
+   436→    private fun startRecording() {
+   437→        streamingJob = serviceScope.launch {
+   438→            try {
+   439→                audioRecord?.startRecording()
+   440→                
+   441→                val buffer = ByteArray(frameBufferSize)
+   442→                
+   443→                while (isStreaming.get() && !isPaused.get()) {
+   444→                    val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: -1
+   445→                    
+   446→                    if (bytesRead > 0) {
+   447→                        // Get presentation time
+   448→                        val presentationTimeUs = System.nanoTime() / 1000
+   449→                        
+   450→                        // Copy data to new array (only the bytes read)
+   451→                        val audioData = buffer.copyOf(bytesRead)
+   452→                        
+   453→                        // Queue to encoder
+   454→                        audioEncoder?.queueAudioData(audioData, presentationTimeUs)
+   455→                    } else if (bytesRead < 0) {
+   456→                        Log.e(TAG, "Error reading audio: $bytesRead")
+   457→                        break
+   458→                    }
+   459→                    
+   460→                    // Small delay to prevent busy loop
+   461→                    delay(1)
+   462→                }
+   463→                
+   464→            } catch (e: Exception) {
+   465→                Log.e(TAG, "Error in recording loop", e)
+   466→                updateStreamState(error = "Recording error: ${e.message}")
+   467→            }
+   468→        }
+   469→    }
+   470→    
+   471→    /**
+   472→     * Connect to streaming server.
+   473→     * Non-blocking - retries automatically on failure.
+   474→     */
+   475→    private fun connectToServer() {
+   476→        if (config.serverUrl.isBlank()) {
+   477→            config = config.copy(serverUrl = Config.getBaseUrl())
+   478→        }
+   479→        val serverUrl = config.serverUrl.ifEmpty {
+   480→            StreamConfig.getWebSocketUrl(this)
+   481→        }
+   482→        
+   483→        try {
+   484→            val request = Request.Builder()
+   485→                .url(serverUrl)
+   486→                .build()
+   487→            
+   488→            webSocket?.close(1000, "Reconnecting")
+   489→            webSocket = null
+   490→            
+   491→            webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
+   492→                override fun onOpen(webSocket: WebSocket, response: Response) {
+   493→                    Log.i(TAG, "WebSocket connected")
+   494→                    val configJson = Gson().toJson(config.toMap())
+   495→                    webSocket.send(configJson)
+   496→                }
+   497→                
+   498→                override fun onMessage(webSocket: WebSocket, text: String) {
+   499→                    handleServerMessage(text)
+   500→                }
+   501→                
+   502→                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+   503→                    webSocket.close(1000, null)
+   504→                }
+   505→                
+   506→                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+   507→                    Log.i(TAG, "WebSocket closed")
+   508→                }
+   509→                
+   510→                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+   511→                    Log.w(TAG, "WebSocket failure: ${t.message}")
+   512→                    if (isStreaming.get()) {
+   513→                        handler.postDelayed({
+   514→                            if (isStreaming.get()) connectToServer()
+   515→                        }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+   516→                    }
+   517→                }
+   518→            })
+   519→            
+   520→        } catch (e: Exception) {
+   521→            Log.e(TAG, "Failed to connect to server", e)
+   522→            if (isStreaming.get()) {
+   523→                handler.postDelayed({
+   524→                    if (isStreaming.get()) connectToServer()
+   525→                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+   526→            }
+   527→        }
+   528→    }
+   529→    
+   530→    /**
+   531→     * Handle server message
+   532→     */
+   533→    private fun handleServerMessage(message: String) {
+   534→        try {
+   535→            val map = Gson().fromJson(message, Map::class.java)
+   536→            
+   537→            when (map["type"]) {
+   538→                "switch_source" -> {
+   539→                    val source = map["source"] as? String
+   540→                    source?.let { switchSource(it) }
+   541→                }
+   542→                "toggle_noise_suppression" -> toggleNoiseSuppression()
+   543→                "stop_stream" -> stopStreaming()
+   544→                "pause_stream" -> pauseStreaming()
+   545→                "resume_stream" -> resumeStreaming()
+   546→            }
+   547→            
+   548→        } catch (e: Exception) {
+   549→            Log.w(TAG, "Failed to parse server message: $message")
+   550→        }
+   551→    }
+   552→    
+   553→    /**
+   554→     * Handle encoded audio frame
+   555→     */
+   556→    private fun onAudioFrameEncoded(frame: AudioEncoder.EncodedAudioFrame) {
+   557→        if (!isStreaming.get() || isPaused.get()) return
+   558→        
+   559→        totalFramesEncoded++
+   560→        
+   561→        try {
+   562→            val packet = mapOf(
+   563→                "type" to "audio",
+   564→                "stream_id" to config.streamId,
+   565→                "timestamp" to frame.presentationTimeUs,
+   566→                "source" to currentSource,
+   567→                "size" to frame.size,
+   568→                "data" to android.util.Base64.encodeToString(frame.data, android.util.Base64.NO_WRAP)
+   569→            )
+   570→            
+   571→            webSocket?.send(Gson().toJson(packet))
+   572→            totalBytesSent += frame.size
+   573→            
+   574→            currentStreamState?.totalFramesEncoded = totalFramesEncoded
+   575→            currentStreamState?.totalBytesSent = totalBytesSent
+   576→            
+   577→        } catch (e: Exception) {
+   578→            Log.e(TAG, "Failed to send audio frame", e)
+   579→        }
+   580→    }
+   581→    
+   582→    /**
+   583→     * Switch audio source
+   584→     */
+   585→    private fun switchSource(source: String) {
+   586→        if (!isStreaming.get()) return
+   587→        
+   588→        Log.i(TAG, "Switching source from $currentSource to $source")
+   589→        
+   590→        // Stop current recording
+   591→        audioRecord?.stop()
+   592→        audioRecord?.release()
+   593→        audioRecord = null
+   594→        
+   595→        disableNoiseSuppression()
+   596→        
+   597→        currentSource = source
+   598→        
+   599→        // Initialize new source
+   600→        val success = when (source) {
+   601→            SOURCE_MICROPHONE -> initMicrophoneSource()
+   602→            SOURCE_DEVICE_AUDIO -> {
+   603→                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   604→                    // Device audio switch requires new MediaProjection
+   605→                    Log.w(TAG, "Device audio switch requires new MediaProjection")
+   606→                    initMicrophoneSource() // Fallback to microphone
+   607→                } else {
+   608→                    initMicrophoneSource()
+   609→                }
+   610→            }
+   611→            else -> initMicrophoneSource()
+   612→        }
+   613→        
+   614→        if (success) {
+   615→            startRecording()
+   616→            currentStreamState?.currentSource = currentSource
+   617→            updateNotification("Audio Streaming - $currentSource")
+   618→            Log.i(TAG, "Switched to source: $currentSource")
+   619→        } else {
+   620→            Log.e(TAG, "Failed to switch source")
+   621→            stopStreaming()
+   622→        }
+   623→    }
+   624→    
+   625→    /**
+   626→     * Toggle noise suppression
+   627→     */
+   628→    private fun toggleNoiseSuppression() {
+   629→        noiseSuppressionEnabled = !noiseSuppressionEnabled
+   630→        
+   631→        if (noiseSuppressionEnabled) {
+   632→            enableNoiseSuppression()
+   633→        } else {
+   634→            disableNoiseSuppression()
+   635→        }
+   636→        
+   637→        currentStreamState?.noiseSuppressionEnabled = noiseSuppressionEnabled
+   638→        Log.i(TAG, "Noise suppression: ${if (noiseSuppressionEnabled) "ON" else "OFF"}")
+   639→    }
+   640→    
+   641→    /**
+   642→     * Pause streaming
+   643→     */
+   644→    private fun pauseStreaming() {
+   645→        if (!isStreaming.get() || isPaused.get()) return
+   646→        
+   647→        isPaused.set(true)
+   648→        currentStreamState?.isPaused = true
+   649→        
+   650→        audioRecord?.stop()
+   651→        
+   652→        updateNotification("Audio Streaming Paused")
+   653→        Log.i(TAG, "Audio streaming paused")
+   654→    }
+   655→    
+   656→    /**
+   657→     * Resume streaming
+   658→     */
+   659→    private fun resumeStreaming() {
+   660→        if (!isStreaming.get() || !isPaused.get()) return
+   661→        
+   662→        isPaused.set(false)
+   663→        currentStreamState?.isPaused = false
+   664→        
+   665→        startRecording()
+   666→        
+   667→        updateNotification("Audio Streaming Active")
+   668→        Log.i(TAG, "Audio streaming resumed")
+   669→    }
+   670→    
+   671→    /**
+   672→     * Stop streaming
+   673→     */
+   674→    private fun stopStreaming() {
+   675→        if (!isStreaming.getAndSet(false)) return
+   676→        
+   677→        isPaused.set(false)
+   678→        
+   679→        // Stop recording
+   680→        streamingJob?.cancel()
+   681→        streamingJob = null
+   682→        
+   683→        audioRecord?.stop()
+   684→        audioRecord?.release()
+   685→        audioRecord = null
+   686→        
+   687→        // Disable noise suppression
+   688→        disableNoiseSuppression()
+   689→        
+   690→        // Stop encoder
+   691→        audioEncoder?.stop()
+   692→        
+   693→        // Close WebSocket
+   694→        webSocket?.close(1000, "Stream stopped")
+   695→        webSocket = null
+   696→        
+   697→        // Release MediaProjection
+   698→        mediaProjection?.stop()
+   699→        mediaProjection = null
+   700→        
+   701→        // Update state
+   702→        currentStreamState?.isActive = false
+   703→        
+   704→        // Stop foreground
+   705→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+   706→            stopForeground(STOP_FOREGROUND_REMOVE)
+   707→        } else {
+   708→            @Suppress("DEPRECATION")
+   709→            stopForeground(true)
+   710→        }
+   711→        
+   712→        Log.i(TAG, "Audio streaming stopped")
+   713→    }
+   714→    
+   715→    /**
+   716→     * Cleanup resources
+   717→     */
+   718→    private fun cleanup() {
+   719→        audioEncoder?.release()
+   720→        audioEncoder = null
+   721→        
+   722→        audioRecord?.release()
+   723→        audioRecord = null
+   724→        
+   725→        disableNoiseSuppression()
+   726→        
+   727→        mediaProjection?.stop()
+   728→        mediaProjection = null
+   729→    }
+   730→    
+   731→    /**
+   732→     * Update stream state
+   733→     */
+   734→    private fun updateStreamState(error: String? = null) {
+   735→        currentStreamState?.lastError = error
+   736→        
+   737→        if (error != null) {
+   738→            try {
+   739→                val errorPacket = mapOf(
+   740→                    "type" to "error",
+   741→                    "stream_id" to config.streamId,
+   742→                    "error" to error
+   743→                )
+   744→                webSocket?.send(Gson().toJson(errorPacket))
+   745→            } catch (e: Exception) {
+   746→                Log.e(TAG, "Failed to send error notification", e)
+   747→            }
+   748→        }
+   749→    }
+   750→    
+   751→    /**
+   752→     * Create notification channel
+   753→     */
+   754→    private fun createNotificationChannel() {
+   755→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   756→            val channel = NotificationChannel(
+   757→                CHANNEL_ID,
+   758→                "Audio Streaming Service",
+   759→                NotificationManager.IMPORTANCE_LOW
+   760→            ).apply {
+   761→                description = "Background audio streaming service"
+   762→                setShowBadge(false)
+   763→            }
+   764→            
+   765→            val nm = getSystemService(NotificationManager::class.java)
+   766→            nm.createNotificationChannel(channel)
+   767→        }
+   768→    }
+   769→    
+   770→    /**
+   771→     * Create foreground notification
+   772→     */
+   773→    private fun createNotification(): Notification {
+   774→        return NotificationCompat.Builder(this, CHANNEL_ID)
+   775→            .setContentTitle("Audio Stream Active")
+   776→            .setContentText("Streaming audio content")
+   777→            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+   778→            .setPriority(NotificationCompat.PRIORITY_LOW)
+   779→            .setOngoing(true)
+   780→            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+   781→            .build()
+   782→    }
+   783→    
+   784→    /**
+   785→     * Update notification
+   786→     */
+   787→    private fun updateNotification(text: String) {
+   788→        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+   789→            .setContentTitle("Audio Stream")
+   790→            .setContentText(text)
+   791→            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+   792→            .setPriority(NotificationCompat.PRIORITY_LOW)
+   793→            .setOngoing(true)
+   794→            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+   795→            .build()
+   796→        
+   797→        val nm = getSystemService(NotificationManager::class.java)
+   798→        nm.notify(NOTIFICATION_ID, notification)
+   799→    }
+   800→    
+   801→    override fun onDestroy() {
+   802→        stopStreaming()
+   803→        cleanup()
+   804→        serviceScope.cancel()
+   805→        super.onDestroy()
+   806→        Log.i(TAG, "AudioStreamService destroyed")
+   807→    }
+   808→}
+   809→

