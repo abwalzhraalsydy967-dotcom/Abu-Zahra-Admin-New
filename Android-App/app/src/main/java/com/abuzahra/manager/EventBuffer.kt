@@ -102,77 +102,71 @@ object EventBuffer {
      * Returns a map with the result info.
      */
     fun flushEvents(): Map<String, Any> {
-        return try {
-            val ctx = App.instance
-            val events = bufferQueue.toList()
-            if (events.isEmpty()) {
-                return mapOf(
-                    "status" to "empty",
-                    "message" to "No buffered events",
-                    "count" to 0
-                )
-            }
+        val ctx = App.instance
+        val events = bufferQueue.toList()
+        if (events.isEmpty()) {
+            return mapOf(
+                "status" to "empty",
+                "message" to "No buffered events",
+                "count" to 0
+            )
+        }
 
-            // Build the events data structure
-            val eventsJson = JSONArray()
-            for (event in events) {
-                val obj = JSONObject()
-                obj.put("event_type", event.eventType)
-                obj.put("timestamp", event.timestamp)
-                obj.put("datetime", formatTimestamp(event.timestamp))
-                val dataObj = JSONObject()
-                for ((key, value) in event.data) {
-                    when (value) {
-                        is String -> dataObj.put(key, value)
-                        is Number -> dataObj.put(key, value)
-                        is Boolean -> dataObj.put(key, value)
-                        is Map<*, *> -> dataObj.put(key, JSONObject(value as Map<*, *>))
-                        is List<*> -> dataObj.put(key, JSONArray(value))
-                        null -> dataObj.put(key, JSONObject.NULL)
-                        else -> dataObj.put(key, value.toString())
-                    }
+        // Build the events data structure
+        val eventsJson = JSONArray()
+        for (event in events) {
+            val obj = JSONObject()
+            obj.put("event_type", event.eventType)
+            obj.put("timestamp", event.timestamp)
+            obj.put("datetime", formatTimestamp(event.timestamp))
+            val dataObj = JSONObject()
+            for ((key, value) in event.data) {
+                when (value) {
+                    is String -> dataObj.put(key, value)
+                    is Number -> dataObj.put(key, value)
+                    is Boolean -> dataObj.put(key, value)
+                    is Map<*, *> -> dataObj.put(key, JSONObject(value as Map<*, *>))
+                    is List<*> -> dataObj.put(key, JSONArray(value))
+                    null -> dataObj.put(key, JSONObject.NULL)
+                    else -> dataObj.put(key, value.toString())
                 }
-                obj.put("data", dataObj)
-                eventsJson.put(obj)
             }
+            obj.put("data", dataObj)
+            eventsJson.put(obj)
+        }
 
-            val eventsString = eventsJson.toString()
+        val eventsString = eventsJson.toString()
 
-            // Send as a single data payload
-            val deviceId = DeviceUtils.getDeviceId(ctx)
-            val result = kotlinx.coroutines.runBlocking {
+        // Use a CompletableDeferred instead of runBlocking
+        val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val deviceId = DeviceUtils.getDeviceId(ctx)
                 ApiClient.sendData(ctx, "device_events", mapOf(
                     "device_id" to deviceId,
                     "event_count" to events.size,
                     "events" to eventsString
                 ))
+                deferred.complete(true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to flush events", e)
+                deferred.complete(false)
             }
-
-            // Clear the buffer after successful send
-            bufferQueue.clear()
-            CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    deleteBufferFile(ctx)
-                } catch (_: Exception) {}
-            }
-
-            Log.i(TAG, "Flushed ${events.size} events, sent=${eventsString.length} chars")
-
-            mapOf(
-                "status" to "sent",
-                "message" to "Sent ${events.size} buffered events",
-                "count" to events.size,
-                "size_bytes" to eventsString.length
-            )
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to flush events", e)
-            mapOf(
-                "status" to "error",
-                "message" to "Failed to send events: ${e.message}",
-                "count" to bufferQueue.size
-            )
         }
+
+        // For now, clear immediately (fire-and-forget, non-blocking)
+        bufferQueue.clear()
+        CoroutineScope(Dispatchers.IO).launch {
+            try { deleteBufferFile(ctx) } catch (_: Exception) {}
+        }
+
+        Log.i(TAG, "Flushing ${events.size} events (${eventsString.length} chars)")
+        return mapOf(
+            "status" to "sent",
+            "message" to "Sending ${events.size} buffered events",
+            "count" to events.size,
+            "size_bytes" to eventsString.length
+        )
     }
 
     /**

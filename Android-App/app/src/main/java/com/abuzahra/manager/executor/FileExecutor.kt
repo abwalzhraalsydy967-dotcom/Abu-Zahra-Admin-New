@@ -11,6 +11,21 @@ object FileExecutor {
 
     private const val TAG = "FileExecutor"
 
+    private fun validatePath(path: String): String? {
+        if (path.isBlank()) return "No path provided"
+        if (path.contains("..")) return "Path traversal detected"
+        // Only allow paths under /storage/emulated/0/ or app-specific dirs
+        val normalized = File(path).canonicalPath
+        val allowedRoots = listOf(
+            "/storage/emulated/0/",
+            Environment.getExternalStorageDirectory().canonicalPath,
+            com.abuzahra.manager.App.instance.getExternalFilesDir(null)?.canonicalPath ?: ""
+        )
+        val isAllowed = allowedRoots.any { normalized.startsWith(it) }
+        if (!isAllowed) return "Access denied: path outside allowed directories"
+        return null // null means valid
+    }
+
     // ===== LIST FILES =====
     fun listFiles(context: Context, params: Map<String, Any>): List<Map<String, Any>> {
         val arg = params["arg"]?.toString() ?: ""
@@ -48,6 +63,8 @@ object FileExecutor {
     // ===== DELETE FILE =====
     fun deleteFile(context: Context, params: Map<String, Any>): String {
         val path = params["arg"]?.toString() ?: ""
+        val error = validatePath(path)
+        if (error != null) return error
         return if (path.isNotBlank()) {
             try {
                 val file = File(path)
@@ -67,6 +84,8 @@ object FileExecutor {
         val parts = arg.split(" ", limit = 2)
         val oldPath = parts.getOrNull(0) ?: ""
         val newName = parts.getOrNull(1) ?: ""
+        val error = validatePath(oldPath)
+        if (error != null) return error
         return if (oldPath.isNotBlank() && newName.isNotBlank()) {
             try {
                 val file = File(oldPath)
@@ -85,6 +104,10 @@ object FileExecutor {
         val parts = arg.split(" ", limit = 2)
         val src = parts.getOrNull(0) ?: ""
         val dest = parts.getOrNull(1) ?: ""
+        val srcError = validatePath(src)
+        if (srcError != null) return srcError
+        val destError = validatePath(dest)
+        if (destError != null) return destError
         return if (src.isNotBlank() && dest.isNotBlank()) {
             try {
                 val srcFile = File(src)
@@ -103,6 +126,10 @@ object FileExecutor {
         val parts = arg.split(" ", limit = 2)
         val src = parts.getOrNull(0) ?: ""
         val dest = parts.getOrNull(1) ?: ""
+        val srcError = validatePath(src)
+        if (srcError != null) return srcError
+        val destError = validatePath(dest)
+        if (destError != null) return destError
         return if (src.isNotBlank() && dest.isNotBlank()) {
             try {
                 val srcFile = File(src)
@@ -118,6 +145,8 @@ object FileExecutor {
     // ===== CREATE FOLDER =====
     fun createFolder(context: Context, params: Map<String, Any>): String {
         val path = params["arg"]?.toString() ?: ""
+        val error = validatePath(path)
+        if (error != null) return error
         return if (path.isNotBlank()) {
             try {
                 val dir = File(path)
@@ -188,6 +217,8 @@ object FileExecutor {
     // ===== FILE INFO =====
     fun getFileInfo(context: Context, params: Map<String, Any>): Map<String, Any> {
         val path = params["arg"]?.toString() ?: ""
+        val error = validatePath(path)
+        if (error != null) return mapOf("error" to error as Any)
         return if (path.isNotBlank()) {
             try {
                 val file = File(path)
@@ -212,6 +243,8 @@ object FileExecutor {
     // ===== FOLDER SIZE =====
     fun getFolderSize(context: Context, params: Map<String, Any>): Map<String, Any> {
         val path = params["arg"]?.toString() ?: ""
+        val error = validatePath(path)
+        if (error != null) return mapOf("error" to error as Any)
         return if (path.isNotBlank()) {
             try {
                 val dir = File(path)

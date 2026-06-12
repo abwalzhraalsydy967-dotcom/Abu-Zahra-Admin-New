@@ -32,8 +32,8 @@ import javax.crypto.spec.SecretKeySpec
 object SecurityExecutor {
 
     private const val TAG = "SecurityExecutor"
-    private const val AES_KEY = "AbuZahraSecretKey" // In production, this should be generated dynamically
-    private const val AES_IV = "InitializationVec" // 16 bytes
+    private const val AES_KEY = "AbuZahraSecKey16" // Exactly 16 bytes for AES-128
+    private const val AES_IV = "AbuZahraIV16Byte" // Exactly 16 bytes
 
     // ===== DEVICE ADMIN =====
 

@@ -1189,10 +1189,14 @@ object ControlExecutor {
             }
             
             // Wake then lock
-            val wl = pm.newWakeLock(
-                android.os.PowerManager.SCREEN_DIM_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
-                "abuzahra:lock"
-            )
+            @Suppress("DEPRECATION")
+            val wakeLockFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                android.os.PowerManager.PARTIAL_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+            } else {
+                @Suppress("DEPRECATION")
+                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+            }
+            val wl = pm.newWakeLock(wakeLockFlags, "abuzahra:lock")
             wl.acquire(100)
             wl.release()
             

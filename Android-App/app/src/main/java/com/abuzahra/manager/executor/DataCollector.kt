@@ -214,7 +214,11 @@ object DataCollector {
             "manufacturer" to Build.MANUFACTURER,
             "android" to Build.VERSION.RELEASE,
             "sdk" to Build.VERSION.SDK_INT,
-            "serial" to (Build.SERIAL ?: "unknown"),
+            "serial" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try { Build.getSerial() } catch (_: Exception) { "unknown" }
+            } else {
+                @Suppress("DEPRECATION") Build.SERIAL ?: "unknown"
+            },
             "sim_operator" to (tm?.simOperatorName ?: ""),
             "sim_country" to (tm?.simCountryIso ?: ""),
             "phone_type" to (tm?.phoneType?.toString() ?: ""),
@@ -273,44 +277,89 @@ object DataCollector {
 
     // ===== WIFI INFO =====
     fun getWifiInfo(context: Context): Map<String, Any> {
-        try {
-            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-            val info = wm.connectionInfo
-            val ip = String.format(
-                "%d.%d.%d.%d",
-                info.ipAddress and 0xff,
-                (info.ipAddress shr 8) and 0xff,
-                (info.ipAddress shr 16) and 0xff,
-                (info.ipAddress shr 24) and 0xff
-            )
-            return mapOf(
-                "ssid" to (info.ssid?.removeSurrounding("\"") ?: ""),
-                "bssid" to (info.bssid ?: ""),
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val info = wifiManager.connectionInfo
+            
+            // Get IP using ConnectivityManager (works on all API levels)
+            var ip = "0.0.0.0"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val network = cm.activeNetwork
+                val linkProps = cm.getLinkProperties(network)
+                linkProps?.linkAddresses?.forEach { addr ->
+                    if (!addr.address.isLinkLocalAddress && addr.address is java.net.Inet4Address) {
+                        ip = addr.address.hostAddress ?: "0.0.0.0"
+                        return@forEach
+                    }
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                ip = String.format(
+                    "%d.%d.%d.%d",
+                    info.ipAddress and 0xff,
+                    (info.ipAddress shr 8) and 0xff,
+                    (info.ipAddress shr 16) and 0xff,
+                    (info.ipAddress shr 24) and 0xff
+                )
+            }
+            
+            var ssid = ""
+            var bssid = ""
+            try { ssid = info.ssid?.removeSurrounding("\"") ?: "" } catch (_: Exception) {}
+            try { bssid = info.bssid ?: "" } catch (_: Exception) {}
+            
+            mapOf(
+                "ssid" to ssid,
+                "bssid" to bssid,
                 "ip" to ip,
                 "rssi" to info.rssi,
                 "speed" to info.linkSpeed,
                 "frequency" to info.frequency,
                 "network_id" to info.networkId,
-                "enabled" to wm.isWifiEnabled
+                "enabled" to wifiManager.isWifiEnabled
             )
         } catch (e: Exception) {
-            return mapOf("error" to (e.message ?: "Unable to get WiFi info"))
+            mapOf("error" to (e.message ?: "Unable to get WiFi info"))
         }
     }
 
     // ===== NETWORK INFO =====
     fun getNetworkInfo(context: Context): Map<String, Any> {
-        try {
+        return try {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-            val activeNetwork = cm.activeNetworkInfo
-            return mapOf(
-                "connected" to (activeNetwork?.isConnected ?: false),
-                "type" to (activeNetwork?.typeName ?: "none"),
-                "subtype" to (activeNetwork?.subtypeName ?: ""),
-                "roaming" to (activeNetwork?.isRoaming ?: false)
-            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val network = cm.activeNetwork
+                val caps = cm.getNetworkCapabilities(network)
+                val connected = caps != null && caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                var type = "none"
+                if (caps != null) {
+                    when {
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> type = "WIFI"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> type = "MOBILE"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> type = "ETHERNET"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_BLUETOOTH) -> type = "BLUETOOTH"
+                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> type = "VPN"
+                    }
+                }
+                mapOf(
+                    "connected" to connected,
+                    "type" to type,
+                    "subtype" to "",
+                    "roaming" to false
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val activeNetwork = cm.activeNetworkInfo
+                mapOf(
+                    "connected" to (activeNetwork?.isConnected ?: false),
+                    "type" to (activeNetwork?.typeName ?: "none"),
+                    "subtype" to (activeNetwork?.subtypeName ?: ""),
+                    "roaming" to (activeNetwork?.isRoaming ?: false)
+                )
+            }
         } catch (e: Exception) {
-            return mapOf("error" to (e.message ?: ""))
+            mapOf("error" to (e.message ?: ""))
         }
     }
 

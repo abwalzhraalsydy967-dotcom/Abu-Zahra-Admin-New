@@ -328,8 +328,15 @@ object MonitorExecutor {
 
     fun locationStop(): String {
         locationTrackingActive = false
-        locationListener?.let {
-            // LocationManager removal would need context
+        locationListener?.let { listener ->
+            try {
+                val ctx = com.abuzahra.manager.App.instance
+                val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+                lm.removeUpdates(listener)
+                Log.i(TAG, "Location listener unregistered")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to remove location listener", e)
+            }
         }
         locationListener = null
         locationJob?.cancel()

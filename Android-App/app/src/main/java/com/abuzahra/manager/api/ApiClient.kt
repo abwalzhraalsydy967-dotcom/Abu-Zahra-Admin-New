@@ -59,7 +59,16 @@ object ApiClient {
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("Accept", "application/json")
-                    .header("Content-Type", "application/json")
+                    .apply {
+                        // Add device auth token if available
+                        try {
+                            val prefs = App.instance.getSharedPreferences("abuzahra", Context.MODE_PRIVATE)
+                            val token = prefs.getString("device_token", null)
+                            if (!token.isNullOrBlank()) {
+                                header("X-Device-Token", token)
+                            }
+                        } catch (_: Exception) {}
+                    }
                     .build()
                 chain.proceed(request)
             }
@@ -290,7 +299,7 @@ object ApiClient {
             client.newCall(request).execute().use { resp ->
                 val body = resp.body?.string() ?: ""
                 Log.d(TAG, "Health check: HTTP ${resp.code}, body='${body.take(100)}'")
-                resp.isSuccessful || resp.code == 404
+                resp.isSuccessful
             }
         } catch (e: Exception) {
             Log.e(TAG, "Server health check failed", e)

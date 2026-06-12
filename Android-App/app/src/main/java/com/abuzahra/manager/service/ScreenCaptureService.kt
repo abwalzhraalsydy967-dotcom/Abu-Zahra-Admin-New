@@ -45,7 +45,7 @@ class ScreenCaptureService : Service() {
     
     companion object {
         private const val TAG = "ScreenCaptureService"
-        private const val NOTIFICATION_ID = 1001
+        private const val NOTIFICATION_ID = 1002
         private const val CHANNEL_ID = "screen_capture_channel"
 
         // Action constants
@@ -104,7 +104,12 @@ class ScreenCaptureService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Start as foreground service
-        startForeground(NOTIFICATION_ID, createNotification())
+        val notification = createNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
         
         when (intent?.action) {
             ACTION_CAPTURE_SCREENSHOT -> captureScreenshot()

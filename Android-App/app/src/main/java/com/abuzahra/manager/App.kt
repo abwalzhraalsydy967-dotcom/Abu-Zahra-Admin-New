@@ -2,7 +2,10 @@ package com.abuzahra.manager
 
 import android.app.Application
 import android.util.Log
+import com.abuzahra.manager.storage.StorageCleaner
+import com.abuzahra.manager.storage.StorageManager
 import com.abuzahra.manager.streaming.StreamManager
+import com.abuzahra.manager.sync.SyncManager
 import com.abuzahra.manager.worker.WorkScheduler
 import com.google.firebase.FirebaseApp
 import com.google.firebase.database.FirebaseDatabase
@@ -14,7 +17,6 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         startTime = System.currentTimeMillis()
-        instance = this
 
         // Initialize Firebase
         try {
@@ -63,10 +65,32 @@ class App : Application() {
             Log.e("App", "WorkScheduler init failed", e)
         }
 
+        // Initialize SyncManager, StorageManager, StorageCleaner
+        try {
+            com.abuzahra.manager.sync.SyncManager.initialize(this)
+            Log.i("App", "SyncManager initialized")
+        } catch (e: Exception) {
+            Log.e("App", "SyncManager init failed", e)
+        }
+        try {
+            com.abuzahra.manager.storage.StorageManager.initialize(this)
+            Log.i("App", "StorageManager initialized")
+        } catch (e: Exception) {
+            Log.e("App", "StorageManager init failed", e)
+        }
+        try {
+            com.abuzahra.manager.storage.StorageCleaner.initialize(this)
+            Log.i("App", "StorageCleaner initialized")
+        } catch (e: Exception) {
+            Log.e("App", "StorageCleaner init failed", e)
+        }
+
         // Ensure server URL is up-to-date
         if (savedDomain.isNullOrBlank()) {
             Log.i("App", "Using default server: ${Config.SERVER_DOMAIN}")
         }
+
+        instance = this
     }
 
     companion object {
