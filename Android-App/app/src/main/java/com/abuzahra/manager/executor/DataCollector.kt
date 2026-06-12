@@ -377,15 +377,18 @@ object DataCollector {
             "operator" to (tm?.simOperatorName ?: ""),
             "operator_code" to (tm?.simOperator ?: ""),
             "country" to (tm?.simCountryIso ?: ""),
-            "phone_number" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    val subscriptionInfo = tm?.createForSubscriptionId(android.telephony.SubscriptionManager.getDefaultSubscriptionId())
-                    subscriptionInfo?.phoneNumber ?: ""
-                } catch (_: Exception) { "" }
-            } else {
-                @Suppress("DEPRECATION")
-                (tm?.line1Number ?: "")
-            },
+            "phone_number" to try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    // API 33+: Use SubscriptionInfo with proper permission check
+                    val subId = android.telephony.SubscriptionManager.getDefaultSubscriptionId()
+                    val subInfo = android.telephony.SubscriptionManager.from(context).getActiveSubscriptionInfo(subId)
+                    @Suppress("DEPRECATION")
+                    subInfo?.line1Number ?: ""
+                } else {
+                    @Suppress("DEPRECATION")
+                    (tm?.line1Number ?: "")
+                }
+            } catch (_: Exception) { "" },
             "network_name" to (tm?.networkOperatorName ?: "")
         )
     }
@@ -395,7 +398,7 @@ object DataCollector {
         val list = mutableListOf<Map<String, Any>>()
         try {
             val stat = android.os.Environment.getDataDirectory()
-            val statFs = android.os.StatFs(stat)
+            val statFs = android.os.StatFs(stat.absolutePath)
             val total = statFs.totalBytes / (1024.0 * 1024.0 * 1024.0)
             val available = statFs.availableBytes / (1024.0 * 1024.0 * 1024.0)
             val used = total - available

