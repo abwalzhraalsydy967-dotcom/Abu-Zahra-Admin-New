@@ -1,3 +1,32 @@
+     1→    46→SETTINGS_FILE = DATA_DIR / "settings.json"
+     2→    47→LINK_CODES_FILE = DATA_DIR / "link_codes.json"
+     3→    48→
+     4→    49→logging.basicConfig(
+     5→    50→    level=logging.INFO,
+     6→    51→    format="%(asctime)s [%(levelname)s] %(message)s",
+     7→    52→    handlers=[logging.StreamHandler(sys.stdout)],
+     8→    53→)
+     9→    54→log = logging.getLogger("abu-zahra")
+    10→    55→
+    11→    56→# ============================================================================
+    12→    57→# GLOBAL STATE
+    13→    58→# ============================================================================
+    14→    59→
+    15→    60→START_TIME = time.time()
+    16→    61→messages_sent = 0
+    17→    62→api_hits = 0
+    18→    63→tg_offset = 0
+    19→    64→_tg_session = None
+    20→    65→polling_active = False
+    21→    66→# server_settings removed - use load_settings() directly
+    22→    67→_processed_update_ids = set()  # منع تكرار معالجة نفس التحديث
+    23→    68→_processed_message_keys = set()  # منع تكرار معالجة نفس الرسالة (chat_id:message_id)
+    24→    69→_last_message_time = {}  # منع إرسال رسائل مكررة (chat_id -> last_msg_time)
+    25→    70→_last_link_code_time = 0  # منع إنشاء أكواد مكررة
+    26→    71→_processed_results = set()  # منع إرسال نفس النتيجة مرتين
+    27→    72→_pending_messages = {}  # cmd_id -> {"chat_id": int, "message_id": int, "created_at": float}
+    28→    73→_message_dedup = {}  # dedup: chat_id:text_hash -> timestamp
+    29→    74→_chat_rate_counter = {}  # rate limit: chat_id -> [timestamps]
     30→    75→_data_forward_dedup = {}  # data forward dedup: device_id:type -> timestamp
     31→    76→_data_body_dedup = {}  # dedup for /api/data body endpoint: device_id:command -> {last_time, last_hash}
     32→    77→
@@ -429,45 +458,5 @@
    458→   503→    commands = load_json(COMMANDS_FILE, [])
    459→   504→    for i, c in enumerate(commands):
    460→   505→        if c.get("id") == cmd_id:
-   461→   506→            commands[i]["status"] = status
-   462→   507→            commands[i]["result"] = result
-   463→   508→            commands[i]["completed_at"] = ts()
-   464→   509→            save_json(COMMANDS_FILE, commands)
-   465→   510→            return commands[i]
-   466→   511→    return None
-   467→   512→
-   468→   513→# ============================================================================
-   469→   514→# SESSION HELPERS
-   470→   515→# ============================================================================
-   471→   516→
-   472→   517→def create_session(username, password, ip="", ua=""):
-   473→   518→    settings = load_settings()
-   474→   519→    if password != settings.get("admin_password", "admin"):
-   475→   520→        return None
-   476→   521→    sessions = load_json(SESSIONS_FILE, [])
-   477→   522→    token = secrets.token_urlsafe(32)
-   478→   523→    session = {
-   479→   524→        "token": token,
-   480→   525→        "username": username,
-   481→   526→        "created_at": datetime.now(timezone.utc).isoformat(),
-   482→   527→        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
-   483→   528→        "ip": ip,
-   484→   529→        "user_agent": ua,
-   485→   530→    }
-   486→   531→    sessions.append(session)
-   487→   532→    if len(sessions) > 100:
-   488→   533→        sessions = sessions[-100:]
-   489→   534→    save_json(SESSIONS_FILE, sessions)
-   490→   535→    append_event("Web login", {"username": username, "ip": ip})
-   491→   536→    return session
-   492→   537→
-   493→   538→
-   494→   539→def validate_session(token):
-   495→   540→    sessions = load_json(SESSIONS_FILE, [])
-   496→   541→    now = datetime.now(timezone.utc)
-   497→   542→    for s in sessions:
-   498→   543→        if s.get("token") == token:
-   499→   544→            try:
-   500→   545→                expires = datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc)
-   501→
-   502→[showing lines 46-545 of 4290; use offset=546 with limit to continue reading]
+
+[showing lines 1-460 of 462; use offset=461 with limit to continue reading]

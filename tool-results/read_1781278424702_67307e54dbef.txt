@@ -63,7 +63,7 @@
     63→tg_offset = 0
     64→_tg_session = None
     65→polling_active = False
-    66→server_settings = {}
+    66→# server_settings removed - use load_settings() directly
     67→_processed_update_ids = set()  # منع تكرار معالجة نفس التحديث
     68→_processed_message_keys = set()  # منع تكرار معالجة نفس الرسالة (chat_id:message_id)
     69→_last_message_time = {}  # منع إرسال رسائل مكررة (chat_id -> last_msg_time)
@@ -499,4 +499,4 @@
    499→    return [c for c in commands if c.get("device_id") == device_id and c.get("status") == "pending"]
    500→
 
-[showing lines 1-500 of 4290; use offset=501 with limit to continue reading]
+[showing lines 1-500 of 4262; use offset=501 with limit to continue reading]

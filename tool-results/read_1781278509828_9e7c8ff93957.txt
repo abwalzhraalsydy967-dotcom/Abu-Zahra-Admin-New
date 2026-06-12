@@ -1,0 +1,729 @@
+   100→   100→   100→    private val isStreaming = AtomicBoolean(false)
+   101→   101→   101→    private val isPaused = AtomicBoolean(false)
+   102→   102→   102→    private var streamJob: Job? = null
+   103→   103→   103→    private var stateJob: Job? = null
+   104→   104→   104→    
+   105→   105→   105→    // WebSocket client
+   106→   106→   106→    private var webSocket: WebSocket? = null
+   107→   107→   107→    private var okHttpClient: OkHttpClient? = null
+   108→   108→   108→    
+   109→   109→   109→    // Statistics
+   110→   110→   110→    private var startTime = 0L
+   111→   111→   111→    private var totalBytesSent = 0L
+   112→   112→   112→    private var totalFramesEncoded = 0L
+   113→   113→   113→    
+   114→   114→   114→    // Battery optimization
+   115→   115→   115→    private var lastBatteryLevel = 100
+   116→   116→   116→    private var batteryWarningSent = false
+   117→   117→   117→    private val handler = Handler(Looper.getMainLooper())
+   118→   118→   118→    
+   119→   119→   119→    // Screen dimensions
+   120→   120→   120→    private var screenWidth = 0
+   121→   121→   121→    private var screenHeight = 0
+   122→   122→   122→    private var screenDensity = 0
+   123→   123→   123→    
+   124→   124→   124→    // SharedPreferences for state persistence
+   125→   125→   125→    private lateinit var prefs: SharedPreferences
+   126→   126→   126→    
+   127→   127→   127→    /**
+   128→   128→   128→     * Stream state data class
+   129→   129→   129→     */
+   130→   130→   130→    data class StreamState(
+   131→   131→   131→        val streamId: String,
+   132→   132→   132→        var isActive: Boolean,
+   133→   133→   133→        var isPaused: Boolean,
+   134→   134→   134→        val startTime: Long,
+   135→   135→   135→        var totalBytesSent: Long,
+   136→   136→   136→        var totalFramesEncoded: Long,
+   137→   137→   137→        var currentBitrate: Int,
+   138→   138→   138→        var lastError: String? = null
+   139→   139→   139→    )
+   140→   140→   140→    
+   141→   141→   141→    override fun onCreate() {
+   142→   142→   142→        super.onCreate()
+   143→   143→   143→        createNotificationChannel()
+   144→   144→   144→        prefs = getSharedPreferences("screen_stream_prefs", Context.MODE_PRIVATE)
+   145→   145→   145→        
+   146→   146→   146→        // Initialize HTTP client
+   147→   147→   147→        okHttpClient = OkHttpClient.Builder()
+   148→   148→   148→            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+   149→   149→   149→            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+   150→   150→   150→            .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+   151→   151→   151→            .build()
+   152→   152→   152→        
+   153→   153→   153→        // Load saved state
+   154→   154→   154→        loadSavedState()
+   155→   155→   155→        
+   156→   156→   156→        Log.i(TAG, "ScreenStreamService created")
+   157→   157→   157→    }
+   158→   158→   158→    
+   159→   159→   159→    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+   160→   160→   160→        // Start as foreground service with proper type for Android 14+
+   161→   161→   161→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   162→   162→   162→            startForeground(NOTIFICATION_ID, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+   163→   163→   163→        } else {
+   164→   164→   164→            startForeground(NOTIFICATION_ID, createNotification())
+   165→   165→   165→        }
+   166→   166→   166→        
+   167→   167→   167→        when (intent?.action) {
+   168→   168→   168→            ACTION_START_STREAM -> {
+   169→   169→   169→                val configJson = intent.getStringExtra(EXTRA_CONFIG)
+   170→   170→   170→                configJson?.let { try { config = com.google.gson.Gson().fromJson(it, StreamConfig.Configuration::class.java) } catch(_ : Exception) {} }
+   171→   171→   171→                
+   172→   172→   172→                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, lastResultCode)
+   173→   173→   173→                val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+   174→   174→   174→                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+   175→   175→   175→                } else {
+   176→   176→   176→                    @Suppress("DEPRECATION")
+   177→   177→   177→                    intent.getParcelableExtra(EXTRA_RESULT_DATA)
+   178→   178→   178→                } ?: lastPermissionData
+   179→   179→   179→                
+   180→   180→   180→                startStreaming(resultCode, resultData)
+   181→   181→   181→            }
+   182→   182→   182→            ACTION_STOP_STREAM -> stopStreaming()
+   183→   183→   183→            ACTION_PAUSE_STREAM -> pauseStreaming()
+   184→   184→   184→            ACTION_RESUME_STREAM -> resumeStreaming()
+   185→   185→   185→            ACTION_UPDATE_CONFIG -> {
+   186→   186→   186→                val newConfigJson = intent.getStringExtra(EXTRA_CONFIG)
+   187→   187→   187→                newConfigJson?.let { try { updateConfig(com.google.gson.Gson().fromJson(it, StreamConfig.Configuration::class.java)) } catch(_ : Exception) {} }
+   188→   188→   188→            }
+   189→   189→   189→        }
+   190→   190→   190→        
+   191→   191→   191→        return START_STICKY
+   192→   192→   192→    }
+   193→   193→   193→    
+   194→   194→   194→    override fun onBind(intent: Intent?): IBinder? = null
+   195→   195→   195→    
+   196→   196→   196→    /**
+   197→   197→   197→     * Initialize MediaProjection
+   198→   198→   198→     */
+   199→   199→   199→    private fun initMediaProjection(resultCode: Int, data: Intent?): Boolean {
+   200→   200→   200→        if (resultCode == 0 || data == null) {
+   201→   201→   201→            Log.e(TAG, "Invalid permission data")
+   202→   202→   202→            return false
+   203→   203→   203→        }
+   204→   204→   204→        
+   205→   205→   205→        try {
+   206→   206→   206→            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+   207→   207→   207→            mediaProjection = mpm.getMediaProjection(resultCode, data)
+   208→   208→   208→            
+   209→   209→   209→            // Register callback for projection stop
+   210→   210→   210→            mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+   211→   211→   211→                override fun onStop() {
+   212→   212→   212→                    Log.i(TAG, "MediaProjection stopped")
+   213→   213→   213→                    stopStreaming()
+   214→   214→   214→                }
+   215→   215→   215→            }, handler)
+   216→   216→   216→            
+   217→   217→   217→            // Get screen metrics
+   218→   218→   218→            val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+   219→   219→   219→            val metrics = DisplayMetrics()
+   220→   220→   220→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+   221→   221→   221→                val bounds = windowManager.currentWindowMetrics.bounds
+   222→   222→   222→                screenWidth = bounds.width()
+   223→   223→   223→                screenHeight = bounds.height()
+   224→   224→   224→                screenDensity = resources.displayMetrics.densityDpi
+   225→   225→   225→            } else {
+   226→   226→   226→                @Suppress("DEPRECATION")
+   227→   227→   227→                windowManager.defaultDisplay.getRealMetrics(metrics)
+   228→   228→   228→                screenWidth = metrics.widthPixels
+   229→   229→   229→                screenHeight = metrics.heightPixels
+   230→   230→   230→                screenDensity = metrics.densityDpi
+   231→   231→   231→            }
+   232→   232→   232→            
+   233→   233→   233→            // Adjust resolution based on config
+   234→   234→   234→            if (config.width < screenWidth || config.height < screenHeight) {
+   235→   235→   235→                val scale = minOf(
+   236→   236→   236→                    config.width.toFloat() / screenWidth,
+   237→   237→   237→                    config.height.toFloat() / screenHeight
+   238→   238→   238→                )
+   239→   239→   239→                screenWidth = (screenWidth * scale).toInt()
+   240→   240→   240→                screenHeight = (screenHeight * scale).toInt()
+   241→   241→   241→            }
+   242→   242→   242→            
+   243→   243→   243→            Log.i(TAG, "MediaProjection initialized: ${screenWidth}x${screenHeight}")
+   244→   244→   244→            return true
+   245→   245→   245→            
+   246→   246→   246→        } catch (e: Exception) {
+   247→   247→   247→            Log.e(TAG, "Failed to initialize MediaProjection", e)
+   248→   248→   248→            return false
+   249→   249→   249→        }
+   250→   250→   250→    }
+   251→   251→   251→    
+   252→   252→   252→    /**
+   253→   253→   253→     * Start screen streaming
+   254→   254→   254→     */
+   255→   255→   255→    private fun startStreaming(resultCode: Int, data: Intent?) {
+   256→   256→   256→        if (isStreaming.get()) {
+   257→   257→   257→            Log.w(TAG, "Already streaming")
+   258→   258→   258→            return
+   259→   259→   259→        }
+   260→   260→   260→        
+   261→   261→   261→        // Initialize MediaProjection
+   262→   262→   262→        if (!initMediaProjection(resultCode, data)) {
+   263→   263→   263→            updateStreamState(error = "Failed to initialize MediaProjection")
+   264→   264→   264→            return
+   265→   265→   265→        }
+   266→   266→   266→        
+   267→   267→   267→        // Update config with actual resolution
+   268→   268→   268→        config = config.copy(
+   269→   269→   269→            width = screenWidth,
+   270→   270→   270→            height = screenHeight
+   271→   271→   271→        )
+   272→   272→   272→        
+   273→   273→   273→        // Initialize encoders
+   274→   274→   274→        if (!initEncoders()) {
+   275→   275→   275→            updateStreamState(error = "Failed to initialize encoders")
+   276→   276→   276→            cleanup()
+   277→   277→   277→            return
+   278→   278→   278→        }
+   279→   279→   279→        
+   280→   280→   280→        // Create VirtualDisplay BEFORE connecting to server
+   281→   281→   281→        if (!createVirtualDisplay()) {
+   282→   282→   282→            updateStreamState(error = "Failed to create VirtualDisplay")
+   283→   283→   283→            cleanup()
+   284→   284→   284→            return
+   285→   285→   285→        }
+   286→   286→   286→        
+   287→   287→   287→        // Set streaming active NOW (before server connection)
+   288→   288→   288→        isStreaming.set(true)
+   289→   289→   289→        startTime = System.currentTimeMillis()
+   290→   290→   290→        
+   291→   291→   291→        // Initialize state
+   292→   292→   292→        currentStreamState = StreamState(
+   293→   293→   293→            streamId = config.streamId,
+   294→   294→   294→            isActive = true,
+   295→   295→   295→            isPaused = false,
+   296→   296→   296→            startTime = startTime,
+   297→   297→   297→            totalBytesSent = 0,
+   298→   298→   298→            totalFramesEncoded = 0,
+   299→   299→   299→            currentBitrate = config.videoBitrate
+   300→   300→   300→        )
+   301→   301→   301→        
+   302→   302→   302→        // Start state monitoring
+   303→   303→   303→        startStateMonitoring()
+   304→   304→   304→        
+   305→   305→   305→        // Update notification
+   306→   306→   306→        updateNotification("Streaming Active")
+   307→   307→   307→        
+   308→   308→   308→        // Connect to server ASYNC (non-blocking, retries in background)
+   309→   309→   309→        connectToServer()
+   310→   310→   310→        
+   311→   311→   311→        Log.i(TAG, "Screen streaming started: ${config.streamId}")
+   312→   312→   312→    }
+   313→   313→   313→    
+   314→   314→   314→    /**
+   315→   315→   315→     * Initialize video and audio encoders
+   316→   316→   316→     */
+   317→   317→   317→    private fun initEncoders(): Boolean {
+   318→   318→   318→        // Initialize video encoder
+   319→   319→   319→        videoEncoder = VideoEncoder(config)
+   320→   320→   320→        
+   321→   321→   321→        if (!videoEncoder!!.init()) {
+   322→   322→   322→            Log.e(TAG, "Failed to initialize video encoder")
+   323→   323→   323→            return false
+   324→   324→   324→        }
+   325→   325→   325→        
+   326→   326→   326→        // Set encoded data callback
+   327→   327→   327→        videoEncoder!!.setEncodedDataCallback { frame ->
+   328→   328→   328→            onVideoFrameEncoded(frame)
+   329→   329→   329→        }
+   330→   330→   330→        
+   331→   331→   331→        // Initialize audio encoder if enabled
+   332→   332→   332→        if (config.audioEnabled) {
+   333→   333→   333→            audioEncoder = AudioEncoder(
+   334→   334→   334→                sampleRate = StreamConfig.AUDIO_SAMPLE_RATE,
+   335→   335→   335→                channelCount = StreamConfig.AUDIO_CHANNEL_COUNT,
+   336→   336→   336→                bitrate = config.audioBitrate
+   337→   337→   337→            )
+   338→   338→   338→            
+   339→   339→   339→            if (!audioEncoder!!.init()) {
+   340→   340→   340→                Log.w(TAG, "Failed to initialize audio encoder, continuing without audio")
+   341→   341→   341→                audioEncoder = null
+   342→   342→   342→            } else {
+   343→   343→   343→                audioEncoder!!.setEncodedDataCallback { frame ->
+   344→   344→   344→                    onAudioFrameEncoded(frame)
+   345→   345→   345→                }
+   346→   346→   346→            }
+   347→   347→   347→        }
+   348→   348→   348→        
+   349→   349→   349→        return true
+   350→   350→   350→    }
+   351→   351→   351→    
+   352→   352→   352→    /**
+   353→   353→   353→     * Create VirtualDisplay for screen capture
+   354→   354→   354→     */
+   355→   355→   355→    private fun createVirtualDisplay(): Boolean {
+   356→   356→   356→        val inputSurface = videoEncoder?.getInputSurface()
+   357→   357→   357→        if (inputSurface == null) {
+   358→   358→   358→            Log.e(TAG, "Input surface is null")
+   359→   359→   359→            return false
+   360→   360→   360→        }
+   361→   361→   361→        
+   362→   362→   362→        try {
+   363→   363→   363→            val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR
+   364→   364→   364→            
+   365→   365→   365→            virtualDisplay = mediaProjection?.createVirtualDisplay(
+   366→   366→   366→                "ScreenStream_${config.streamId}",
+   367→   367→   367→                screenWidth,
+   368→   368→   368→                screenHeight,
+   369→   369→   369→                screenDensity,
+   370→   370→   370→                flags,
+   371→   371→   371→                inputSurface,
+   372→   372→   372→                null,
+   373→   373→   373→                handler
+   374→   374→   374→            )
+   375→   375→   375→            
+   376→   376→   376→            if (virtualDisplay == null) {
+   377→   377→   377→                Log.e(TAG, "Failed to create VirtualDisplay")
+   378→   378→   378→                return false
+   379→   379→   379→            }
+   380→   380→   380→            
+   381→   381→   381→            // Start video encoder
+   382→   382→   382→            if (!videoEncoder!!.start()) {
+   383→   383→   383→                Log.e(TAG, "Failed to start video encoder")
+   384→   384→   384→                return false
+   385→   385→   385→            }
+   386→   386→   386→            
+   387→   387→   387→            // Start audio encoder
+   388→   388→   388→            audioEncoder?.start()
+   389→   389→   389→            
+   390→   390→   390→            Log.i(TAG, "VirtualDisplay created successfully")
+   391→   391→   391→            return true
+   392→   392→   392→            
+   393→   393→   393→        } catch (e: Exception) {
+   394→   394→   394→            Log.e(TAG, "Error creating VirtualDisplay", e)
+   395→   395→   395→            return false
+   396→   396→   396→        }
+   397→   397→   397→    }
+   398→   398→   398→    
+   399→   399→   399→    /**
+   400→   400→   400→     * Connect to streaming server via WebSocket.
+   401→   401→   401→     * Non-blocking - always returns true. Retries automatically on failure.
+   402→   402→   402→     */
+   403→   403→   403→    private fun connectToServer() {
+   404→   404→   404→        if (config.serverUrl.isBlank()) {
+   405→   405→   405→            config = config.copy(serverUrl = Config.getBaseUrl())
+   406→   406→   406→        }
+   407→   407→   407→        val serverUrl = config.serverUrl.ifEmpty {
+   408→   408→   408→            StreamConfig.getWebSocketUrl(this)
+   409→   409→   409→        }
+   410→   410→   410→        
+   411→   411→   411→        try {
+   412→   412→   412→            val request = Request.Builder()
+   413→   413→   413→                .url(serverUrl)
+   414→   414→   414→                .build()
+   415→   415→   415→            
+   416→   416→   416→            webSocket?.close(1000, "Reconnecting")
+   417→   417→   417→            webSocket = null
+   418→   418→   418→            
+   419→   419→   419→            webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
+   420→   420→   420→                override fun onOpen(webSocket: WebSocket, response: Response) {
+   421→   421→   421→                    Log.i(TAG, "WebSocket connected")
+   422→   422→   422→                    
+   423→   423→   423→                    // Send stream configuration
+   424→   424→   424→                    val configJson = com.google.gson.Gson().toJson(config.toMap())
+   425→   425→   425→                    webSocket.send(configJson)
+   426→   426→   426→                }
+   427→   427→   427→                
+   428→   428→   428→                override fun onMessage(webSocket: WebSocket, text: String) {
+   429→   429→   429→                    handleServerMessage(text)
+   430→   430→   430→                }
+   431→   431→   431→                
+   432→   432→   432→                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+   433→   433→   433→                    Log.i(TAG, "WebSocket closing: $code - $reason")
+   434→   434→   434→                    webSocket.close(1000, null)
+   435→   435→   435→                }
+   436→   436→   436→                
+   437→   437→   437→                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+   438→   438→   438→                    Log.i(TAG, "WebSocket closed: $code - $reason")
+   439→   439→   439→                }
+   440→   440→   440→                
+   441→   441→   441→                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+   442→   442→   442→                    Log.w(TAG, "WebSocket failure: ${t.message}")
+   443→   443→   443→                    // Retry connection in background without stopping the stream
+   444→   444→   444→                    if (isStreaming.get()) {
+   445→   445→   445→                        handler.postDelayed({
+   446→   446→   446→                            if (isStreaming.get()) {
+   447→   447→   447→                                connectToServer()
+   448→   448→   448→                            }
+   449→   449→   449→                        }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+   450→   450→   450→                    }
+   451→   451→   451→                }
+   452→   452→   452→            })
+   453→   453→   453→            
+   454→   454→   454→        } catch (e: Exception) {
+   455→   455→   455→            Log.e(TAG, "Failed to connect to server", e)
+   456→   456→   456→            // Retry in background
+   457→   457→   457→            if (isStreaming.get()) {
+   458→   458→   458→                handler.postDelayed({
+   459→   459→   459→                    if (isStreaming.get()) {
+   460→   460→   460→                        connectToServer()
+   461→   461→   461→                    }
+   462→   462→   462→                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+   463→   463→   463→            }
+   464→   464→   464→        }
+   465→   465→   465→    }
+   466→   466→   466→    
+   467→   467→   467→    /**
+   468→   468→   468→     * Handle message from server
+   469→   469→   469→     */
+   470→   470→   470→    private fun handleServerMessage(message: String) {
+   471→   471→   471→        try {
+   472→   472→   472→            val map = com.google.gson.Gson().fromJson(message, Map::class.java)
+   473→   473→   473→            
+   474→   474→   474→            when (map["type"]) {
+   475→   475→   475→                "config_update" -> {
+   476→   476→   476→                    // Update configuration from server
+   477→   477→   477→                    val newBitrate = (map["bitrate"] as? Number)?.toInt()
+   478→   478→   478→                    if (newBitrate != null && config.enableAdaptiveBitrate) {
+   479→   479→   479→                        videoEncoder?.updateBitrate(newBitrate)
+   480→   480→   480→                        config = config.copy(videoBitrate = newBitrate)
+   481→   481→   481→                    }
+   482→   482→   482→                }
+   483→   483→   483→                "request_keyframe" -> {
+   484→   484→   484→                    videoEncoder?.requestKeyframe()
+   485→   485→   485→                }
+   486→   486→   486→                "stop_stream" -> {
+   487→   487→   487→                    stopStreaming()
+   488→   488→   488→                }
+   489→   489→   489→                "pause_stream" -> {
+   490→   490→   490→                    pauseStreaming()
+   491→   491→   491→                }
+   492→   492→   492→                "resume_stream" -> {
+   493→   493→   493→                    resumeStreaming()
+   494→   494→   494→                }
+   495→   495→   495→            }
+   496→   496→   496→            
+   497→   497→   497→        } catch (e: Exception) {
+   498→   498→   498→            Log.w(TAG, "Failed to parse server message: $message")
+   499→   499→   499→        }
+   500→   500→   500→    }
+   501→   501→   501→    
+   502→   502→   502→    /**
+   503→   503→   503→     * Handle encoded video frame
+   504→   504→   504→     */
+   505→   505→   505→    private fun onVideoFrameEncoded(frame: VideoEncoder.EncodedFrame) {
+   506→   506→   506→        if (!isStreaming.get() || isPaused.get()) return
+   507→   507→   507→        
+   508→   508→   508→        totalFramesEncoded++
+   509→   509→   509→        
+   510→   510→   510→        // Send frame data via WebSocket
+   511→   511→   511→        try {
+   512→   512→   512→            // Create frame packet
+   513→   513→   513→            val packet = mapOf(
+   514→   514→   514→                "type" to "video",
+   515→   515→   515→                "stream_id" to config.streamId,
+   516→   516→   516→                "timestamp" to frame.presentationTimeUs,
+   517→   517→   517→                "is_keyframe" to frame.isKeyFrame,
+   518→   518→   518→                "codec" to frame.codec.name,
+   519→   519→   519→                "size" to frame.size,
+   520→   520→   520→                "data" to android.util.Base64.encodeToString(frame.data, android.util.Base64.NO_WRAP)
+   521→   521→   521→            )
+   522→   522→   522→            
+   523→   523→   523→            val json = com.google.gson.Gson().toJson(packet)
+   524→   524→   524→            webSocket?.send(json)
+   525→   525→   525→            
+   526→   526→   526→            totalBytesSent += frame.size
+   527→   527→   527→            currentStreamState?.totalFramesEncoded = totalFramesEncoded
+   528→   528→   528→            currentStreamState?.totalBytesSent = totalBytesSent
+   529→   529→   529→            
+   530→   530→   530→        } catch (e: Exception) {
+   531→   531→   531→            Log.e(TAG, "Failed to send video frame", e)
+   532→   532→   532→        }
+   533→   533→   533→    }
+   534→   534→   534→    
+   535→   535→   535→    /**
+   536→   536→   536→     * Handle encoded audio frame
+   537→   537→   537→     */
+   538→   538→   538→    private fun onAudioFrameEncoded(frame: AudioEncoder.EncodedAudioFrame) {
+   539→   539→   539→        if (!isStreaming.get() || isPaused.get()) return
+   540→   540→   540→        
+   541→   541→   541→        // Send audio data via WebSocket
+   542→   542→   542→        try {
+   543→   543→   543→            val packet = mapOf(
+   544→   544→   544→                "type" to "audio",
+   545→   545→   545→                "stream_id" to config.streamId,
+   546→   546→   546→                "timestamp" to frame.presentationTimeUs,
+   547→   547→   547→                "size" to frame.size,
+   548→   548→   548→                "data" to android.util.Base64.encodeToString(frame.data, android.util.Base64.NO_WRAP)
+   549→   549→   549→            )
+   550→   550→   550→            
+   551→   551→   551→            val json = com.google.gson.Gson().toJson(packet)
+   552→   552→   552→            webSocket?.send(json)
+   553→   553→   553→            
+   554→   554→   554→            totalBytesSent += frame.size
+   555→   555→   555→            currentStreamState?.totalBytesSent = totalBytesSent
+   556→   556→   556→            
+   557→   557→   557→        } catch (e: Exception) {
+   558→   558→   558→            Log.e(TAG, "Failed to send audio frame", e)
+   559→   559→   559→        }
+   560→   560→   560→    }
+   561→   561→   561→    
+   562→   562→   562→    /**
+   563→   563→   563→     * Pause streaming
+   564→   564→   564→     */
+   565→   565→   565→    private fun pauseStreaming() {
+   566→   566→   566→        if (!isStreaming.get() || isPaused.get()) return
+   567→   567→   567→        
+   568→   568→   568→        isPaused.set(true)
+   569→   569→   569→        currentStreamState?.isPaused = true
+   570→   570→   570→        
+   571→   571→   571→        // Pause virtual display by releasing and recreating later
+   572→   572→   572→        virtualDisplay?.release()
+   573→   573→   573→        virtualDisplay = null
+   574→   574→   574→        
+   575→   575→   575→        updateNotification("Streaming Paused")
+   576→   576→   576→        Log.i(TAG, "Screen streaming paused")
+   577→   577→   577→    }
+   578→   578→   578→    
+   579→   579→   579→    /**
+   580→   580→   580→     * Resume streaming
+   581→   581→   581→     */
+   582→   582→   582→    private fun resumeStreaming() {
+   583→   583→   583→        if (!isStreaming.get() || !isPaused.get()) return
+   584→   584→   584→        
+   585→   585→   585→        isPaused.set(false)
+   586→   586→   586→        currentStreamState?.isPaused = false
+   587→   587→   587→        
+   588→   588→   588→        // Recreate virtual display
+   589→   589→   589→        createVirtualDisplay()
+   590→   590→   590→        
+   591→   591→   591→        // Request keyframe for clean resume
+   592→   592→   592→        videoEncoder?.requestKeyframe()
+   593→   593→   593→        
+   594→   594→   594→        updateNotification("Streaming Active")
+   595→   595→   595→        Log.i(TAG, "Screen streaming resumed")
+   596→   596→   596→    }
+   597→   597→   597→    
+   598→   598→   598→    /**
+   599→   599→   599→     * Update stream configuration
+   600→   600→   600→     */
+   601→   601→   601→    private fun updateConfig(newConfig: StreamConfig.Configuration) {
+   602→   602→   602→        val bitrateChanged = newConfig.videoBitrate != config.videoBitrate
+   603→   603→   603→        config = newConfig
+   604→   604→   604→        
+   605→   605→   605→        if (bitrateChanged && isStreaming.get()) {
+   606→   606→   606→            videoEncoder?.updateBitrate(config.videoBitrate)
+   607→   607→   607→        }
+   608→   608→   608→        
+   609→   609→   609→        Log.i(TAG, "Stream config updated: $config")
+   610→   610→   610→    }
+   611→   611→   611→    
+   612→   612→   612→    /**
+   613→   613→   613→     * Stop streaming
+   614→   614→   614→     */
+   615→   615→   615→    private fun stopStreaming() {
+   616→   616→   616→        if (!isStreaming.getAndSet(false)) return
+   617→   617→   617→        
+   618→   618→   618→        isPaused.set(false)
+   619→   619→   619→        
+   620→   620→   620→        // Close WebSocket
+   621→   621→   621→        webSocket?.close(1000, "Stream stopped")
+   622→   622→   622→        webSocket = null
+   623→   623→   623→        
+   624→   624→   624→        // Stop encoders
+   625→   625→   625→        videoEncoder?.stop()
+   626→   626→   626→        audioEncoder?.stop()
+   627→   627→   627→        
+   628→   628→   628→        // Release virtual display
+   629→   629→   629→        virtualDisplay?.release()
+   630→   630→   630→        virtualDisplay = null
+   631→   631→   631→        
+   632→   632→   632→        // Stop state monitoring
+   633→   633→   633→        stateJob?.cancel()
+   634→   634→   634→        stateJob = null
+   635→   635→   635→        
+   636→   636→   636→        // Update state
+   637→   637→   637→        currentStreamState?.isActive = false
+   638→   638→   638→        
+   639→   639→   639→        // Save final state
+   640→   640→   640→        saveState()
+   641→   641→   641→        
+   642→   642→   642→        // Stop foreground
+   643→   643→   643→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+   644→   644→   644→            stopForeground(STOP_FOREGROUND_REMOVE)
+   645→   645→   645→        } else {
+   646→   646→   646→            @Suppress("DEPRECATION")
+   647→   647→   647→            stopForeground(true)
+   648→   648→   648→        }
+   649→   649→   649→        
+   650→   650→   650→        Log.i(TAG, "Screen streaming stopped")
+   651→   651→   651→    }
+   652→   652→   652→    
+   653→   653→   653→    /**
+   654→   654→   654→     * Cleanup resources
+   655→   655→   655→     */
+   656→   656→   656→    private fun cleanup() {
+   657→   657→   657→        videoEncoder?.release()
+   658→   658→   658→        videoEncoder = null
+   659→   659→   659→        
+   660→   660→   660→        audioEncoder?.release()
+   661→   661→   661→        audioEncoder = null
+   662→   662→   662→        
+   663→   663→   663→        virtualDisplay?.release()
+   664→   664→   664→        virtualDisplay = null
+   665→   665→   665→        
+   666→   666→   666→        mediaProjection?.stop()
+   667→   667→   667→        mediaProjection = null
+   668→   668→   668→    }
+   669→   669→   669→    
+   670→   670→   670→    /**
+   671→   671→   671→     * Start state monitoring
+   672→   672→   672→     */
+   673→   673→   673→    private fun startStateMonitoring() {
+   674→   674→   674→        stateJob = serviceScope.launch {
+   675→   675→   675→            while (isStreaming.get()) {
+   676→   676→   676→                delay(5000) // Check every 5 seconds
+   677→   677→   677→                
+   678→   678→   678→                // Check battery level
+   679→   679→   679→                checkBatteryLevel()
+   680→   680→   680→                
+   681→   681→   681→                // Save state periodically
+   682→   682→   682→                saveState()
+   683→   683→   683→                
+   684→   684→   684→                // Update bitrate if adaptive
+   685→   685→   685→                if (config.enableAdaptiveBitrate) {
+   686→   686→   686→                    adaptBitrateToNetwork()
+   687→   687→   687→                }
+   688→   688→   688→            }
+   689→   689→   689→        }
+   690→   690→   690→    }
+   691→   691→   691→    
+   692→   692→   692→    /**
+   693→   693→   693→     * Check battery level for optimization
+   694→   694→   694→     */
+   695→   695→   695→    private fun checkBatteryLevel() {
+   696→   696→   696→        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+   697→   697→   697→        val level = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+   698→   698→   698→        
+   699→   699→   699→        if (level < 15 && !batteryWarningSent && level < lastBatteryLevel) {
+   700→   700→   700→            // Low battery warning
+   701→   701→   701→            batteryWarningSent = true
+   702→   702→   702→            updateStreamState(error = "Low battery: $level%")
+   703→   703→   703→            
+   704→   704→   704→            // Reduce quality to save battery
+   705→   705→   705→            if (config.fps > 15) {
+   706→   706→   706→                config = config.copy(fps = 15)
+   707→   707→   707→                videoEncoder?.updateBitrate((config.videoBitrate * 0.7).toInt())
+   708→   708→   708→            }
+   709→   709→   709→        }
+   710→   710→   710→        
+   711→   711→   711→        lastBatteryLevel = level
+   712→   712→   712→    }
+   713→   713→   713→    
+   714→   714→   714→    /**
+   715→   715→   715→     * Adapt bitrate based on network conditions
+   716→   716→   716→     */
+   717→   717→   717→    private fun adaptBitrateToNetwork() {
+   718→   718→   718→        // This would be implemented with actual network quality monitoring
+   719→   719→   719→        // For now, it's a placeholder that could be enhanced with AdaptiveBitrateController
+   720→   720→   720→    }
+   721→   721→   721→    
+   722→   722→   722→    /**
+   723→   723→   723→     * Update stream state
+   724→   724→   724→     */
+   725→   725→   725→    private fun updateStreamState(error: String? = null) {
+   726→   726→   726→        currentStreamState?.let { state ->
+   727→   727→   727→            state.lastError = error
+   728→   728→   728→            
+   729→   729→   729→            // Notify server of error
+   730→   730→   730→            if (error != null) {
+   731→   731→   731→                try {
+   732→   732→   732→                    val errorPacket = mapOf(
+   733→   733→   733→                        "type" to "error",
+   734→   734→   734→                        "stream_id" to config.streamId,
+   735→   735→   735→                        "error" to error
+   736→   736→   736→                    )
+   737→   737→   737→                    webSocket?.send(com.google.gson.Gson().toJson(errorPacket))
+   738→   738→   738→                } catch (e: Exception) {
+   739→   739→   739→                    Log.e(TAG, "Failed to send error notification", e)
+   740→   740→   740→                }
+   741→   741→   741→            }
+   742→   742→   742→        }
+   743→   743→   743→    }
+   744→   744→   744→    
+   745→   745→   745→    /**
+   746→   746→   746→     * Save state to SharedPreferences
+   747→   747→   747→     */
+   748→   748→   748→    private fun saveState() {
+   749→   749→   749→        prefs.edit().apply {
+   750→   750→   750→            putString("stream_id", config.streamId)
+   751→   751→   751→            putLong("start_time", startTime)
+   752→   752→   752→            putLong("bytes_sent", totalBytesSent)
+   753→   753→   753→            putLong("frames_encoded", totalFramesEncoded)
+   754→   754→   754→            putBoolean("was_streaming", isStreaming.get())
+   755→   755→   755→            apply()
+   756→   756→   756→        }
+   757→   757→   757→    }
+   758→   758→   758→    
+   759→   759→   759→    /**
+   760→   760→   760→     * Load saved state from SharedPreferences
+   761→   761→   761→     */
+   762→   762→   762→    private fun loadSavedState() {
+   763→   763→   763→        val wasStreaming = prefs.getBoolean("was_streaming", false)
+   764→   764→   764→        if (wasStreaming) {
+   765→   765→   765→            Log.i(TAG, "Previous streaming session detected, but not auto-resuming")
+   766→   766→   766→            // Could implement auto-resume logic here if needed
+   767→   767→   767→        }
+   768→   768→   768→    }
+   769→   769→   769→    
+   770→   770→   770→    /**
+   771→   771→   771→     * Create notification channel
+   772→   772→   772→     */
+   773→   773→   773→    private fun createNotificationChannel() {
+   774→   774→   774→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   775→   775→   775→            val channel = NotificationChannel(
+   776→   776→   776→                CHANNEL_ID,
+   777→   777→   777→                "Screen Streaming Service",
+   778→   778→   778→                NotificationManager.IMPORTANCE_LOW
+   779→   779→   779→            ).apply {
+   780→   780→   780→                description = "Background screen streaming service"
+   781→   781→   781→                setShowBadge(false)
+   782→   782→   782→            }
+   783→   783→   783→            
+   784→   784→   784→            val nm = getSystemService(NotificationManager::class.java)
+   785→   785→   785→            nm.createNotificationChannel(channel)
+   786→   786→   786→        }
+   787→   787→   787→    }
+   788→   788→   788→    
+   789→   789→   789→    /**
+   790→   790→   790→     * Create foreground notification
+   791→   791→   791→     */
+   792→   792→   792→    private fun createNotification(): Notification {
+   793→   793→   793→        return NotificationCompat.Builder(this, CHANNEL_ID)
+   794→   794→   794→            .setContentTitle("Screen Stream Active")
+   795→   795→   795→            .setContentText("Streaming screen content")
+   796→   796→   796→            .setSmallIcon(android.R.drawable.ic_menu_camera)
+   797→   797→   797→            .setPriority(NotificationCompat.PRIORITY_LOW)
+   798→   798→   798→            .setOngoing(true)
+   799→   799→   799→            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+   800→   800→   800→            .build()
+   801→   801→   801→    }
+   802→   802→   802→    
+   803→   803→   803→    /**
+   804→   804→   804→     * Update notification
+   805→   805→   805→     */
+   806→   806→   806→    private fun updateNotification(text: String) {
+   807→   807→   807→        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+   808→   808→   808→            .setContentTitle("Screen Stream")
+   809→   809→   809→            .setContentText(text)
+   810→   810→   810→            .setSmallIcon(android.R.drawable.ic_menu_camera)
+   811→   811→   811→            .setPriority(NotificationCompat.PRIORITY_LOW)
+   812→   812→   812→            .setOngoing(true)
+   813→   813→   813→            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+   814→   814→   814→            .build()
+   815→   815→   815→        
+   816→   816→   816→        val nm = getSystemService(NotificationManager::class.java)
+   817→   817→   817→        nm.notify(NOTIFICATION_ID, notification)
+   818→   818→   818→    }
+   819→   819→   819→    
+   820→   820→   820→    override fun onDestroy() {
+   821→   821→   821→        stopStreaming()
+   822→   822→   822→        cleanup()
+   823→   823→   823→        serviceScope.cancel()
+   824→   824→   824→        super.onDestroy()
+   825→   825→   825→        Log.i(TAG, "ScreenStreamService destroyed")
+   826→   826→   826→    }
+   827→   827→   827→}
+   828→   828→   828→
