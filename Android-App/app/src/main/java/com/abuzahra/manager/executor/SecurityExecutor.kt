@@ -445,8 +445,9 @@ object SecurityExecutor {
             val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
             
             if (dpm.isAdminActive(adminComponent)) {
+                Log.w(TAG, "antiUninstallOff: Removing Device Admin entirely (all policies will be lost)")
                 dpm.removeActiveAdmin(adminComponent)
-                "Anti-uninstall protection disabled (Device Admin removed)"
+                "Warning: Device Admin removed entirely. All admin policies are now disabled."
             } else {
                 "Device Admin was not active"
             }
@@ -675,8 +676,16 @@ object SecurityExecutor {
     fun isCameraDisabled(context: Context): Boolean {
         return try {
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-            dpm.getCameraDisabled(null)
-        } catch (_: Exception) {
+            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                @Suppress("DEPRECATION")
+                return dpm.getCameraDisabled(adminComponent)
+            } else {
+                @Suppress("DEPRECATION")
+                return dpm.getCameraDisabled(null)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "isCameraDisabled error", e)
             false
         }
     }

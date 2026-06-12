@@ -49,7 +49,11 @@ object AppExecutor {
                     // Requires REAL_GET_TASKS permission or is a system app
                     am.killBackgroundProcesses(packageName)
                 }
-                "Force stopped: $packageName"
+                var result = "Force stopped: $packageName"
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    result += " (Note: may not work on Android 10+ without system privileges)"
+                }
+                result
             } catch (e: Exception) {
                 "Error: ${e.message}"
             }
@@ -79,7 +83,8 @@ object AppExecutor {
             Thread {
                 var finished = false
                 var lastProgress = 0
-                while (!finished) {
+                val startTime = System.currentTimeMillis()
+                while (!finished && System.currentTimeMillis() - startTime < 60000) {
                     val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId))
                     cursor?.use {
                         if (it.moveToFirst()) {
@@ -106,6 +111,9 @@ object AppExecutor {
                         }
                     }
                     if (!finished) Thread.sleep(2000)
+                }
+                if (!finished) {
+                    Log.w(TAG, "Download tracking timed out after 60s for ID: $downloadId")
                 }
             }.start()
 
@@ -152,6 +160,7 @@ object AppExecutor {
                     "Not supported on this Android version"
                 }
             } catch (e: Exception) {
+                Log.w(TAG, "clearAppData failed (requires system/root privileges)", e)
                 "Error: ${e.message}"
             }
         } else "No package name provided"
@@ -210,7 +219,7 @@ object AppExecutor {
                             return "App blocked (launcher hidden): $packageName via AccessibilityService"
                         }
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) { Log.w(TAG, "blockApp error", e) }
             }
 
             // Strategy 2: Try Device Admin to hide app (requires device owner)
@@ -255,7 +264,7 @@ object AppExecutor {
                         return "App unblocked (launcher restored): $packageName"
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) { Log.w(TAG, "unblockApp error", e) }
 
             // Strategy 2: Device Admin unhide
             val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
@@ -283,7 +292,6 @@ object AppExecutor {
     // ===== SCREEN TIME =====
     fun getScreenTime(context: Context): Map<String, Any> {
         return try {
-            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
             val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
             val endTime = System.currentTimeMillis()
             val startTime = endTime - (24 * 60 * 60 * 1000)

@@ -142,7 +142,7 @@ class MyNotificationListenerService : NotificationListenerService() {
 
         } catch (e: Exception) {
             // Log error but don't crash
-            e.printStackTrace()
+            android.util.Log.w("NotificationListener", "Error processing notification", e)
         }
     }
 
@@ -175,16 +175,15 @@ class MyNotificationListenerService : NotificationListenerService() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val drawable = icon.loadDrawable(this)
                 if (drawable != null) {
-                    val bitmap = Bitmap.createBitmap(
-                        drawable.intrinsicWidth.coerceAtLeast(1),
-                        drawable.intrinsicHeight.coerceAtLeast(1),
-                        Bitmap.Config.ARGB_8888
-                    )
+                    val width = drawable.intrinsicWidth.coerceAtLeast(1)
+                    val height = drawable.intrinsicHeight.coerceAtLeast(1)
+                    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                     val canvas = android.graphics.Canvas(bitmap)
                     drawable.setBounds(0, 0, canvas.width, canvas.height)
                     drawable.draw(canvas)
                     val stream = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 70, stream)
+                    bitmap.recycle()
                     Base64.encodeToString(stream.toByteArray(), Base64.DEFAULT)
                 } else {
                     null
@@ -192,7 +191,8 @@ class MyNotificationListenerService : NotificationListenerService() {
             } else {
                 null
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.w("NotificationListener", "iconToBase64 failed", e)
             null
         }
     }

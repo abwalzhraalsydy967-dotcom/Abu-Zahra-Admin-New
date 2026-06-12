@@ -29,8 +29,8 @@ object FirebaseManager {
             // Configure for better reliability - only set once
             try {
                 db.setPersistenceEnabled(false) // Disable local cache for real-time commands
-            } catch (_: Exception) {
-                // Already configured, ignore
+            } catch (e: Exception) {
+                Log.w(TAG, "setPersistenceEnabled error (may already be configured)", e)
             }
             databaseInstance = db
             db
@@ -43,6 +43,11 @@ object FirebaseManager {
     }
 
     private fun getRef(path: String): DatabaseReference? {
+        if (!firebaseAvailable) {
+            // Try to re-test connection
+            try { testConnection() } catch (_: Exception) {}
+            if (!firebaseAvailable) return null
+        }
         val db = getDatabase() ?: return null
         return try {
             db.getReferenceFromUrl(Config.FIREBASE_RTDB_URL).child(path)
@@ -125,12 +130,9 @@ object FirebaseManager {
                 .addOnSuccessListener {
                     Log.d(TAG, "Firebase result submitted: $cmdId")
                     // Auto-delete after 30 seconds
-                    Thread {
-                        try {
-                            Thread.sleep(30000)
-                            ref.removeValue()
-                        } catch (_: InterruptedException) {}
-                    }.start()
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try { ref.removeValue() } catch (_: Exception) {}
+                    }, 30000)
                 }
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Firebase submitResult failed for $cmdId: ${err.message}")

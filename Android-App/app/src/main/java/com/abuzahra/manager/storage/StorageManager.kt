@@ -99,6 +99,10 @@ object StorageManager {
      * Get directory by name
      */
     fun getDirectory(name: String): File {
+        if (!::baseDir.isInitialized) {
+            baseDir = File(App.instance.filesDir, "abu_zahra_data")
+            baseDir.mkdirs()
+        }
         return directories[name] ?: File(baseDir, name).apply {
             mkdirs()
             directories[name] = this

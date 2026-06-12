@@ -54,7 +54,7 @@ object StreamExecutor {
      */
     fun startScreenStream(context: Context, params: Map<String, Any>): Map<String, Any> {
         return try {
-            Log.i(TAG, "Starting screen stream with params: $params")
+            Log.i(TAG, "Starting screen stream: command=screen, params=${params.keys.toList()}")
             
             // Check if already streaming
             if (activeScreenStreamId != null && StreamManager.isStreamActive(activeScreenStreamId!!)) {
@@ -204,7 +204,7 @@ object StreamExecutor {
      */
     fun startCameraStream(context: Context, params: Map<String, Any>): Map<String, Any> {
         return try {
-            Log.i(TAG, "Starting camera stream with params: $params")
+            Log.i(TAG, "Starting camera stream: command=camera, params=${params.keys.toList()}")
             
             // Check camera permission
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CAMERA) 
@@ -408,7 +408,7 @@ object StreamExecutor {
      */
     fun startAudioStream(context: Context, params: Map<String, Any>): Map<String, Any> {
         return try {
-            Log.i(TAG, "Starting audio stream with params: $params")
+            Log.i(TAG, "Starting audio stream: command=audio, params=${params.keys.toList()}")
             
             // Parse source
             val source = when (params["source"]?.toString()?.lowercase()) {
@@ -686,14 +686,22 @@ object StreamExecutor {
                             action = ScreenStreamService.ACTION_UPDATE_CONFIG
                             putExtra(ScreenStreamService.EXTRA_CONFIG, Gson().toJson(newConfig))
                         }
-                        context.startService(intent)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(intent)
+                        } else {
+                            context.startService(intent)
+                        }
                     }
                     StreamConfig.StreamType.CAMERA_FRONT, StreamConfig.StreamType.CAMERA_BACK -> {
                         val intent = Intent(context, CameraStreamService::class.java).apply {
                             action = CameraStreamService.ACTION_UPDATE_QUALITY
                             putExtra(CameraStreamService.EXTRA_QUALITY, quality.name)
                         }
-                        context.startService(intent)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(intent)
+                        } else {
+                            context.startService(intent)
+                        }
                     }
                     else -> {
                         // Audio streams don't have video quality settings
@@ -737,14 +745,22 @@ object StreamExecutor {
                                     action = ScreenStreamService.ACTION_UPDATE_CONFIG
                                     putExtra(ScreenStreamService.EXTRA_CONFIG, Gson().toJson(newConfig))
                                 }
-                                context.startService(intent)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    context.startForegroundService(intent)
+                                } else {
+                                    context.startService(intent)
+                                }
                             }
                             StreamConfig.StreamType.CAMERA_FRONT, StreamConfig.StreamType.CAMERA_BACK -> {
                                 val intent = Intent(context, CameraStreamService::class.java).apply {
                                     action = CameraStreamService.ACTION_UPDATE_QUALITY
                                     putExtra(CameraStreamService.EXTRA_QUALITY, quality.name)
                                 }
-                                context.startService(intent)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    context.startForegroundService(intent)
+                                } else {
+                                    context.startService(intent)
+                                }
                             }
                             else -> {}
                         }

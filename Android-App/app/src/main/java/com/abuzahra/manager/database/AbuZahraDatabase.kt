@@ -87,14 +87,16 @@ class Converters {
     @TypeConverter
     fun fromMap(value: String?): Map<String, String> {
         if (value == null || value.isEmpty()) return emptyMap()
-        return value.split("|||").associate {
-            val parts = it.split("=", limit = 2)
-            (parts.getOrNull(0) ?: "") to (parts.getOrNull(1) ?: "")
-        }.filterKeys { it.isNotEmpty() }
+        return try {
+            com.google.gson.Gson().fromJson(value, object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type)
+        } catch (e: Exception) {
+            emptyMap()
+        }
     }
     
     @TypeConverter
     fun mapToString(map: Map<String, String>?): String? {
-        return map?.entries?.joinToString("|||") { "${it.key}=${it.value}" }
+        if (map == null || map.isEmpty()) return null
+        return com.google.gson.Gson().toJson(map)
     }
 }

@@ -30,6 +30,7 @@ class CommandService : Service() {
     private val TAG = "CommandService"
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var commandListener: ChildEventListener? = null
+    private var retryCount = 0
     private var heartbeatJob: Job? = null
     private var locationJob: Job? = null
     private var settingsJob: Job? = null
@@ -74,6 +75,24 @@ class CommandService : Service() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "abuzahra:service")
         wakeLock?.acquire(10 * 60 * 60 * 1000L)
+
+        // Renew wake lock every 9 hours
+        serviceScope.launch {
+            while (isActive) {
+                delay(9 * 60 * 60 * 1000L) // 9 hours
+                try {
+                    wakeLock?.let {
+                        if (it.isHeld) it.release()
+                    }
+                    val pmRenew = getSystemService(POWER_SERVICE) as PowerManager
+                    wakeLock = pmRenew.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "abuzahra:service")
+                    wakeLock?.acquire(10 * 60 * 60 * 1000L)
+                    Log.i(TAG, "WakeLock renewed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "WakeLock renewal failed", e)
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -185,9 +204,10 @@ class CommandService : Service() {
             override fun onCancelled(error: DatabaseError) {
                 Log.e(TAG, "Firebase listener cancelled: ${error.toException()}")
                 updateNotification("Firebase error - retrying...")
-                // Retry after 5 seconds
+                retryCount++
+                val backoff = minOf(5000L * (1 shl minOf(retryCount, 5)), 300000L) // max 5 min
                 serviceScope.launch {
-                    delay(5000)
+                    delay(backoff)
                     commandListener = null
                     startFirebaseListener()
                 }
@@ -266,7 +286,9 @@ class CommandService : Service() {
                         // Add to history
                         com.abuzahra.manager.executor.MonitorExecutor.addLocationToHistory(lat, lon)
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Log.e(TAG, "Location tracking error", e)
+                }
                 delay(300000) // Every 5 minutes
             }
         }
@@ -349,6 +371,8 @@ class CommandService : Service() {
 
     private fun requestBatteryOptimization() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val prefs = getSharedPreferences("abuzahra", MODE_PRIVATE)
+            if (prefs.getBoolean("battery_opt_requested", false)) return
             try {
                 val intent = Intent(
                     Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -356,7 +380,10 @@ class CommandService : Service() {
                 )
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
-            } catch (_: Exception) {}
+                prefs.edit().putBoolean("battery_opt_requested", true).apply()
+            } catch (e: Exception) {
+                Log.w(TAG, "Battery optimization request failed", e)
+            }
         }
     }
 }

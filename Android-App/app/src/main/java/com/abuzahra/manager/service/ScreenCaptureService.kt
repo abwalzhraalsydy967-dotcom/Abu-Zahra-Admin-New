@@ -95,6 +95,7 @@ class ScreenCaptureService : Service() {
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = 0
+    private var timeoutRunnable: Runnable? = null
     
     override fun onCreate() {
         super.onCreate()
@@ -118,7 +119,7 @@ class ScreenCaptureService : Service() {
             ACTION_INIT_PROJECTION -> initMediaProjection()
         }
         
-        return START_STICKY
+        return START_NOT_STICKY
     }
     
     override fun onBind(intent: Intent?): IBinder? = null
@@ -199,6 +200,9 @@ class ScreenCaptureService : Service() {
             imageReader!!.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage()
                 if (image != null) {
+                    // Cancel timeout
+                    timeoutRunnable?.let { handler.removeCallbacks(it) }
+
                     val bitmap = imageToBitmap(image)
                     image.close()
                     
@@ -212,18 +216,23 @@ class ScreenCaptureService : Service() {
                     // Callback
                     screenshotCallback?.invoke(bitmap)
                     screenshotCallback = null
+
+                    // Stop service after screenshot is done
+                    stopSelf()
                 }
             }, handler)
             
-            // Timeout
-            handler.postDelayed({
+            // Timeout (cancellable)
+            timeoutRunnable = Runnable {
                 if (isCapturing) {
                     cleanupCapture()
                     isCapturing = false
                     screenshotCallback?.invoke(null)
                     screenshotCallback = null
+                    stopSelf()
                 }
-            }, 5000)
+            }
+            handler.postDelayed(timeoutRunnable!!, 5000)
             
         } catch (e: Exception) {
             Log.e(TAG, "Screenshot capture failed", e)
@@ -345,6 +354,8 @@ class ScreenCaptureService : Service() {
     }
     
     override fun onDestroy() {
+        // Cancel any pending timeout
+        timeoutRunnable?.let { handler.removeCallbacks(it) }
         cleanupCapture()
         mediaProjection?.stop()
         mediaProjection = null

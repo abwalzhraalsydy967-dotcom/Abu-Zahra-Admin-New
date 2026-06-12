@@ -91,23 +91,21 @@ object HealthMonitor {
         val memInfo = ActivityManager.MemoryInfo()
         activityManager.getMemoryInfo(memInfo)
         
-        val totalMemory = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            memInfo.totalMem
-        } else {
-            @Suppress("DEPRECATION")
-            activityManager.memoryClass.toLong() * 1024 * 1024
-        }
+        val totalMemory = memInfo.totalMem // Available since API 16
+        val availableMemory = memInfo.availMem
+        val usedMemory = totalMemory - availableMemory
+        val percentUsed = if (totalMemory > 0) (usedMemory * 100 / totalMemory).toInt() else 0
         
         return MemoryInfo(
             totalMemory = totalMemory,
-            availableMemory = memInfo.availMem,
-            usedMemory = totalMemory - memInfo.availMem,
-            usedPercentage = ((totalMemory - memInfo.availMem).toDouble() / totalMemory * 100).toInt(),
+            availableMemory = availableMemory,
+            usedMemory = usedMemory,
+            usedPercentage = percentUsed,
             isLowMemory = memInfo.lowMemory,
             threshold = memInfo.threshold,
             status = when {
                 memInfo.lowMemory -> HealthStatus.CRITICAL
-                (totalMemory - memInfo.availMem).toDouble() / totalMemory > 0.9 -> HealthStatus.WARNING
+                usedMemory.toDouble() / totalMemory > 0.9 -> HealthStatus.WARNING
                 else -> HealthStatus.HEALTHY
             }
         )

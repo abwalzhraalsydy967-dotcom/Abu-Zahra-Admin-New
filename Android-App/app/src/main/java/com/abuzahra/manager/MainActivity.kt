@@ -17,7 +17,7 @@ import com.abuzahra.manager.service.CommandService
 import com.abuzahra.manager.streaming.ScreenStreamService
 import com.abuzahra.manager.streaming.PendingStreamManager
 import com.abuzahra.manager.util.DeviceUtils
-import kotlinx.coroutines.CoroutineScope
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -85,7 +85,7 @@ class MainActivity : AppCompatActivity() {
         // Restart service
         btnRestart.setOnClickListener {
             CommandService.stop(this)
-            CoroutineScope(Dispatchers.IO).launch {
+            lifecycleScope.launch(Dispatchers.IO) {
                 kotlinx.coroutines.delay(500)
                 CommandService.start(this@MainActivity)
                 withContext(Dispatchers.Main) {
@@ -127,7 +127,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkServerStatus(textStatus: TextView) {
-        CoroutineScope(Dispatchers.IO).launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val healthy = ApiClient.testHealth()
                 runOnUiThread {

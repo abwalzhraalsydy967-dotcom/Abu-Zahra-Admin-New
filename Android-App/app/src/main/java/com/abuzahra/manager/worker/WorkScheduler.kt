@@ -210,10 +210,24 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             
             SyncManager.startSync(forced = true)
             
+            // Reset failure count on success
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            prefs.edit().remove("SyncWorker_fails").apply()
+            
             Result.success()
         } catch (e: Exception) {
             Log.e("SyncWorker", "Sync failed", e)
-            Result.retry()
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            val key = "SyncWorker_fails"
+            val fails = prefs.getInt(key, 0) + 1
+            prefs.edit().putInt(key, fails).apply()
+            Log.w("SyncWorker", "Worker failed, attempt $fails/5")
+            if (fails >= 5) {
+                prefs.edit().remove(key).apply()
+                Result.failure()
+            } else {
+                Result.retry()
+            }
         }
     }
 }
@@ -229,10 +243,24 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             
             BackupManager.createBackup(applicationContext, BackupManager.BackupType.FULL)
             
+            // Reset failure count on success
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            prefs.edit().remove("BackupWorker_fails").apply()
+            
             Result.success()
         } catch (e: Exception) {
             Log.e("BackupWorker", "Backup failed", e)
-            Result.retry()
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            val key = "BackupWorker_fails"
+            val fails = prefs.getInt(key, 0) + 1
+            prefs.edit().putInt(key, fails).apply()
+            Log.w("BackupWorker", "Worker failed, attempt $fails/5")
+            if (fails >= 5) {
+                prefs.edit().remove(key).apply()
+                Result.failure()
+            } else {
+                Result.retry()
+            }
         }
     }
 }
@@ -248,10 +276,24 @@ class CleanupWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             
             StorageCleaner.performFullCleanup(applicationContext)
             
+            // Reset failure count on success
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            prefs.edit().remove("CleanupWorker_fails").apply()
+            
             Result.success()
         } catch (e: Exception) {
             Log.e("CleanupWorker", "Cleanup failed", e)
-            Result.retry()
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            val key = "CleanupWorker_fails"
+            val fails = prefs.getInt(key, 0) + 1
+            prefs.edit().putInt(key, fails).apply()
+            Log.w("CleanupWorker", "Worker failed, attempt $fails/5")
+            if (fails >= 5) {
+                prefs.edit().remove(key).apply()
+                Result.failure()
+            } else {
+                Result.retry()
+            }
         }
     }
 }
@@ -267,10 +309,24 @@ class HealthCheckWorker(context: Context, params: WorkerParameters) : CoroutineW
             
             HealthMonitor.checkHealth(applicationContext)
             
+            // Reset failure count on success
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            prefs.edit().remove("HealthCheckWorker_fails").apply()
+            
             Result.success()
         } catch (e: Exception) {
             Log.e("HealthCheckWorker", "Health check failed", e)
-            Result.retry()
+            val prefs = applicationContext.getSharedPreferences("worker_retries", Context.MODE_PRIVATE)
+            val key = "HealthCheckWorker_fails"
+            val fails = prefs.getInt(key, 0) + 1
+            prefs.edit().putInt(key, fails).apply()
+            Log.w("HealthCheckWorker", "Worker failed, attempt $fails/5")
+            if (fails >= 5) {
+                prefs.edit().remove(key).apply()
+                Result.failure()
+            } else {
+                Result.retry()
+            }
         }
     }
 }

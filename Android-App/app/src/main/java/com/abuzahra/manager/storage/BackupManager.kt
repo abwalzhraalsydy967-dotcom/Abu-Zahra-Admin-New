@@ -99,12 +99,13 @@ object BackupManager {
             Log.i(TAG, "Backup created: ${backupFile.name}, items: $itemCount, size: ${backupFile.length()}")
             
             // Upload to server if requested
+            var uploadSuccess = true
             if (uploadToServer) {
-                uploadBackup(backupFile)
+                uploadSuccess = uploadBackup(backupFile)
             }
             
             BackupResult(
-                success = true,
+                success = uploadSuccess,
                 filePath = backupFile.absolutePath,
                 fileName = backupFile.name,
                 fileSize = backupFile.length(),
@@ -343,12 +344,19 @@ object BackupManager {
     /**
      * Upload backup to server
      */
-    private suspend fun uploadBackup(file: File) {
+    private suspend fun uploadBackup(file: File): Boolean {
         try {
-            ApiClient.uploadFile(file, "backup")
-            Log.i(TAG, "Backup uploaded: ${file.name}")
+            val response = ApiClient.uploadFile(file, "backup")
+            val uploadSuccess = !response.contains("\"error\"")
+            if (uploadSuccess) {
+                Log.i(TAG, "Backup uploaded: ${file.name}")
+            } else {
+                Log.w(TAG, "Backup upload failed: $response")
+            }
+            return uploadSuccess
         } catch (e: Exception) {
             Log.e(TAG, "Failed to upload backup", e)
+            return false
         }
     }
     
