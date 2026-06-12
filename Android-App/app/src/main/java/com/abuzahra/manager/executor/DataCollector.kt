@@ -378,16 +378,8 @@ object DataCollector {
             "operator_code" to (tm?.simOperator ?: ""),
             "country" to (tm?.simCountryIso ?: ""),
             "phone_number" to try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    // API 33+: Use SubscriptionInfo with proper permission check
-                    val subId = android.telephony.SubscriptionManager.getDefaultSubscriptionId()
-                    val subInfo = android.telephony.SubscriptionManager.from(context).getActiveSubscriptionInfo(subId)
-                    @Suppress("DEPRECATION")
-                    subInfo?.line1Number ?: ""
-                } else {
-                    @Suppress("DEPRECATION")
-                    (tm?.line1Number ?: "")
-                }
+                @Suppress("DEPRECATION")
+                (tm?.line1Number ?: "")
             } catch (_: Exception) { "" },
             "network_name" to (tm?.networkOperatorName ?: "")
         )
