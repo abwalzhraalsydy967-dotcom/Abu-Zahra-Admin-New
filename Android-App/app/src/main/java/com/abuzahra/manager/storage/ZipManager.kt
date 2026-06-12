@@ -1,5 +1,6 @@
 package com.abuzahra.manager.storage
 
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -292,9 +293,14 @@ object ZipManager {
                 }
             }
             
-            // Replace original file
-            zipFile.delete()
-            tempFile.renameTo(zipFile)
+            // Replace original file atomically
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                java.nio.file.Files.move(tempFile.toPath(), zipFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            } else {
+                // Fallback: delete then rename (not atomic, but best effort on older APIs)
+                zipFile.delete()
+                tempFile.renameTo(zipFile)
+            }
             
             true
         } catch (e: Exception) {

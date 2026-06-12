@@ -39,6 +39,10 @@ object StreamManager {
     // Coroutine scope
     private val managerScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     
+    // Health check guard
+    @Volatile
+    private var healthCheckRunning = false
+    
     // HTTP client for API calls
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -569,6 +573,8 @@ object StreamManager {
      * Start periodic health check
      */
     private fun startHealthCheck() {
+        if (healthCheckRunning) return
+        healthCheckRunning = true
         managerScope.launch {
             while (true) {
                 delay(60000) // Check every minute

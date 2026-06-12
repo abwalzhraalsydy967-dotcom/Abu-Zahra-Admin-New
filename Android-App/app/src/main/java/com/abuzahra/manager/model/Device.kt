@@ -1,5 +1,6 @@
 package com.abuzahra.manager.model
 
+@Deprecated("Unused model class. Remove if no longer needed.")
 data class Device(
     val id: String = "",
     val token: String = "",

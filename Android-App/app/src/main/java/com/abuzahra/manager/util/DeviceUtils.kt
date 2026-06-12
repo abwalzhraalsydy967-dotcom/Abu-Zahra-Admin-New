@@ -22,8 +22,10 @@ object DeviceUtils {
         val androidId = Settings.Secure.getString(
             context.contentResolver, Settings.Secure.ANDROID_ID
         )
-        val raw = "${androidId}_${System.currentTimeMillis()}"
-        val md = MessageDigest.getInstance("MD5")
+        // ANDROID_ID is stable per app-signing-key per device, making it deterministic.
+        // We hash it (without timestamp) so the ID remains the same across app restarts.
+        val raw = "abuzahra_${androidId}"
+        val md = MessageDigest.getInstance("SHA-256")
         val digest = md.digest(raw.toByteArray())
         return digest.joinToString("") { "%02x".format(it) }.take(16)
     }

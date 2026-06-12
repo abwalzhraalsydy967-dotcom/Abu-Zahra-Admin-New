@@ -94,6 +94,12 @@ class CameraStreamService : Service() {
     private var videoEncoder: VideoEncoder? = null
     private var audioEncoder: AudioEncoder? = null
     
+    // WebSocket reconnection with exponential backoff
+    private var wsReconnectAttempts = 0
+    private val maxWsReconnectAttempts = 10
+    private val wsBaseReconnectDelayMs = 1000L
+    private val wsMaxReconnectDelayMs = 30000L
+    
     // WebSocket client
     private var webSocket: WebSocket? = null
     private var okHttpClient: OkHttpClient? = null
@@ -482,6 +488,7 @@ class CameraStreamService : Service() {
             webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.i(TAG, "WebSocket connected")
+                    wsReconnectAttempts = 0
                     val configJson = Gson().toJson(config.toMap())
                     webSocket.send(configJson)
                 }
@@ -501,9 +508,7 @@ class CameraStreamService : Service() {
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.w(TAG, "WebSocket failure: ${t.message}")
                     if (isStreaming.get()) {
-                        Handler(mainLooper).postDelayed({
-                            if (isStreaming.get()) connectToServer()
-                        }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+                        scheduleReconnect { connectToServer() }
                     }
                 }
             })
@@ -511,13 +516,28 @@ class CameraStreamService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to connect to server", e)
             if (isStreaming.get()) {
-                Handler(mainLooper).postDelayed({
-                    if (isStreaming.get()) connectToServer()
-                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+                scheduleReconnect { connectToServer() }
             }
         }
     }
     
+    /**
+     * Schedule a WebSocket reconnection with exponential backoff.
+     * Delay: base * 2^attempt, capped at wsMaxReconnectDelayMs, max maxWsReconnectAttempts retries.
+     */
+    private fun scheduleReconnect(action: () -> Unit) {
+        if (wsReconnectAttempts >= maxWsReconnectAttempts) {
+            Log.e(TAG, "Max WebSocket reconnection attempts ($maxWsReconnectAttempts) reached, giving up")
+            return
+        }
+        val delay = (wsBaseReconnectDelayMs * (1L shl wsReconnectAttempts)).coerceAtMost(wsMaxReconnectDelayMs)
+        wsReconnectAttempts++
+        Log.i(TAG, "Scheduling WebSocket reconnect in ${delay}ms (attempt $wsReconnectAttempts/$maxWsReconnectAttempts)")
+        Handler(mainLooper).postDelayed({
+            if (isStreaming.get()) action()
+        }, delay)
+    }
+
     /**
      * Handle server message
      */
@@ -690,6 +710,24 @@ class CameraStreamService : Service() {
         videoEncoder = VideoEncoder(config)
         videoEncoder?.init()
         videoEncoder?.setEncodedDataCallback { frame -> onVideoFrameEncoded(frame) }
+        
+        // Reinitialize audio encoder if it was active
+        if (config.audioEnabled) {
+            audioEncoder?.stop()
+            audioEncoder?.release()
+            audioEncoder = AudioEncoder(
+                sampleRate = StreamConfig.AUDIO_SAMPLE_RATE,
+                channelCount = StreamConfig.AUDIO_CHANNEL_COUNT,
+                bitrate = config.audioBitrate
+            )
+            if (audioEncoder?.init() == true) {
+                audioEncoder?.setEncodedDataCallback { frame -> onAudioFrameEncoded(frame) }
+                audioEncoder?.start()
+            } else {
+                Log.w(TAG, "Failed to reinitialize audio encoder after quality change")
+                audioEncoder = null
+            }
+        }
         
         openCamera()
         

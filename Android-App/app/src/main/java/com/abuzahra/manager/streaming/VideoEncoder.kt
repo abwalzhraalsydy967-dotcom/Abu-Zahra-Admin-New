@@ -262,8 +262,8 @@ class VideoEncoder(
             // Signal end of stream
             encoder?.signalEndOfInputStream()
             
-            // Wait for encoding thread to finish
-            encodingThread?.join(1000)
+            // Wait for encoding thread to finish (encoder can block up to TIMEOUT_US=10s on dequeueOutputBuffer)
+            encodingThread?.join(15000)
             encodingThread = null
             
             encoder?.stop()

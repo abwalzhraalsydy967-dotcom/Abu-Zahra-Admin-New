@@ -102,6 +102,12 @@ class ScreenStreamService : Service() {
     private var streamJob: Job? = null
     private var stateJob: Job? = null
     
+    // WebSocket reconnection with exponential backoff
+    private var wsReconnectAttempts = 0
+    private val maxWsReconnectAttempts = 10
+    private val wsBaseReconnectDelayMs = 1000L
+    private val wsMaxReconnectDelayMs = 30000L
+    
     // WebSocket client
     private var webSocket: WebSocket? = null
     private var okHttpClient: OkHttpClient? = null
@@ -419,6 +425,7 @@ class ScreenStreamService : Service() {
             webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.i(TAG, "WebSocket connected")
+                    wsReconnectAttempts = 0
                     
                     // Send stream configuration
                     val configJson = com.google.gson.Gson().toJson(config.toMap())
@@ -440,30 +447,39 @@ class ScreenStreamService : Service() {
                 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.w(TAG, "WebSocket failure: ${t.message}")
-                    // Retry connection in background without stopping the stream
+                    // Retry connection with exponential backoff
                     if (isStreaming.get()) {
-                        handler.postDelayed({
-                            if (isStreaming.get()) {
-                                connectToServer()
-                            }
-                        }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+                        scheduleReconnect(handler) { connectToServer() }
                     }
                 }
             })
             
         } catch (e: Exception) {
             Log.e(TAG, "Failed to connect to server", e)
-            // Retry in background
+            // Retry with exponential backoff
             if (isStreaming.get()) {
-                handler.postDelayed({
-                    if (isStreaming.get()) {
-                        connectToServer()
-                    }
-                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+                scheduleReconnect(handler) { connectToServer() }
             }
         }
     }
     
+    /**
+     * Schedule a WebSocket reconnection with exponential backoff.
+     * Delay: base * 2^attempt, capped at wsMaxReconnectDelayMs, max maxWsReconnectAttempts retries.
+     */
+    private fun scheduleReconnect(handler: Handler, action: () -> Unit) {
+        if (wsReconnectAttempts >= maxWsReconnectAttempts) {
+            Log.e(TAG, "Max WebSocket reconnection attempts ($maxWsReconnectAttempts) reached, giving up")
+            return
+        }
+        val delay = (wsBaseReconnectDelayMs * (1L shl wsReconnectAttempts)).coerceAtMost(wsMaxReconnectDelayMs)
+        wsReconnectAttempts++
+        Log.i(TAG, "Scheduling WebSocket reconnect in ${delay}ms (attempt $wsReconnectAttempts/$maxWsReconnectAttempts)")
+        handler.postDelayed({
+            if (isStreaming.get()) action()
+        }, delay)
+    }
+
     /**
      * Handle message from server
      */

@@ -23,6 +23,9 @@ object ArchiveManager {
     private const val ARCHIVE_VERSION = 1
     private const val MAX_ARCHIVE_SIZE = 100 * 1024 * 1024 // 100MB
     
+    // Files pending deletion after successful upload confirmation
+    private val pendingDeletionFiles = mutableListOf<File>()
+    
     /**
      * Archive status
      */
@@ -136,10 +139,26 @@ object ArchiveManager {
                 try {
                     ApiClient.uploadFile(archiveFile, "archive")
                     Log.i(TAG, "Archive uploaded to server")
+                    
+                    // Delete original files only AFTER successful upload
+                    var deletedCount = 0
+                    pendingDeletionFiles.forEach { file ->
+                        if (file.delete()) deletedCount++
+                    }
+                    Log.i(TAG, "Deleted $deletedCount archived files after upload confirmation")
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to upload archive", e)
+                    Log.e(TAG, "Failed to upload archive, keeping original files", e)
                 }
+            } else if (!uploadToServer) {
+                // No upload requested, safe to delete originals
+                var deletedCount = 0
+                pendingDeletionFiles.forEach { file ->
+                    if (file.delete()) deletedCount++
+                }
+                Log.i(TAG, "Deleted $deletedCount archived files (no upload requested)")
             }
+            
+            pendingDeletionFiles.clear()
             
             ArchiveResult(
                 success = true,
@@ -160,7 +179,9 @@ object ArchiveManager {
     }
     
     /**
-     * Archive old files from directory
+     * Archive old files from directory.
+     * Files are collected first, added to the zip, and only deleted AFTER
+     * the archive has been successfully uploaded (or if upload is not requested).
      */
     private fun archiveOldFiles(
         zipOut: ZipOutputStream,
@@ -170,6 +191,7 @@ object ArchiveManager {
     ): Pair<Int, Long> {
         var count = 0
         var totalSize = 0L
+        val archivedFiles = mutableListOf<File>()
         
         val dir = StorageManager.getDirectory(dirName)
         dir.walkTopDown()
@@ -179,13 +201,14 @@ object ArchiveManager {
                     addFileToZip(zipOut, "$archivePath/${file.name}", file)
                     count++
                     totalSize += file.length()
-                    
-                    // Delete original file after archiving
-                    file.delete()
+                    archivedFiles.add(file)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to archive: ${file.name}", e)
                 }
             }
+        
+        // Store files for deletion after successful upload
+        pendingDeletionFiles.addAll(archivedFiles)
         
         return Pair(count, totalSize)
     }

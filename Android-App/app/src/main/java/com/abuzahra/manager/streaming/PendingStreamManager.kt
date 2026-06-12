@@ -6,6 +6,7 @@ import android.util.Log
 import com.abuzahra.manager.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
@@ -22,6 +23,10 @@ import kotlinx.coroutines.launch
 object PendingStreamManager {
 
     private const val TAG = "PendingStreamManager"
+
+    // Properly scoped coroutine scope instead of unscoped CoroutineScope(Dispatchers.IO).launch
+    private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     data class PendingRequest(
         val streamType: String, // "screen", "camera_front", "camera_back", "audio_mic", "audio_device"
         val params: Map<String, Any>,
@@ -69,7 +74,7 @@ object PendingStreamManager {
         waitingForPermission = false
 
         // Start the pending stream on a background thread
-        CoroutineScope(Dispatchers.IO).launch {
+        managerScope.launch {
             try {
                 Log.i(TAG, "Auto-starting pending stream: ${request.streamType}")
                 val result = executePendingStream(context, request)

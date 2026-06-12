@@ -50,7 +50,7 @@ interface ContactDao {
     suspend fun getStarred(): List<ContactEntity>
     
     @RawQuery(observedEntities = [ContactEntity::class])
-    fun rawQuery(query: SupportSQLiteQuery): List<ContactEntity>
+    suspend fun rawQuery(query: SupportSQLiteQuery): List<ContactEntity>
 }
 
 /**

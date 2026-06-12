@@ -552,8 +552,9 @@ class WebRTCClient(
      * Cleanup resources
      */
     fun release() {
-        disconnect()
+        // Cancel scope FIRST to prevent race conditions between coroutine callbacks and shutdown
         clientScope.cancel()
+        disconnect()
         okHttpClient.dispatcher.executorService.shutdown()
         okHttpClient.connectionPool.evictAll()
         

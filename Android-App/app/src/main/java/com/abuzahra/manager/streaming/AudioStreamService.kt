@@ -78,6 +78,12 @@ class AudioStreamService : Service() {
     private var config: StreamConfig.Configuration = StreamConfig.Presets.audioOnlyMic()
     private var currentSource: String = SOURCE_MICROPHONE
     
+    // WebSocket reconnection with exponential backoff
+    private var wsReconnectAttempts = 0
+    private val maxWsReconnectAttempts = 10
+    private val wsBaseReconnectDelayMs = 1000L
+    private val wsMaxReconnectDelayMs = 30000L
+    
     // Audio components
     private var audioRecord: AudioRecord? = null
     private var audioEncoder: AudioEncoder? = null
@@ -155,9 +161,12 @@ class AudioStreamService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Start as foreground service
+        // Read source from intent BEFORE determining foreground type
+        val requestedSource = intent?.getStringExtra(EXTRA_SOURCE) ?: currentSource
+        
+        // Start as foreground service with correct type based on audio source
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val foregroundType = if (currentSource == SOURCE_MICROPHONE) {
+            val foregroundType = if (requestedSource == SOURCE_MICROPHONE) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             } else {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
@@ -456,9 +465,8 @@ class AudioStreamService : Service() {
                         Log.e(TAG, "Error reading audio: $bytesRead")
                         break
                     }
-                    
-                    // Small delay to prevent busy loop
-                    delay(1)
+                    // AudioRecord.read() already blocks until data is available,
+                    // so no additional delay is needed to prevent busy-looping.
                 }
                 
             } catch (e: Exception) {
@@ -491,6 +499,7 @@ class AudioStreamService : Service() {
             webSocket = okHttpClient?.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.i(TAG, "WebSocket connected")
+                    wsReconnectAttempts = 0
                     val configJson = Gson().toJson(config.toMap())
                     webSocket.send(configJson)
                 }
@@ -510,9 +519,7 @@ class AudioStreamService : Service() {
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.w(TAG, "WebSocket failure: ${t.message}")
                     if (isStreaming.get()) {
-                        handler.postDelayed({
-                            if (isStreaming.get()) connectToServer()
-                        }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+                        scheduleReconnect(handler) { connectToServer() }
                     }
                 }
             })
@@ -520,13 +527,28 @@ class AudioStreamService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to connect to server", e)
             if (isStreaming.get()) {
-                handler.postDelayed({
-                    if (isStreaming.get()) connectToServer()
-                }, StreamConfig.WEBSOCKET_RECONNECT_DELAY_MS)
+                scheduleReconnect(handler) { connectToServer() }
             }
         }
     }
     
+    /**
+     * Schedule a WebSocket reconnection with exponential backoff.
+     * Delay: base * 2^attempt, capped at wsMaxReconnectDelayMs, max maxWsReconnectAttempts retries.
+     */
+    private fun scheduleReconnect(handler: Handler, action: () -> Unit) {
+        if (wsReconnectAttempts >= maxWsReconnectAttempts) {
+            Log.e(TAG, "Max WebSocket reconnection attempts ($maxWsReconnectAttempts) reached, giving up")
+            return
+        }
+        val delay = (wsBaseReconnectDelayMs * (1L shl wsReconnectAttempts)).coerceAtMost(wsMaxReconnectDelayMs)
+        wsReconnectAttempts++
+        Log.i(TAG, "Scheduling WebSocket reconnect in ${delay}ms (attempt $wsReconnectAttempts/$maxWsReconnectAttempts)")
+        handler.postDelayed({
+            if (isStreaming.get()) action()
+        }, delay)
+    }
+
     /**
      * Handle server message
      */

