@@ -34,8 +34,8 @@ class LogAdapter(
         init {
             binding.root.setOnClickListener {
                 val pos = bindingAdapterPosition
-                if (pos != RecyclerView.NO_POSITION && onItemClick != null) {
-                    onItemClick(getItem(pos))
+                if (pos != RecyclerView.NO_POSITION) {
+                    onItemClick?.invoke(getItem(pos))
                 }
             }
         }
@@ -71,7 +71,7 @@ class LogAdapter(
                 else -> ContextCompat.getColor(binding.root.context, R.color.warning)
             }
             binding.chipStatus.chipBackgroundColor =
-                com.google.android.material.chip.ChipBackgroundColor(chipBgColor)
+                android.content.res.ColorStateList.valueOf(chipBgColor)
             binding.chipStatus.setTextColor(
                 ContextCompat.getColor(binding.root.context, R.color.on_primary)
             )
