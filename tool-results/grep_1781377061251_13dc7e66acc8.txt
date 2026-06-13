@@ -1,0 +1,252 @@
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-21-    private const val TAG = "AppExecutor"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-22-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-23-    // ===== OPEN APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:24:    fun openApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-25-        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-26-        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-27-            try {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-40-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-41-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-42-    // ===== CLOSE APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:43:    fun closeApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-44-        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-45-        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-46-            try {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-61-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-62-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-63-    // ===== INSTALL APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:64:    fun installApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-65-        val url = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-66-        if (url.isBlank()) return "No URL provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-67-        if (!url.startsWith("http://") && !url.startsWith("https://")) return "Error: Invalid URL - must start with http:// or https://"
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-127-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-128-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-129-    // ===== UNINSTALL APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:130:    fun uninstallApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-131-        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-132-        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-133-            try {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-144-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-145-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-146-    // ===== CLEAR APP DATA =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:147:    fun clearAppData(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-148-        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-149-        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-150-            try {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-167-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-168-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-169-    // ===== FORCE STOP APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:170:    fun forceStopApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-171-        return closeApp(context, params) // Same implementation
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-172-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-173-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-174-    // ===== APP INFO =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:175:    fun getAppInfo(context: Context, params: Map<String, Any>): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-176-        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-177-        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-178-            try {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-197-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-198-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-199-    // ===== BLOCK / UNBLOCK APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:200:    fun blockApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-201-        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-202-        if (packageName.isBlank()) return "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-203-        return try {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-245-        }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-246-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-247-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:248:    fun unblockApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-249-        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-250-        if (packageName.isBlank()) return "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-251-        return try {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-290-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-291-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-292-    // ===== SCREEN TIME =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:293:    fun getScreenTime(context: Context): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-294-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-295-            val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt-296-            val endTime = System.currentTimeMillis()
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-12-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-13-    private const val TAG = "FileExecutor"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-14-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:15:    private fun validatePath(path: String): String? {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-16-        if (path.isBlank()) return "No path provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-17-        if (path.contains("..")) return "Path traversal detected"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-18-        // Only allow paths under /storage/emulated/0/ or app-specific dirs
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-32-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-33-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-34-    // ===== LIST FILES =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:35:    fun listFiles(context: Context, params: Map<String, Any>): List<Map<String, Any>> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-36-        // Scoped Storage check for Android 11+
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-37-        try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-38-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-89-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-90-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-91-    // ===== DELETE FILE =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:92:    fun deleteFile(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-93-        val path = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-94-        val error = validatePath(path)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-95-        if (error != null) return error
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-107-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-108-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-109-    // ===== RENAME FILE =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:110:    fun renameFile(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-111-        val arg = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-112-        val parts = arg.split(" ", limit = 2)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-113-        val oldPath = parts.getOrNull(0) ?: ""
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-127-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-128-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-129-    // ===== COPY FILE =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:130:    fun copyFile(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-131-        val arg = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-132-        val parts = arg.split(" ", limit = 2)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-133-        val src = parts.getOrNull(0) ?: ""
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-149-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-150-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-151-    // ===== MOVE FILE =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:152:    fun moveFile(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-153-        val arg = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-154-        val parts = arg.split(" ", limit = 2)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-155-        val src = parts.getOrNull(0) ?: ""
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-171-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-172-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-173-    // ===== CREATE FOLDER =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:174:    fun createFolder(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-175-        val path = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-176-        val error = validatePath(path)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-177-        if (error != null) return error
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-185-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-186-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-187-    // ===== SEARCH FILES =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:188:    fun searchFiles(context: Context, params: Map<String, Any>): List<Map<String, Any>> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-189-        val query = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-190-        val results = mutableListOf<Map<String, Any>>()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-191-        if (query.isBlank()) return results
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-198-        return results
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-199-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-200-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:201:    private fun searchRecursive(dir: File, query: String, results: MutableList<Map<String, Any>>, depth: Int, maxDepth: Int) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-202-        if (depth > maxDepth) return
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-203-        dir.listFiles()?.forEach { file ->
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-204-            if (file.name.contains(query, ignoreCase = true)) {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-217-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-218-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-219-    // ===== RECENT FILES =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:220:    fun recentFiles(context: Context): List<Map<String, Any>> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-221-        // Scoped Storage check for Android 11+
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-222-        try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-223-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-250-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-251-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-252-    // ===== FILE INFO =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:253:    fun getFileInfo(context: Context, params: Map<String, Any>): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-254-        val path = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-255-        val error = validatePath(path)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-256-        if (error != null) return mapOf("error" to error as Any)
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-276-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-277-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-278-    // ===== FOLDER SIZE =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:279:    fun getFolderSize(context: Context, params: Map<String, Any>): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-280-        val path = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-281-        val error = validatePath(path)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-282-        if (error != null) return mapOf("error" to error as Any)
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-289-        } else mapOf<String,Any>("error" to "No path")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-290-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-291-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:292:    private fun calculateSize(dir: File): Long {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-293-        if (!dir.exists()) return 0
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-294-        if (dir.isFile) return dir.length()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-295-        var size = 0L
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-300-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-301-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-302-    // ===== HELPERS =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:303:    private fun formatFileSize(bytes: Long): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-304-        if (bytes <= 0) return "0 B"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-305-        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-306-        val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-307-        return String.format("%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups.coerceAtMost(4)])
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-308-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-309-
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:310:    private fun formatDate(timestamp: Long): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-311-        return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timestamp))
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-312-    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt-313-}
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-52-     * - server_url: (optional) custom streaming server URL
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-53-     * - stream_key: (optional) stream key for authentication
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-54-     */
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt:55:    fun startScreenStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-56-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-57-            Log.i(TAG, "Starting screen stream: command=screen, params=${params.keys.toList()}")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-58-            
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-142-    /**
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-143-     * Stop screen streaming
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-144-     */
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt:145:    fun stopScreenStream(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-146-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-147-            Log.i(TAG, "Stopping screen stream")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-148-            
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-202-     * - server_url: (optional) custom streaming server URL
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-203-     * - stream_key: (optional) stream key for authentication
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-204-     */
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt:205:    fun startCameraStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-206-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-207-            Log.i(TAG, "Starting camera stream: command=camera, params=${params.keys.toList()}")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-208-            
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-305-    /**
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-306-     * Stop camera streaming
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-307-     */
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt:308:    fun stopCameraStream(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-309-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-310-            Log.i(TAG, "Stopping camera stream")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-311-            
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-355-    /**
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-356-     * Switch between front and back camera during stream
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-357-     */
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt:358:    fun switchCamera(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-359-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-360-            Log.i(TAG, "Switching camera")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-361-            
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-406-     * - stream_key: (optional) stream key for authentication
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-407-     * - noise_suppression: (optional) enable noise suppression - default true
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-408-     */
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt:409:    fun startAudioStream(context: Context, params: Map<String, Any>): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-410-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-411-            Log.i(TAG, "Starting audio stream: command=audio, params=${params.keys.toList()}")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-412-            
+--
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-511-    /**
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-512-     * Stop audio streaming
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-513-     */
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt:514:    fun stopAudioStream(context: Context, params: Map<String, Any> = emptyMap()): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-515-        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/StreamExecutor.kt-516-            Log.i(TAG, "Stopping audio stream")
+
+[Showing results with pagination = limit: 250]

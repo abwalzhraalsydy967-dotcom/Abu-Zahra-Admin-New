@@ -1,0 +1,252 @@
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:36:            } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:37:                "Error: ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:38:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:39:        } else "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:40:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:41:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:42:    // ===== CLOSE APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:43:    fun closeApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:44:        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:45:        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:46:            try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:47:                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:48:                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:49:                    // Requires REAL_GET_TASKS permission or is a system app
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:50:                    am.killBackgroundProcesses(packageName)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:51:                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:52:                var result = "Force stopped: $packageName"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:53:                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:54:                    result += " (Note: may not work on Android 10+ without system privileges)"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:55:                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:56:                result
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:57:            } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:58:                "Error: ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:59:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:60:        } else "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:61:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:62:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:63:    // ===== INSTALL APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:64:    fun installApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:65:        val url = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:66:        if (url.isBlank()) return "No URL provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:67:        if (!url.startsWith("http://") && !url.startsWith("https://")) return "Error: Invalid URL - must start with http:// or https://"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:68:        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:69:            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:70:            val fileName = "install_${System.currentTimeMillis()}.apk"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:71:            val destFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), fileName)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:72:            val destUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", destFile)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:73:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:74:            val request = DownloadManager.Request(Uri.parse(url)).apply {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:75:                setTitle("Downloading APK")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:76:                setDescription("Installing app from: $url")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:77:                setDestinationUri(destUri)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:78:                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:79:                setMimeType("application/vnd.android.package-archive")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:80:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:81:            val downloadId = dm.enqueue(request)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:82:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:83:            // Track download completion and trigger install
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:84:            Thread {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:85:                var finished = false
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:86:                var lastProgress = 0
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:87:                val startTime = System.currentTimeMillis()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:88:                while (!finished && System.currentTimeMillis() - startTime < 60000) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:89:                    val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId))
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:90:                    cursor?.use {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:91:                        if (it.moveToFirst()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:92:                            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:93:                            if (status == DownloadManager.STATUS_SUCCESSFUL) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:94:                                finished = true
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:95:                                try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:96:                                    val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:97:                                        data = destUri
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:98:                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:99:                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:100:                                        putExtra(Intent.EXTRA_RETURN_RESULT, true)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:101:                                    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:102:                                    context.startActivity(installIntent)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:103:                                } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:104:                                    Log.e(TAG, "Install trigger failed", e)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:105:                                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:106:                            } else if (status == DownloadManager.STATUS_FAILED) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:107:                                val reason = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:108:                                finished = true
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:109:                                Log.e(TAG, "Download failed: reason=$reason")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:110:                            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:111:                        }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:112:                    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:113:                    if (!finished) Thread.sleep(2000)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:114:                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:115:                if (!finished) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:116:                    Log.w(TAG, "Download tracking timed out after 60s for ID: $downloadId")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:117:                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:118:            }.start()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:119:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:120:            "APK download started (ID: $downloadId). Installation will begin after download completes."
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:121:        } catch (e: SecurityException) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:122:            "Error: INSTALL_PACKAGES permission required for silent install: ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:123:        } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:124:            Log.e(TAG, "Install app error", e)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:125:            "Error: ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:126:        }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:127:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:128:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:129:    // ===== UNINSTALL APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:130:    fun uninstallApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:131:        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:132:        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:133:            try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:134:                val intent = Intent(Intent.ACTION_UNINSTALL_PACKAGE).apply {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:135:                    data = android.net.Uri.parse("package:$packageName")
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:136:                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:137:                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:138:                context.startActivity(intent)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:139:                "Uninstalling: $packageName"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:140:            } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:141:                "Error: ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:142:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:143:        } else "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:144:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:145:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:146:    // ===== CLEAR APP DATA =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:147:    fun clearAppData(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:148:        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:149:        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:150:            try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:151:                val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:152:                // Use reflection to call clearApplicationUserData(String) with package name
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:153:                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:154:                    val method = android.app.ActivityManager::class.java.getMethod(
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:155:                        "clearApplicationUserData", String::class.java
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:156:                    )
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:157:                    val result = method.invoke(am, packageName) as? Boolean ?: false
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:158:                    if (result) "Data cleared for: $packageName" else "Failed to clear data for: $packageName"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:159:                } else {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:160:                    "Not supported on this Android version"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:161:                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:162:            } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:163:                Log.w(TAG, "clearAppData failed (requires system/root privileges)", e)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:164:                "Error: ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:165:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:166:        } else "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:167:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:168:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:169:    // ===== FORCE STOP APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:170:    fun forceStopApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:171:        return closeApp(context, params) // Same implementation
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:172:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:173:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:174:    // ===== APP INFO =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:175:    fun getAppInfo(context: Context, params: Map<String, Any>): Map<String, Any> {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:176:        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:177:        return if (packageName.isNotBlank()) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:178:            try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:179:                val pm = context.packageManager
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:180:                val info = pm.getPackageInfo(packageName, PackageManager.GET_META_DATA)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:181:                val appInfo = info.applicationInfo
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:182:                mapOf(
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:183:                    "package" to info.packageName,
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:184:                    "name" to (appInfo.loadLabel(pm).toString()),
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:185:                    "version" to info.versionName,
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:186:                    "version_code" to info.versionCode,
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:187:                    "target_sdk" to info.applicationInfo.targetSdkVersion,
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:188:                    "first_install" to SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(info.firstInstallTime)),
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:189:                    "last_update" to SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(info.lastUpdateTime)),
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:190:                    "data_dir" to info.applicationInfo.dataDir,
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:191:                    "uid" to info.applicationInfo.uid
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:192:                )
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:193:            } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:194:                mapOf("error" to (e.message ?: "Not found") as Any)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:195:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:196:        } else mapOf("error" to "No package name" as Any)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:197:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:198:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:199:    // ===== BLOCK / UNBLOCK APP =====
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:200:    fun blockApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:201:        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:202:        if (packageName.isBlank()) return "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:203:        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:204:            // Strategy 1: Try AccessibilityService to hide the app
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:205:            val accessibility = MyAccessibilityService.getInstance()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:206:            if (accessibility != null) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:207:                // Hide the app by disabling its launcher component
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:208:                val pm = context.packageManager
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:209:                try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:210:                    val launchIntent = pm.getLaunchIntentForPackage(packageName)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:211:                    if (launchIntent != null) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:212:                        val componentName = launchIntent.component
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:213:                        if (componentName != null) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:214:                            pm.setComponentEnabledSetting(
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:215:                                componentName,
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:216:                                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:217:                                PackageManager.DONT_KILL_APP
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:218:                            )
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:219:                            return "App blocked (launcher hidden): $packageName via AccessibilityService"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:220:                        }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:221:                    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:222:                } catch (e: Exception) { Log.w(TAG, "blockApp error", e) }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:223:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:224:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:225:            // Strategy 2: Try Device Admin to hide app (requires device owner)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:226:            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:227:            val adminComponent = ComponentName(context, com.abuzahra.manager.service.DeviceAdminReceiver::class.java)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:228:            if (dpm.isAdminActive(adminComponent)) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:229:                return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:230:                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:231:                        dpm.setApplicationHidden(adminComponent, packageName, true)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:232:                        "App blocked (hidden via Device Admin): $packageName"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:233:                    } else {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:234:                        "App blocking requires Android 5.0+ for Device Admin hiding"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:235:                    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:236:                } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:237:                    "Device Admin hide failed (requires Device Owner): ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:238:                }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:239:            }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:240:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:241:            "Block app: $packageName - requires AccessibilityService or Device Admin (Device Owner)"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:242:        } catch (e: Exception) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:243:            Log.e(TAG, "Block app error", e)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:244:            "Error: ${e.message}"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:245:        }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:246:    }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:247:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:248:    fun unblockApp(context: Context, params: Map<String, Any>): String {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:249:        val packageName = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:250:        if (packageName.isBlank()) return "No package name provided"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:251:        return try {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/AppExecutor.kt:252:            // Strategy 1: Re-enable launcher component
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:41:        } catch (_: Exception) {}
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:42:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:43:        val arg = params["arg"]?.toString() ?: ""
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:44:        val offset = (params["offset"] as? Number)?.toInt() ?: 0
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:45:        val limit = (params["limit"] as? Number)?.toInt() ?: 100
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:46:        val dirPath = when {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:47:            arg.contains("download", ignoreCase = true) -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).absolutePath
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:48:            arg.contains("dcim", ignoreCase = true) -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM).absolutePath
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:49:            arg.contains("music", ignoreCase = true) -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).absolutePath
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:50:            arg.contains("video", ignoreCase = true) -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).absolutePath
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:51:            arg.contains("document", ignoreCase = true) -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).absolutePath
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:52:            arg.contains("whatsapp", ignoreCase = true) -> "/storage/emulated/0/WhatsApp"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:53:            arg.contains("telegram", ignoreCase = true) -> "/storage/emulated/0/Telegram"
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:54:            else -> arg.ifBlank { "/storage/emulated/0/" }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:55:        }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:56:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:57:        // Validate custom paths (predefined dirs above are safe)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:58:        val isPredefined = arg.contains("download", ignoreCase = true) ||
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:59:            arg.contains("dcim", ignoreCase = true) ||
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:60:            arg.contains("music", ignoreCase = true) ||
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:61:            arg.contains("video", ignoreCase = true) ||
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:62:            arg.contains("document", ignoreCase = true) ||
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:63:            arg.contains("whatsapp", ignoreCase = true) ||
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:64:            arg.contains("telegram", ignoreCase = true) ||
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:65:            arg.isBlank()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:66:        if (!isPredefined) {
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:67:            val pathError = validatePath(dirPath)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:68:            if (pathError != null) return listOf(mapOf("error" to pathError as Any))
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:69:        }
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:70:
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:71:        val list = mutableListOf<Map<String, Any>>()
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:72:        val dir = File(dirPath)
+/home/z/my-project/Abu-Zahra-Admin-New/Android-App/app/src/main/java/com/abuzahra/manager/executor/FileExecutor.kt:73:        if (dir.exists() && dir.isDirectory) {
+
+[Showing results with pagination = limit: 250]

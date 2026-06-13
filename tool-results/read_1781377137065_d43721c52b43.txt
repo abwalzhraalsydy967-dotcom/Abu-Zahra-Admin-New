@@ -1,0 +1,402 @@
+     1→     1→   960→   960→   960→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+     2→     2→   961→   961→   961→                })
+     3→     3→   962→   962→   962→                "Hotspot control requires WRITE_SETTINGS and system-level WiFi AP API (only available with root or system app privileges). Opening WiFi settings."
+     4→     4→   963→   963→   963→            } catch (e2: Exception) {
+     5→     5→   964→   964→   964→                Log.e(TAG, "Enable hotspot error", e2)
+     6→     6→   965→   965→   965→                "Error: ${e2.message}"
+     7→     7→   966→   966→   966→            }
+     8→     8→   967→   967→   967→        }
+     9→     9→   968→   968→   968→    }
+    10→    10→   969→   969→   969→
+    11→    11→   970→   970→   970→    fun disableHotspot(context: Context): String {
+    12→    12→   971→   971→   971→        return try {
+    13→    13→   972→   972→   972→            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+    14→    14→   973→   973→   973→            val method = wm.javaClass.getDeclaredMethod("setWifiApEnabled", android.net.wifi.WifiConfiguration::class.java, Boolean::class.javaPrimitiveType)
+    15→    15→   974→   974→   974→            method.isAccessible = true
+    16→    16→   975→   975→   975→            method.invoke(wm, null, false)
+    17→    17→   976→   976→   976→            "Hotspot disabled via reflection"
+    18→    18→   977→   977→   977→        } catch (e: Exception) {
+    19→    19→   978→   978→   978→            Log.w(TAG, "Hotspot disable reflection failed: ${e.message}")
+    20→    20→   979→   979→   979→            try {
+    21→    21→   980→   980→   980→                context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+    22→    22→   981→   981→   981→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    23→    23→   982→   982→   982→                })
+    24→    24→   983→   983→   983→                "Hotspot control requires WRITE_SETTINGS and system-level WiFi AP API (only available with root or system app privileges). Opening WiFi settings."
+    25→    25→   984→   984→   984→            } catch (e2: Exception) {
+    26→    26→   985→   985→   985→                Log.e(TAG, "Disable hotspot error", e2)
+    27→    27→   986→   986→   986→                "Error: ${e2.message}"
+    28→    28→   987→   987→   987→            }
+    29→    29→   988→   988→   988→        }
+    30→    30→   989→   989→   989→    }
+    31→    31→   990→   990→   990→
+    32→    32→   991→   991→   991→    // ===== AIRPLANE MODE =====
+    33→    33→   992→   992→   992→    fun airplaneOn(context: Context): String {
+    34→    34→   993→   993→   993→        return try {
+    35→    35→   994→   994→   994→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+    36→    36→   995→   995→   995→                // Requires WRITE_SECURE_SETTINGS - system app only
+    37→    37→   996→   996→   996→                Settings.Global.putInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 1)
+    38→    38→   997→   997→   997→                val intent = Intent(Intent.ACTION_AIRPLANE_MODE_CHANGED)
+    39→    39→   998→   998→   998→                intent.putExtra("state", true)
+    40→    40→   999→   999→   999→                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+    41→    41→  1000→  1000→  1000→                context.sendBroadcast(intent)
+    42→    42→  1001→  1001→  1001→                "Airplane mode ON (requires system app for full functionality)"
+    43→    43→  1002→  1002→  1002→            } else {
+    44→    44→  1003→  1003→  1003→                @Suppress("DEPRECATION")
+    45→    45→  1004→  1004→  1004→                Settings.System.putInt(context.contentResolver, Settings.System.AIRPLANE_MODE_ON, 1)
+    46→    46→  1005→  1005→  1005→                "Airplane mode ON"
+    47→    47→  1006→  1006→  1006→            }
+    48→    48→  1007→  1007→  1007→        } catch (e: Exception) {
+    49→    49→  1008→  1008→  1008→            Log.e(TAG, "Airplane on error", e)
+    50→    50→  1009→  1009→  1009→            "Error: ${e.message} - Airplane mode control requires system privileges"
+    51→    51→  1010→  1010→  1010→        }
+    52→    52→  1011→  1011→  1011→    }
+    53→    53→  1012→  1012→  1012→
+    54→    54→  1013→  1013→  1013→    fun airplaneOff(context: Context): String {
+    55→    55→  1014→  1014→  1014→        return try {
+    56→    56→  1015→  1015→  1015→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+    57→    57→  1016→  1016→  1016→                Settings.Global.putInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0)
+    58→    58→  1017→  1017→  1017→                val intent = Intent(Intent.ACTION_AIRPLANE_MODE_CHANGED)
+    59→    59→  1018→  1018→  1018→                intent.putExtra("state", false)
+    60→    60→  1019→  1019→  1019→                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+    61→    61→  1020→  1020→  1020→                context.sendBroadcast(intent)
+    62→    62→  1021→  1021→  1021→                "Airplane mode OFF (requires system app for full functionality)"
+    63→    63→  1022→  1022→  1022→            } else {
+    64→    64→  1023→  1023→  1023→                @Suppress("DEPRECATION")
+    65→    65→  1024→  1024→  1024→                Settings.System.putInt(context.contentResolver, Settings.System.AIRPLANE_MODE_ON, 0)
+    66→    66→  1025→  1025→  1025→                "Airplane mode OFF"
+    67→    67→  1026→  1026→  1026→            }
+    68→    68→  1027→  1027→  1027→        } catch (e: Exception) {
+    69→    69→  1028→  1028→  1028→            Log.e(TAG, "Airplane off error", e)
+    70→    70→  1029→  1029→  1029→            "Error: ${e.message} - Airplane mode control requires system privileges"
+    71→    71→  1030→  1030→  1030→        }
+    72→    72→  1031→  1031→  1031→    }
+    73→    73→  1032→  1032→  1032→
+    74→    74→  1033→  1033→  1033→    // ===== AUTO ROTATE =====
+    75→    75→  1034→  1034→  1034→    fun setAutoRotate(context: Context, params: Map<String, Any>): String {
+    76→    76→  1035→  1035→  1035→        return try {
+    77→    77→  1036→  1036→  1036→            // Check WRITE_SETTINGS permission on Android M+
+    78→    78→  1037→  1037→  1037→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+    79→    79→  1038→  1038→  1038→                !Settings.System.canWrite(context)) {
+    80→    80→  1039→  1039→  1039→                context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+    81→    81→  1040→  1040→  1040→                    data = android.net.Uri.parse("package:${context.packageName}")
+    82→    82→  1041→  1041→  1041→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    83→    83→  1042→  1042→  1042→                })
+    84→    84→  1043→  1043→  1043→                return "Opening write settings permission"
+    85→    85→  1044→  1044→  1044→            }
+    86→    86→  1045→  1045→  1045→
+    87→    87→  1046→  1046→  1046→            val arg = params["arg"]?.toString()?.lowercase() ?: "on"
+    88→    88→  1047→  1047→  1047→            val enabled = arg == "on" || arg == "true" || arg == "1"
+    89→    89→  1048→  1048→  1048→            
+    90→    90→  1049→  1049→  1049→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+    91→    91→  1050→  1050→  1050→                Settings.System.putInt(
+    92→    92→  1051→  1051→  1051→                    context.contentResolver, 
+    93→    93→  1052→  1052→  1052→                    Settings.System.ACCELEROMETER_ROTATION,
+    94→    94→  1053→  1053→  1053→                    if (enabled) 1 else 0
+    95→    95→  1054→  1054→  1054→                )
+    96→    96→  1055→  1055→  1055→            }
+    97→    97→  1056→  1056→  1056→            "Auto rotate ${if (enabled) "ON" else "OFF"}"
+    98→    98→  1057→  1057→  1057→        } catch (e: Exception) {
+    99→    99→  1058→  1058→  1058→            Log.e(TAG, "Set auto rotate error", e)
+   100→   100→  1059→  1059→  1059→            "Error: ${e.message}"
+   101→   101→  1060→  1060→  1060→        }
+   102→   102→  1061→  1061→  1061→    }
+   103→   103→  1062→  1062→  1062→
+   104→   104→  1063→  1063→  1063→    // ===== OPEN URL =====
+   105→   105→  1064→  1064→  1064→    fun openUrl(context: Context, params: Map<String, Any>): String {
+   106→   106→  1065→  1065→  1065→        val url = params["arg"]?.toString() ?: ""
+   107→   107→  1066→  1066→  1066→        return if (url.isNotBlank()) {
+   108→   108→  1067→  1067→  1067→            try {
+   109→   109→  1068→  1068→  1068→                var finalUrl = url
+   110→   110→  1069→  1069→  1069→                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+   111→   111→  1070→  1070→  1070→                    finalUrl = "https://$url"
+   112→   112→  1071→  1071→  1071→                }
+   113→   113→  1072→  1072→  1072→                context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(finalUrl)).apply {
+   114→   114→  1073→  1073→  1073→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   115→   115→  1074→  1074→  1074→                })
+   116→   116→  1075→  1075→  1075→                "Opened: $finalUrl"
+   117→   117→  1076→  1076→  1076→            } catch (e: Exception) {
+   118→   118→  1077→  1077→  1077→                Log.e(TAG, "Open URL error", e)
+   119→   119→  1078→  1078→  1078→                "Error opening URL: ${e.message}"
+   120→   120→  1079→  1079→  1079→            }
+   121→   121→  1080→  1080→  1080→        } else "No URL provided"
+   122→   122→  1081→  1081→  1081→    }
+   123→   123→  1082→  1082→  1082→
+   124→   124→  1083→  1083→  1083→    // ===== SEND SMS =====
+   125→   125→  1084→  1084→  1084→    fun sendSms(context: Context, params: Map<String, Any>): String {
+   126→   126→  1085→  1085→  1085→        val arg = params["arg"]?.toString() ?: ""
+   127→   127→  1086→  1086→  1086→        return if (arg.isNotBlank()) {
+   128→   128→  1087→  1087→  1087→            try {
+   129→   129→  1088→  1088→  1088→                val parts = arg.split(" ", limit = 2)
+   130→   130→  1089→  1089→  1089→                val number = parts.getOrNull(0) ?: ""
+   131→   131→  1090→  1090→  1090→                val message = parts.getOrNull(1) ?: ""
+   132→   132→  1091→  1091→  1091→                
+   133→   133→  1092→  1092→  1092→                if (number.isBlank() || message.isBlank()) {
+   134→   134→  1093→  1093→  1093→                    return "Usage: number message"
+   135→   135→  1094→  1094→  1094→                }
+   136→   136→  1095→  1095→  1095→                
+   137→   137→  1096→  1096→  1096→                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) 
+   138→   138→  1097→  1097→  1097→                    != PackageManager.PERMISSION_GRANTED) {
+   139→   139→  1098→  1098→  1098→                    return "SEND_SMS permission not granted"
+   140→   140→  1099→  1099→  1099→                }
+   141→   141→  1100→  1100→  1100→                
+   142→   142→  1101→  1101→  1101→                val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+   143→   143→  1102→  1102→  1102→                    context.getSystemService(SmsManager::class.java)
+   144→   144→  1103→  1103→  1103→                } else {
+   145→   145→  1104→  1104→  1104→                    @Suppress("DEPRECATION")
+   146→   146→  1105→  1105→  1105→                    SmsManager.getDefault()
+   147→   147→  1106→  1106→  1106→                }
+   148→   148→  1107→  1107→  1107→                
+   149→   149→  1108→  1108→  1108→                smsManager.sendTextMessage(number, null, message, null, null)
+   150→   150→  1109→  1109→  1109→                "SMS sent to $number"
+   151→   151→  1110→  1110→  1110→            } catch (e: Exception) {
+   152→   152→  1111→  1111→  1111→                Log.e(TAG, "Send SMS error", e)
+   153→   153→  1112→  1112→  1112→                "Error: ${e.message}"
+   154→   154→  1113→  1113→  1113→            }
+   155→   155→  1114→  1114→  1114→        } else "Usage: number message"
+   156→   156→  1115→  1115→  1115→    }
+   157→   157→  1116→  1116→  1116→
+   158→   158→  1117→  1117→  1117→    // ===== MAKE CALL =====
+   159→   159→  1118→  1118→  1118→    fun makeCall(context: Context, params: Map<String, Any>): String {
+   160→   160→  1119→  1119→  1119→        val number = params["arg"]?.toString() ?: ""
+   161→   161→  1120→  1120→  1120→        return if (number.isNotBlank()) {
+   162→   162→  1121→  1121→  1121→            try {
+   163→   163→  1122→  1122→  1122→                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) 
+   164→   164→  1123→  1123→  1123→                    != PackageManager.PERMISSION_GRANTED) {
+   165→   165→  1124→  1124→  1124→                    return "CALL_PHONE permission not granted"
+   166→   166→  1125→  1125→  1125→                }
+   167→   167→  1126→  1126→  1126→                
+   168→   168→  1127→  1127→  1127→                context.startActivity(Intent(Intent.ACTION_CALL, android.net.Uri.parse("tel:$number")).apply {
+   169→   169→  1128→  1128→  1128→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   170→   170→  1129→  1129→  1129→                })
+   171→   171→  1130→  1130→  1130→                "Calling $number..."
+   172→   172→  1131→  1131→  1131→            } catch (e: SecurityException) {
+   173→   173→  1132→  1132→  1132→                "CALL_PHONE permission denied"
+   174→   174→  1133→  1133→  1133→            } catch (e: Exception) {
+   175→   175→  1134→  1134→  1134→                Log.e(TAG, "Make call error", e)
+   176→   176→  1135→  1135→  1135→                "Error: ${e.message}"
+   177→   177→  1136→  1136→  1136→            }
+   178→   178→  1137→  1137→  1137→        } else "No number provided"
+   179→   179→  1138→  1138→  1138→    }
+   180→   180→  1139→  1139→  1139→
+   181→   181→  1140→  1140→  1140→    // ===== SPEAK TEXT =====
+   182→   182→  1141→  1141→  1141→    fun speakText(context: Context, params: Map<String, Any>): String {
+   183→   183→  1142→  1142→  1142→        val text = params["arg"]?.toString() ?: ""
+   184→   184→  1143→  1143→  1143→        return if (text.isNotBlank()) {
+   185→   185→  1144→  1144→  1144→            try {
+   186→   186→  1145→  1145→  1145→                val tts = arrayOfNulls<android.speech.tts.TextToSpeech>(1)
+   187→   187→  1146→  1146→  1146→                val latch = CountDownLatch(1)
+   188→   188→  1147→  1147→  1147→                
+   189→   189→  1148→  1148→  1148→                tts[0] = android.speech.tts.TextToSpeech(context) { status ->
+   190→   190→  1149→  1149→  1149→                    if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+   191→   191→  1150→  1150→  1150→                        tts[0]?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "tts_${System.currentTimeMillis()}")
+   192→   192→  1151→  1151→  1151→                    }
+   193→   193→  1152→  1152→  1152→                    latch.countDown()
+   194→   194→  1153→  1153→  1153→                }
+   195→   195→  1154→  1154→  1154→                
+   196→   196→  1155→  1155→  1155→                "Speaking: $text"
+   197→   197→  1156→  1156→  1156→            } catch (e: Exception) {
+   198→   198→  1157→  1157→  1157→                Log.e(TAG, "Speak text error", e)
+   199→   199→  1158→  1158→  1158→                "Error: ${e.message}"
+   200→   200→  1159→  1159→  1159→            }
+   201→   201→  1160→  1160→  1160→        } else "No text provided"
+   202→   202→  1161→  1161→  1161→    }
+   203→   203→  1162→  1162→  1162→
+   204→   204→  1163→  1163→  1163→    // ===== SHOW NOTIFICATION =====
+   205→   205→  1164→  1164→  1164→    fun showNotification(context: Context, params: Map<String, Any>): String {
+   206→   206→  1165→  1165→  1165→        val title = params["title"]?.toString() ?: params["arg"]?.toString() ?: "Notification"
+   207→   207→  1166→  1166→  1166→        val message = params["message"]?.toString() ?: ""
+   208→   208→  1167→  1167→  1167→        
+   209→   209→  1168→  1168→  1168→        return try {
+   210→   210→  1169→  1169→  1169→            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+   211→   211→  1170→  1170→  1170→            
+   212→   212→  1171→  1171→  1171→            // Create channel for Android O+
+   213→   213→  1172→  1172→  1172→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   214→   214→  1173→  1173→  1173→                val channel = NotificationChannel(
+   215→   215→  1174→  1174→  1174→                    NOTIFICATION_CHANNEL_ID,
+   216→   216→  1175→  1175→  1175→                    "Abu Zahra Control",
+   217→   217→  1176→  1176→  1176→                    NotificationManager.IMPORTANCE_HIGH
+   218→   218→  1177→  1177→  1177→                )
+   219→   219→  1178→  1178→  1178→                nm.createNotificationChannel(channel)
+   220→   220→  1179→  1179→  1179→            }
+   221→   221→  1180→  1180→  1180→            
+   222→   222→  1181→  1181→  1181→            val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+   223→   223→  1182→  1182→  1182→                .setSmallIcon(R.mipmap.ic_launcher)
+   224→   224→  1183→  1183→  1183→                .setContentTitle(title)
+   225→   225→  1184→  1184→  1184→                .setContentText(message)
+   226→   226→  1185→  1185→  1185→                .setPriority(NotificationCompat.PRIORITY_HIGH)
+   227→   227→  1186→  1186→  1186→                .setAutoCancel(true)
+   228→   228→  1187→  1187→  1187→                .build()
+   229→   229→  1188→  1188→  1188→            
+   230→   230→  1189→  1189→  1189→            nm.notify(System.currentTimeMillis().toInt(), notification)
+   231→   231→  1190→  1190→  1190→            "Notification shown: $title"
+   232→   232→  1191→  1191→  1191→        } catch (e: Exception) {
+   233→   233→  1192→  1192→  1192→            Log.e(TAG, "Show notification error", e)
+   234→   234→  1193→  1193→  1193→            "Error: ${e.message}"
+   235→   235→  1194→  1194→  1194→        }
+   236→   236→  1195→  1195→  1195→    }
+   237→   237→  1196→  1196→  1196→
+   238→   238→  1197→  1197→  1197→    // ===== LOCK PHONE =====
+   239→   239→  1198→  1198→  1198→    fun lockPhone(context: Context): String {
+   240→   240→  1199→  1199→  1199→        return try {
+   241→   241→  1200→  1200→  1200→            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+   242→   242→  1201→  1201→  1201→            
+   243→   243→  1202→  1202→  1202→            // Try Device Admin first
+   244→   244→  1203→  1203→  1203→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+   245→   245→  1204→  1204→  1204→            val adminComponent = android.content.ComponentName(context, "com.abuzahra.manager.service.DeviceAdminReceiver")
+   246→   246→  1205→  1205→  1205→            
+   247→   247→  1206→  1206→  1206→            if (dpm.isAdminActive(adminComponent)) {
+   248→   248→  1207→  1207→  1207→                dpm.lockNow()
+   249→   249→  1208→  1208→  1208→                return "Phone locked"
+   250→   250→  1209→  1209→  1209→            }
+   251→   251→  1210→  1210→  1210→            
+   252→   252→  1211→  1211→  1211→            // Fallback: try accessibility service
+   253→   253→  1212→  1212→  1212→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+   254→   254→  1213→  1213→  1213→                val accessibility = MyAccessibilityService.getInstance()
+   255→   255→  1214→  1214→  1214→                if (accessibility != null) {
+   256→   256→  1215→  1215→  1215→                    accessibility.lockScreen()
+   257→   257→  1216→  1216→  1216→                    return "Phone locked via accessibility"
+   258→   258→  1217→  1217→  1217→                }
+   259→   259→  1218→  1218→  1218→            }
+   260→   260→  1219→  1219→  1219→            
+   261→   261→  1220→  1220→  1220→            // Wake then lock
+   262→   262→  1221→  1221→  1221→            @Suppress("DEPRECATION")
+   263→   263→  1222→  1222→  1222→            val wakeLockFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+   264→   264→  1223→  1223→  1223→                android.os.PowerManager.PARTIAL_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+   265→   265→  1224→  1224→  1224→            } else {
+   266→   266→  1225→  1225→  1225→                @Suppress("DEPRECATION")
+   267→   267→  1226→  1226→  1226→                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+   268→   268→  1227→  1227→  1227→            }
+   269→   269→  1228→  1228→  1228→            val wl = pm.newWakeLock(wakeLockFlags, "abuzahra:lock")
+   270→   270→  1229→  1229→  1229→            wl.acquire(100)
+   271→   271→  1230→  1230→  1230→            wl.release()
+   272→   272→  1231→  1231→  1231→            
+   273→   273→  1232→  1232→  1232→            "Phone lock requires Device Admin or Accessibility service"
+   274→   274→  1233→  1233→  1233→        } catch (e: Exception) {
+   275→   275→  1234→  1234→  1234→            Log.e(TAG, "Lock phone error", e)
+   276→   276→  1235→  1235→  1235→            "Error: ${e.message} - Device Admin may not be active"
+   277→   277→  1236→  1236→  1236→        }
+   278→   278→  1237→  1237→  1237→    }
+   279→   279→  1238→  1238→  1238→
+   280→   280→  1239→  1239→  1239→    // ===== REBOOT =====
+   281→   281→  1240→  1240→  1240→    fun reboot(context: Context): String {
+   282→   282→  1241→  1241→  1241→        return try {
+   283→   283→  1242→  1242→  1242→            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+   284→   284→  1243→  1243→  1243→            
+   285→   285→  1244→  1244→  1244→            // Try Device Admin
+   286→   286→  1245→  1245→  1245→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+   287→   287→  1246→  1246→  1246→            val adminComponent = android.content.ComponentName(context, "com.abuzahra.manager.service.DeviceAdminReceiver")
+   288→   288→  1247→  1247→  1247→            
+   289→   289→  1248→  1248→  1248→            if (dpm.isAdminActive(adminComponent)) {
+   290→   290→  1249→  1249→  1249→                pm.reboot("abuzahra_reboot")
+   291→   291→  1250→  1250→  1250→                return "Rebooting..."
+   292→   292→  1251→  1251→  1251→            }
+   293→   293→  1252→  1252→  1252→            
+   294→   294→  1253→  1253→  1253→            "Reboot requires Device Admin permission"
+   295→   295→  1254→  1254→  1254→        } catch (e: Exception) {
+   296→   296→  1255→  1255→  1255→            Log.e(TAG, "Reboot error", e)
+   297→   297→  1256→  1256→  1256→            "Error: ${e.message} - REBOOT permission required"
+   298→   298→  1257→  1257→  1257→        }
+   299→   299→  1258→  1258→  1258→    }
+   300→   300→  1259→  1259→  1259→
+   301→   301→  1260→  1260→  1260→    // ===== SHUTDOWN =====
+   302→   302→  1261→  1261→  1261→    fun shutdown(context: Context): String {
+   303→   303→  1262→  1262→  1262→        return try {
+   304→   304→  1263→  1263→  1263→            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+   305→   305→  1264→  1264→  1264→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+   306→   306→  1265→  1265→  1265→            val adminComponent = android.content.ComponentName(context, "com.abuzahra.manager.service.DeviceAdminReceiver")
+   307→   307→  1266→  1266→  1266→            
+   308→   308→  1267→  1267→  1267→            if (dpm.isAdminActive(adminComponent)) {
+   309→   309→  1268→  1268→  1268→                // Use reflection for shutdown
+   310→   310→  1269→  1269→  1269→                val clazz = Class.forName("android.os.PowerManager")
+   311→   311→  1270→  1270→  1270→                val method = clazz.getMethod("shutdown", Boolean::class.javaPrimitiveType, String::class.java, Boolean::class.javaPrimitiveType)
+   312→   312→  1271→  1271→  1271→                method.invoke(pm, false, "abuzahra", true)
+   313→   313→  1272→  1272→  1272→                return "Shutting down..."
+   314→   314→  1273→  1273→  1273→            }
+   315→   315→  1274→  1274→  1274→            
+   316→   316→  1275→  1275→  1275→            "Shutdown requires Device Admin permission"
+   317→   317→  1276→  1276→  1276→        } catch (e: Exception) {
+   318→   318→  1277→  1277→  1277→            Log.e(TAG, "Shutdown error", e)
+   319→   319→  1278→  1278→  1278→            "Error: ${e.message} - SHUTDOWN permission required"
+   320→   320→  1279→  1279→  1279→        }
+   321→   321→  1280→  1280→  1280→    }
+   322→   322→  1281→  1281→  1281→
+   323→   323→  1282→  1282→  1282→    // ===== PLAY SOUND =====
+   324→   324→  1283→  1283→  1283→    fun playSound(context: Context, params: Map<String, Any>): String {
+   325→   325→  1284→  1284→  1284→        return try {
+   326→   326→  1285→  1285→  1285→            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+   327→   327→  1286→  1286→  1286→            am.setStreamVolume(AudioManager.STREAM_MUSIC, am.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0)
+   328→   328→  1287→  1287→  1287→            
+   329→   329→  1288→  1288→  1288→            val soundUri = when (params["sound"]?.toString()) {
+   330→   330→  1289→  1289→  1289→                "alarm" -> Settings.System.DEFAULT_ALARM_ALERT_URI
+   331→   331→  1290→  1290→  1290→                "notification" -> Settings.System.DEFAULT_NOTIFICATION_URI
+   332→   332→  1291→  1291→  1291→                else -> Settings.System.DEFAULT_RINGTONE_URI
+   333→   333→  1292→  1292→  1292→            }
+   334→   334→  1293→  1293→  1293→            
+   335→   335→  1294→  1294→  1294→            val player = android.media.MediaPlayer.create(context, soundUri)
+   336→   336→  1295→  1295→  1295→                ?: return "Error: Could not create player for the selected sound"
+   337→   337→  1296→  1296→  1296→            player.setOnCompletionListener { it.release() }
+   338→   338→  1297→  1297→  1297→            player.start()
+   339→   339→  1298→  1298→  1298→            "Sound played"
+   340→   340→  1299→  1299→  1299→        } catch (e: Exception) {
+   341→   341→  1300→  1300→  1300→            Log.e(TAG, "Play sound error", e)
+   342→   342→  1301→  1301→  1301→            "Error: ${e.message}"
+   343→   343→  1302→  1302→  1302→        }
+   344→   344→  1303→  1303→  1303→    }
+   345→   345→  1304→  1304→  1304→
+   346→   346→  1305→  1305→  1305→    // ===== LANGUAGE =====
+   347→   347→  1306→  1306→  1306→    fun setLanguage(context: Context, params: Map<String, Any>): String {
+   348→   348→  1307→  1307→  1307→        val lang = params["arg"]?.toString() ?: ""
+   349→   349→  1308→  1308→  1308→        return if (lang.isNotBlank()) {
+   350→   350→  1309→  1309→  1309→            try {
+   351→   351→  1310→  1310→  1310→                val locale = Locale(lang)
+   352→   352→  1311→  1311→  1311→                Locale.setDefault(locale)
+   353→   353→  1312→  1312→  1312→                
+   354→   354→  1313→  1313→  1313→                val config = context.resources.configuration
+   355→   355→  1314→  1314→  1314→                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+   356→   356→  1315→  1315→  1315→                    config.setLocale(locale)
+   357→   357→  1316→  1316→  1316→                } else {
+   358→   358→  1317→  1317→  1317→                    @Suppress("DEPRECATION")
+   359→   359→  1318→  1318→  1318→                    config.locale = locale
+   360→   360→  1319→  1319→  1319→                }
+   361→   361→  1320→  1320→  1320→                
+   362→   362→  1321→  1321→  1321→                context.resources.updateConfiguration(config, context.resources.displayMetrics)
+   363→   363→  1322→  1322→  1322→                "Language changed to $lang (requires app restart)"
+   364→   364→  1323→  1323→  1323→            } catch (e: Exception) {
+   365→   365→  1324→  1324→  1324→                "Error: ${e.message}"
+   366→   366→  1325→  1325→  1325→            }
+   367→   367→  1326→  1326→  1326→        } else "No language specified"
+   368→   368→  1327→  1327→  1327→    }
+   369→   369→  1328→  1328→  1328→
+   370→   370→  1329→  1329→  1329→    // ===== TIMEZONE =====
+   371→   371→  1330→  1330→  1330→    fun setTimezone(context: Context, params: Map<String, Any>): String {
+   372→   372→  1331→  1331→  1331→        val tz = params["arg"]?.toString() ?: ""
+   373→   373→  1332→  1332→  1332→        return try {
+   374→   374→  1333→  1333→  1333→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   375→   375→  1334→  1334→  1334→                context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS).apply {
+   376→   376→  1335→  1335→  1335→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   377→   377→  1336→  1336→  1336→                })
+   378→   378→  1337→  1337→  1337→                "Opening date settings"
+   379→   379→  1338→  1338→  1338→            } else {
+   380→   380→  1339→  1339→  1339→                val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+   381→   381→  1340→  1340→  1340→                @Suppress("DEPRECATION")
+   382→   382→  1341→  1341→  1341→                alarm.setTimeZone(tz)
+   383→   383→  1342→  1342→  1342→                "Timezone set to $tz"
+   384→   384→  1343→  1343→  1343→            }
+   385→   385→  1344→  1344→  1344→        } catch (e: Exception) {
+   386→   386→  1345→  1345→  1345→            Log.e(TAG, "Set timezone error", e)
+   387→   387→  1346→  1346→  1346→            "Error: ${e.message}"
+   388→   388→  1347→  1347→  1347→        }
+   389→   389→  1348→  1348→  1348→    }
+   390→   390→  1349→  1349→  1349→
+   391→   391→  1350→  1350→  1350→    // ===== ALARM / TIMER / REMINDER =====
+   392→   392→  1351→  1351→  1351→    fun setAlarm(context: Context, params: Map<String, Any>): String {
+   393→   393→  1352→  1352→  1352→        val arg = params["arg"]?.toString() ?: ""
+   394→   394→  1353→  1353→  1353→        return if (arg.isNotBlank()) {
+   395→   395→  1354→  1354→  1354→            try {
+   396→   396→  1355→  1355→  1355→                // Parse time from arg (format "HH:MM")
+   397→   397→  1356→  1356→  1356→                val parts = arg.split(":")
+   398→   398→  1357→  1357→  1357→                val hour = parts.getOrNull(0)?.toIntOrNull() ?: 0
+   399→   399→  1358→  1358→  1358→                val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
+   400→   400→  1359→  1359→  1359→
+
+[showing lines 1-400 of 502; use offset=401 with limit to continue reading]

