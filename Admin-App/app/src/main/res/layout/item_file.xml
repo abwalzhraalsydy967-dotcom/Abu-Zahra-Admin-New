@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:padding="@dimen/padding_sm"
+    android:paddingStart="0dp"
+    android:gravity="center_vertical"
+    android:foreground="?android:attr/selectableItemBackground"
+    android:clickable="true">
+
+    <!-- File Icon -->
+    <ImageView
+        android:id="@+id/ivFileIcon"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:src="@drawable/ic_file"
+        android:layout_marginEnd="@dimen/margin_md" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tvFileName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/text_body"
+            android:textColor="@color/text_primary"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/tvFileDetails"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="@dimen/text_caption"
+            android:textColor="@color/text_hint"
+            android:layout_marginTop="2dp" />
+
+    </LinearLayout>
+
+    <!-- Download Button -->
+    <ImageView
+        android:id="@+id/ivDownload"
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:src="@drawable/ic_download"
+        android:padding="6dp"
+        android:background="?android:attr/selectableItemBackgroundBorderless" />
+
+</LinearLayout>

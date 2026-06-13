@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">أبو زهرا - إدارة الأجهزة</string>
+
+    <!-- Login -->
+    <string name="login_title">تسجيل الدخول</string>
+    <string name="login_subtitle">لوحة إدارة أبو زهرا</string>
+    <string name="username">اسم المستخدم</string>
+    <string name="password">كلمة المرور</string>
+    <string name="login">دخول</string>
+    <string name="logging_in">جاري تسجيل الدخول…</string>
+    <string name="login_failed">فشل تسجيل الدخول</string>
+    <string name="invalid_credentials">اسم المستخدم أو كلمة المرور غير صحيحة</string>
+    <string name="connection_error">خطأ في الاتصال بالخادم</string>
+    <string name="server_url">رابط الخادم</string>
+
+    <!-- Dashboard -->
+    <string name="dashboard">لوحة التحكم</string>
+    <string name="devices">الأجهزة</string>
+    <string name="online_devices">الأجهزة المتصلة</string>
+    <string name="offline_devices">الأجهزة غير المتصلة</string>
+    <string name="total_devices">إجمالي الأجهزة</string>
+    <string name="search_devices">البحث في الأجهزة…</string>
+    <string name="no_devices">لا توجد أجهزة</string>
+    <string name="no_devices_desc">لم يتم تسجيل أي أجهزة بعد</string>
+    <string name="last_seen">آخر ظهور</string>
+    <string name="battery">البطارية</string>
+    <string name="model">الموديل</string>
+    <string name="status">الحالة</string>
+    <string name="online">متصل</string>
+    <string name="offline">غير متصل</string>
+    <string name="all">الكل</string>
+
+    <!-- Device Detail -->
+    <string name="device_details">تفاصيل الجهاز</string>
+    <string name="device_info">معلومات الجهاز</string>
+    <string name="send_command">إرسال أمر</string>
+    <string name="commands">الأوامر</string>
+    <string name="command_history">سجل الأوامر</string>
+    <string name="events">الأحداث</string>
+    <string name="quick_actions">إجراءات سريعة</string>
+    <string name="screenshot">لقطة شاشة</string>
+    <string name="location">الموقع</string>
+    <string name="battery_info">معلومات البطارية</string>
+    <string name="device_name">اسم الجهاز</string>
+    <string name="device_model">موديل الجهاز</string>
+    <string name="os_version">نظام التشغيل</string>
+    <string name="ip_address">عنوان IP</string>
+    <string name="command_sent">تم إرسال الأمر</string>
+    <string name="command_failed">فشل إرسال الأمر</string>
+    <string name="pending">قيد الانتظار</string>
+    <string name="success">ناجح</string>
+    <string name="failed">فاشل</string>
+
+    <!-- Command Categories -->
+    <string name="cat_data">البيانات</string>
+    <string name="cat_control">التحكم</string>
+    <string name="cat_files">الملفات</string>
+    <string name="cat_security">الأمان</string>
+    <string name="cat_monitor">المراقبة</string>
+
+    <!-- Files -->
+    <string name="files">الملفات</string>
+    <string name="file_browser">تصفح الملفات</string>
+    <string name="upload_file">رفع ملف</string>
+    <string name="download_file">تحميل ملف</string>
+    <string name="no_files">لا توجد ملفات</string>
+    <string name="file_size">حجم الملف</string>
+    <string name="file_modified">تاريخ التعديل</string>
+    <string name="parent_directory">المجلد السابق</string>
+
+    <!-- Logs -->
+    <string name="logs">السجلات</string>
+    <string name="event_log">سجل الأحداث</string>
+    <string name="filter">تصفية</string>
+    <string name="filter_by_device">تصفية حسب الجهاز</string>
+    <string name="filter_by_type">تصفية حسب النوع</string>
+    <string name="filter_by_date">تصفية حسب التاريخ</string>
+    <string name="no_logs">لا توجد سجلات</string>
+    <string name="timestamp">التوقيت</string>
+    <string name="details">التفاصيل</string>
+    <string name="event_type">نوع الحدث</string>
+
+    <!-- Settings -->
+    <string name="settings">الإعدادات</string>
+    <string name="server_configuration">إعدادات الخادم</string>
+    <string name="notification_settings">إعدادات الإشعارات</string>
+    <string name="appearance">المظهر</string>
+    <string name="dark_mode">الوضع الداكن</string>
+    <string name="about">حول التطبيق</string>
+    <string name="version">الإصدار</string>
+    <string name="logout">تسجيل الخروج</string>
+    <string name="logout_confirm">هل تريد تسجيل الخروج؟</string>
+    <string name="notifications_enabled">الإشعارات مفعّلة</string>
+    <string name="push_notifications">إشعارات فورية</string>
+    <string name="device_online_notifications">إشعارات اتصال الأجهزة</string>
+    <string name="device_offline_notifications">إشعارات قطع الأجهزة</string>
+    <string name="new_event_notifications">إشعارات الأحداث الجديدة</string>
+
+    <!-- Common -->
+    <string name="error">خطأ</string>
+    <string name="ok">حسناً</string>
+    <string name="cancel">إلغاء</string>
+    <string name="save">حفظ</string>
+    <string name="delete">حذف</string>
+    <string name="confirm">تأكيد</string>
+    <string name="loading">جاري التحميل…</string>
+    <string name="retry">إعادة المحاولة</string>
+    <string name="no_internet">لا يوجد اتصال بالإنترنت</string>
+    <string name="session_expired">انتهت صلاحية الجلسة</string>
+    <string name="unknown_error">حدث خطأ غير معروف</string>
+    <string name="just_now">الآن</string>
+    <string name="minutes_ago">منذ %d دقيقة</string>
+    <string name="hours_ago">منذ %d ساعة</string>
+    <string name="days_ago">منذ %d يوم</string>
+    <string name="never">أبداً</string>
+    <string name="refreshing">جاري التحديث…</string>
+    <string name="copied_to_clipboard">تم النسخ إلى الحافظة</string>
+
+    <!-- Bottom Navigation -->
+    <string name="nav_dashboard">الرئيسية</string>
+    <string name="nav_files">الملفات</string>
+    <string name="nav_logs">السجلات</string>
+    <string name="nav_settings">الإعدادات</string>
+
+    <!-- About -->
+    <string name="about_description">تطبيق إدارة أجهزة أبو زهرا\nللمراقبة والتحكم عن بُعد</string>
+    <string name="about_version">الإصدار 1.0.0</string>
+</resources>

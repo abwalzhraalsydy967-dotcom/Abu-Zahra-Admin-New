@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "7073076148",
+    "project_id": "studio-7073076148-6afe0",
+    "storage_bucket": "studio-7073076148-6afe0.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:7073076148:android:a1b2c3d4e5f6",
+        "android_client_info": {
+          "package_name": "com.abuzahra.manager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDummyKeyForBuild"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
