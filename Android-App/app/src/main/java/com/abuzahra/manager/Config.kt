@@ -5,8 +5,8 @@ import android.os.Build
 
 object Config {
     // Server Configuration - Domain now has SSL + nginx reverse proxy on standard ports
-    var SERVER_DOMAIN = "https://alsydyabwalzhra.online"
-    var SERVER_PORT = 443
+    @Volatile var SERVER_DOMAIN = "https://alsydyabwalzhra.online"
+    @Volatile var SERVER_PORT = 443
     val FIREBASE_PROJECT = "studio-7073076148-6afe0"
     val FIREBASE_RTDB_URL = "https://$FIREBASE_PROJECT-default-rtdb.firebaseio.com"
 

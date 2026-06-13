@@ -44,6 +44,10 @@ class CommandService : Service() {
         const val CHANNEL_ID_ALERTS = "abuzahra_alerts"
         const val NOTIFICATION_ID = 1001
 
+        @Volatile
+        var isRunning = false
+            private set
+
         fun start(context: Context) {
             val intent = Intent(context, CommandService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -96,6 +100,7 @@ class CommandService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        isRunning = true
         Log.i(TAG, "Service started (startId=$startId)")
 
         // Cancel existing jobs to prevent duplicates on repeated calls
@@ -128,6 +133,7 @@ class CommandService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        isRunning = false
         Log.i(TAG, "Service destroyed - cleaning up")
 
         // Cancel scope FIRST to stop all coroutines (including wake lock renewal)

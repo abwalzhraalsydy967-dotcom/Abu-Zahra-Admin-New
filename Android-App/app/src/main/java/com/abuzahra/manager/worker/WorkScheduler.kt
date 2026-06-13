@@ -37,13 +37,15 @@ object WorkScheduler {
      * Schedule periodic sync
      */
     fun schedulePeriodicSync(context: Context, intervalMinutes: Long = 15) {
+        // PeriodicWorkRequest requires a minimum interval of 15 minutes
+        val safeInterval = intervalMinutes.coerceAtLeast(15)
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .setRequiresBatteryNotLow(true)
             .build()
         
         val syncWork = PeriodicWorkRequestBuilder<SyncWorker>(
-            intervalMinutes, TimeUnit.MINUTES
+            safeInterval, TimeUnit.MINUTES
         )
             .setConstraints(constraints)
             .setBackoffCriteria(
@@ -55,11 +57,11 @@ object WorkScheduler {
         
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             SYNC_WORK,
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             syncWork
         )
         
-        Log.i(TAG, "Periodic sync scheduled: every $intervalMinutes minutes")
+        Log.i(TAG, "Periodic sync scheduled: every $safeInterval minutes")
     }
     
     /**
@@ -80,7 +82,7 @@ object WorkScheduler {
         
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             BACKUP_WORK,
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             backupWork
         )
         
@@ -104,7 +106,7 @@ object WorkScheduler {
         
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             CLEANUP_WORK,
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             cleanupWork
         )
         
@@ -126,7 +128,7 @@ object WorkScheduler {
         
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             HEALTH_CHECK_WORK,
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             healthWork
         )
         

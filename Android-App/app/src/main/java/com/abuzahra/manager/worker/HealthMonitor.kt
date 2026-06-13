@@ -258,13 +258,12 @@ object HealthMonitor {
     }
     
     /**
-     * Check if main service is running
+     * Check if main service is running.
+     * Uses the static isRunning flag from CommandService instead of the deprecated
+     * ActivityManager.getRunningServices() which only returns the app's own services on Android 12+.
      */
     private fun isServiceRunning(context: Context): Boolean {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        @Suppress("DEPRECATION")
-        return activityManager.getRunningServices(Int.MAX_VALUE)
-            .any { it.service.className == "com.abuzahra.manager.service.CommandService" }
+        return com.abuzahra.manager.service.CommandService.isRunning
     }
     
     /**

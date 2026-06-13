@@ -173,6 +173,10 @@ object SyncManager {
     
     /**
      * Process single sync item
+     * NOTE: The `item` parameter (SyncQueueEntity) contains sync metadata (dataId, retryCount, payload, etc.)
+     * but most sync methods below ignore it and instead query their own DAO for all unsynced records.
+     * This is a design issue that should be addressed: each sync method should use item.dataId or
+     * item.dataPayload to sync the specific record rather than re-syncing everything.
      */
     private suspend fun processSyncItem(item: SyncQueueEntity): Boolean {
         return try {

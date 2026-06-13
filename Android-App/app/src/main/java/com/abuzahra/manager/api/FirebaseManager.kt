@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
 object FirebaseManager {
@@ -17,9 +18,10 @@ object FirebaseManager {
     private const val TAG = "FirebaseManager"
 
     // Check if Firebase database is available
-    private var firebaseAvailable = true
+    private val firebaseAvailable = AtomicBoolean(true)
     private var lastConnectionError: String? = null
 
+    @Volatile
     private var databaseInstance: FirebaseDatabase? = null
     
     private fun getDatabase(): FirebaseDatabase? {
@@ -36,30 +38,30 @@ object FirebaseManager {
             db
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get FirebaseDatabase instance", e)
-            firebaseAvailable = false
+            firebaseAvailable.set(false)
             lastConnectionError = e.message
             null
         }
     }
 
     private fun getRef(path: String): DatabaseReference? {
-        if (!firebaseAvailable) {
+        if (!firebaseAvailable.get()) {
             // Try to re-test connection (non-suspend version)
             try { testConnectionSync() } catch (_: Exception) {}
-            if (!firebaseAvailable) return null
+            if (!firebaseAvailable.get()) return null
         }
         val db = getDatabase() ?: return null
         return try {
             db.getReferenceFromUrl(Config.FIREBASE_RTDB_URL).child(path)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get reference for path: $path", e)
-            firebaseAvailable = false
+            firebaseAvailable.set(false)
             lastConnectionError = e.message
             null
         }
     }
 
-    fun isAvailable(): Boolean = firebaseAvailable
+    fun isAvailable(): Boolean = firebaseAvailable.get()
     fun getLastError(): String? = lastConnectionError
 
     // ===== LISTEN FOR COMMANDS =====
@@ -95,7 +97,7 @@ object FirebaseManager {
             override fun onChildMoved(snapshot: DataSnapshot, previousChildName: String?) {}
             override fun onCancelled(error: DatabaseError) {
                 Log.e(TAG, "Commands listener cancelled: ${error.toException()}")
-                firebaseAvailable = false
+                firebaseAvailable.set(false)
                 lastConnectionError = error.message
             }
         }
@@ -136,12 +138,12 @@ object FirebaseManager {
                 }
                 .addOnFailureListener { err ->
                     Log.e(TAG, "Firebase submitResult failed for $cmdId: ${err.message}")
-                    firebaseAvailable = false
+                    firebaseAvailable.set(false)
                     lastConnectionError = err.message
                 }
         } catch (e: Exception) {
             Log.e(TAG, "submitResult error", e)
-            firebaseAvailable = false
+            firebaseAvailable.set(false)
             lastConnectionError = e.message
         }
     }
@@ -169,7 +171,7 @@ object FirebaseManager {
                 }
             }
             override fun onCancelled(error: DatabaseError) {
-                firebaseAvailable = false
+                firebaseAvailable.set(false)
                 lastConnectionError = error.message
                 cont.resume(Pair(false, error.message))
             }
@@ -182,7 +184,7 @@ object FirebaseManager {
         // The actual suspend version does a real network test via .info/connected
         val db = getDatabase()
         if (db != null) {
-            firebaseAvailable = true
+            firebaseAvailable.set(true)
             lastConnectionError = null
         }
     }
@@ -198,14 +200,14 @@ object FirebaseManager {
         ref.addListenerForSingleValueEvent(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val connected = snapshot.value as? Boolean ?: false
-                firebaseAvailable = connected
+                firebaseAvailable.set(connected)
                 if (!connected) lastConnectionError = "Firebase not connected"
                 Log.i(TAG, "Firebase connection test: $connected")
                 cont.resume(connected)
             }
             override fun onCancelled(error: DatabaseError) {
                 Log.e(TAG, "Firebase connection test failed: ${error.message}")
-                firebaseAvailable = false
+                firebaseAvailable.set(false)
                 lastConnectionError = error.message
                 cont.resume(false)
             }

@@ -132,7 +132,7 @@ object StorageCleaner {
     private suspend fun cleanOldFiles(): Pair<Int, Long> = withContext(Dispatchers.IO) {
         var filesDeleted = 0
         var spaceFreed = 0L
-        
+
         val directoriesToClean = listOf(
             StorageManager.Dir.SCREENSHOTS,
             StorageManager.Dir.CAMERA,
@@ -142,16 +142,20 @@ object StorageCleaner {
             StorageManager.Dir.KEYLOG,
             StorageManager.Dir.NOTIFICATIONS
         )
-        
+
+        val cutoffTime = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(maxAgeDays.toLong())
         directoriesToClean.forEach { dirName ->
-            val result = StorageManager.cleanOldFiles(dirName, maxAgeDays)
-            filesDeleted += result
+            val dir = StorageManager.getDirectory(dirName)
+            dir.listFiles()?.filter { it.isFile && it.lastModified() < cutoffTime }?.forEach { file ->
+                val size = file.length()
+                if (file.delete()) {
+                    filesDeleted++
+                    spaceFreed += size
+                }
+            }
         }
-        
-        // Calculate space freed
-        val stats = StorageManager.getStorageStats()
-        
-        Log.i(TAG, "Old files cleaned: $filesDeleted files")
+
+        Log.i(TAG, "Old files cleaned: $filesDeleted files, ${formatSize(spaceFreed)} freed")
         Pair(filesDeleted, spaceFreed)
     }
     

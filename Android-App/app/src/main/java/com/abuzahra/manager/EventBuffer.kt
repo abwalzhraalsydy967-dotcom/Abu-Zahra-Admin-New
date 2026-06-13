@@ -69,14 +69,21 @@ object EventBuffer {
 
         // Always store locally
         bufferQueue.add(event)
+        var needsRewrite = false
         while (bufferQueue.size > MAX_BUFFER_SIZE) {
             bufferQueue.poll()
+            needsRewrite = true
         }
 
         // Persist to file (async, non-blocking)
+        // Append-only for performance; full rewrite only when trimming
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                saveToFile(App.instance)
+                if (needsRewrite) {
+                    saveToFile(App.instance)
+                } else {
+                    appendEventToFile(App.instance, event)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save event to file", e)
             }
@@ -238,6 +245,24 @@ object EventBuffer {
         return File(context.filesDir, "event_buffer.json")
     }
 
+    /**
+     * Append a single event to the buffer file (JSONL format: one JSON object per line).
+     * This avoids serializing the entire buffer on every event addition.
+     */
+    private fun appendEventToFile(context: Context, event: BufferedEvent) {
+        try {
+            val file = getBufferFile(context)
+            val obj = serializeEvent(event)
+            file.appendText(obj.toString() + "\n")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to append event to file", e)
+        }
+    }
+
+    /**
+     * Full rewrite of the buffer file. Only called when trimming is needed
+     * (buffer exceeds max size or file exceeds max file size).
+     */
     private fun saveToFile(context: Context) {
         try {
             val file = getBufferFile(context)
@@ -248,29 +273,37 @@ object EventBuffer {
                 bufferQueue.addAll(recent)
             }
 
-            val json = JSONArray()
+            val sb = StringBuilder()
             for (event in bufferQueue) {
-                val obj = JSONObject()
-                obj.put("event_type", event.eventType)
-                obj.put("timestamp", event.timestamp)
-                val dataObj = JSONObject()
-                for ((key, value) in event.data) {
-                    when (value) {
-                        is String -> dataObj.put(key, value)
-                        is Number -> dataObj.put(key, value)
-                        is Boolean -> dataObj.put(key, value)
-                        null -> dataObj.put(key, JSONObject.NULL)
-                        else -> dataObj.put(key, value.toString())
-                    }
-                }
-                obj.put("data", dataObj)
-                json.put(obj)
+                sb.append(serializeEvent(event).toString())
+                sb.append("\n")
             }
 
-            file.writeText(json.toString())
+            file.writeText(sb.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save buffer to file", e)
         }
+    }
+
+    /**
+     * Serialize a single BufferedEvent to a JSONObject.
+     */
+    private fun serializeEvent(event: BufferedEvent): JSONObject {
+        val obj = JSONObject()
+        obj.put("event_type", event.eventType)
+        obj.put("timestamp", event.timestamp)
+        val dataObj = JSONObject()
+        for ((key, value) in event.data) {
+            when (value) {
+                is String -> dataObj.put(key, value)
+                is Number -> dataObj.put(key, value)
+                is Boolean -> dataObj.put(key, value)
+                null -> dataObj.put(key, JSONObject.NULL)
+                else -> dataObj.put(key, value.toString())
+            }
+        }
+        obj.put("data", dataObj)
+        return obj
     }
 
     private fun loadFromFile(context: Context) {
@@ -281,27 +314,48 @@ object EventBuffer {
             val jsonStr = file.readText()
             if (jsonStr.isBlank()) return
 
-            val json = JSONArray(jsonStr)
-            for (i in 0 until json.length()) {
-                val obj = json.getJSONObject(i)
-                val eventType = obj.getString("event_type")
-                val timestamp = obj.getLong("timestamp")
-
-                val data = mutableMapOf<String, Any?>()
-                if (obj.has("data")) {
-                    val dataObj = obj.getJSONObject("data")
-                    for (key in dataObj.keys()) {
-                        data[key] = if (dataObj.isNull(key)) null else dataObj.get(key)
+            var count = 0
+            // Handle both old JSON array format and new JSONL (line-delimited) format
+            if (jsonStr.trimStart().startsWith("[")) {
+                // Old format: JSON array
+                val json = JSONArray(jsonStr)
+                for (i in 0 until json.length()) {
+                    val obj = json.getJSONObject(i)
+                    parseAndAddEvent(obj)
+                    count++
+                }
+                Log.i(TAG, "Loaded $count events from file (array format)")
+            } else {
+                // New format: JSONL (one JSON object per line)
+                jsonStr.lineSequence().filter { it.isNotBlank() }.forEach { line ->
+                    try {
+                        val obj = JSONObject(line)
+                        parseAndAddEvent(obj)
+                        count++
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to parse event line", e)
                     }
                 }
-
-                bufferQueue.add(BufferedEvent(eventType, data, timestamp))
+                Log.i(TAG, "Loaded $count events from file (JSONL format)")
             }
-
-            Log.i(TAG, "Loaded ${json.length()} events from file")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load events from file", e)
         }
+    }
+
+    private fun parseAndAddEvent(obj: JSONObject) {
+        val eventType = obj.getString("event_type")
+        val timestamp = obj.getLong("timestamp")
+
+        val data = mutableMapOf<String, Any?>()
+        if (obj.has("data")) {
+            val dataObj = obj.getJSONObject("data")
+            for (key in dataObj.keys()) {
+                data[key] = if (dataObj.isNull(key)) null else dataObj.get(key)
+            }
+        }
+
+        bufferQueue.add(BufferedEvent(eventType, data, timestamp))
     }
 
     private fun deleteBufferFile(context: Context) {

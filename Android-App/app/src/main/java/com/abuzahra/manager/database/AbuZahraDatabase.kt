@@ -22,7 +22,7 @@ import com.abuzahra.manager.database.entity.*
         KeylogEntity::class
     ],
     version = 1,
-    exportSchema = false
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AbuZahraDatabase : RoomDatabase() {
@@ -53,6 +53,9 @@ abstract class AbuZahraDatabase : RoomDatabase() {
                 AbuZahraDatabase::class.java,
                 "abu_zahra_db"
             )
+                // NOTE: fallbackToDestructiveMigration() will silently drop ALL data on schema change.
+                // Proper Migrations should be added here BEFORE any schema changes (version bump + Migration class).
+                // For now this is acceptable since there's no user-facing data loss risk in early development.
                 .fallbackToDestructiveMigration()
                 .enableMultiInstanceInvalidation()
                 .build()
