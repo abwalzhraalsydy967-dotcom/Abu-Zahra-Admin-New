@@ -26,11 +26,35 @@ import aiohttp
 from aiohttp import web
 
 # ============================================================================
+# CORS MIDDLEWARE
+# ============================================================================
+
+@web.middleware
+async def cors_middleware(request, handler):
+    allowed_origins = ['https://alsydyabwalzhra.online', 'http://localhost:8443']
+    origin = request.headers.get('Origin', '')
+    if request.method == 'OPTIONS':
+        response = web.Response(status=204)
+        if origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, X-Device-Token'
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+    response = await handler(request)
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, X-Device-Token'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
+
+# ============================================================================
 # CONFIGURATION
 # ============================================================================
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8743374928:AAGShUT6RrMfSBQHA6NZsb1nw9xRqA6_9bw")
-ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "7344776596"))
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID", "0"))
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "8443"))
 SERVER_DOMAIN = os.environ.get("SERVER_DOMAIN", "https://alsydyabwalzhra.online")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "abu-zahra-secret-key-2025")
@@ -471,6 +495,15 @@ def remove_device(device_id):
 def get_first_device():
     devices = get_devices()
     return devices[0] if devices else None
+
+
+def get_device_by_token(device_id, token):
+    """Look up a device by both its ID and token. Returns device dict or None."""
+    devices = load_json(DEVICES_FILE, [])
+    for d in devices:
+        if d.get('id') == device_id and d.get('token') == token:
+            return d
+    return None
 
 # ============================================================================
 # COMMAND QUEUE HELPERS
@@ -1809,30 +1842,11 @@ async def api_get_commands(request):
     if not device_id:
         return web.json_response({"ok": False, "error": "device_id required"}, status=400)
     
-    # Auto-register device if not found (app may have linked via Firebase only)
-    d = find_device(device_id)
+    # Validate device token
+    device_token = request.headers.get("X-Device-Token", "")
+    d = get_device_by_token(device_id, device_token)
     if not d:
-        # Auto-register with minimal info
-        from datetime import datetime as _dt
-        device_data = {
-            "id": device_id,
-            "token": secrets.token_urlsafe(32),
-            "active": True,
-            "name": device_id,
-            "model": "",
-            "brand": "",
-            "os": "",
-            "battery": "",
-            "network": "",
-            "location": "",
-            "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "auto_registered": True,
-        }
-        add_device(device_data)
-        d = device_data
-        log.info("Auto-registered device: %s", device_id)
-        append_event("Device auto-registered", {"id": device_id})
+        return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
     
     pending = get_pending_commands(device_id)
     
@@ -1884,6 +1898,10 @@ async def api_command_result(request):
             return web.json_response({"ok": False, "error": "Command not found"}, status=404)
 
         device_id = updated.get("device_id", "")
+        # Validate device token for this command's device
+        device_token = request.headers.get("X-Device-Token", "")
+        if device_id and not get_device_by_token(device_id, device_token):
+            return web.json_response({"ok": False, "error": "Unauthorized"}, status=401)
         command = updated.get("command", "")
         if device_id:
             update_device(device_id, {"active": True})
@@ -1964,16 +1982,23 @@ async def api_heartbeat(request):
         status_val = body.get("status", "online")
         battery = body.get("battery", 0)
         
-        if device_id:
-            update_device(device_id, {
-                "active": status_val == "online",
-                "battery": str(battery),
-            })
-            # Track IP for upload identification
-            peer_ip = _get_real_ip(request)
-            if peer_ip and peer_ip != "127.0.0.1":
-                _ip_device_map[peer_ip] = device_id
-            log.info("Heartbeat from %s: battery=%d%% status=%s ip=%s", device_id, battery, status_val, peer_ip)
+        if not device_id:
+            return web.json_response({"ok": False, "error": "device_id required"}, status=400)
+        
+        # Validate device token
+        device_token = request.headers.get("X-Device-Token", "")
+        if not get_device_by_token(device_id, device_token):
+            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+        
+        update_device(device_id, {
+            "active": status_val == "online",
+            "battery": str(battery),
+        })
+        # Track IP for upload identification
+        peer_ip = _get_real_ip(request)
+        if peer_ip and peer_ip != "127.0.0.1":
+            _ip_device_map[peer_ip] = device_id
+        log.info("Heartbeat from %s: battery=%d%% status=%s ip=%s", device_id, battery, status_val, peer_ip)
         
         return web.json_response({"ok": True, "success": True, "message": "Heartbeat received"})
     except Exception as exc:
@@ -1992,12 +2017,11 @@ async def api_device_data(request):
         data_type = body.get("type", "")
         data = body.get("data", {})
         
-        d = find_device(device_id)
+        # Validate device token
+        device_token = request.headers.get("X-Device-Token", "")
+        d = get_device_by_token(device_id, device_token)
         if not d:
-            device_data = {"id": device_id, "token": secrets.token_urlsafe(32), "active": True, "name": device_id, "model": "", "brand": "", "os": "", "battery": "", "network": "", "location": "", "last_seen": ts(), "created_at": ts(), "auto_registered": True}
-            add_device(device_data)
-            d = device_data
-            log.info("Auto-registered device (data-path): %s", device_id)
+            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
         
         dev_name = d.get("name", device_id)
         update_device(device_id, {"active": True})
@@ -2069,14 +2093,13 @@ async def api_device_data_body(request):
         if not device_id:
             return web.json_response({"ok": False, "success": False, "error": "device_id required"}, status=400)
 
-        d = find_device(device_id)
+        # Validate device token
+        device_token = request.headers.get("X-Device-Token", "")
+        d = get_device_by_token(device_id, device_token)
         if not d:
-            device_data = {"id": device_id, "token": secrets.token_urlsafe(32), "active": True, "name": device_id, "model": "", "brand": "", "os": "", "battery": "", "network": "", "location": "", "last_seen": ts(), "created_at": ts(), "auto_registered": True}
-            add_device(device_data)
-            d = device_data
-            log.info("Auto-registered device (data-body): %s", device_id)
+            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
 
-        dev_name = d.get("name", device_id) if d else device_id
+        dev_name = d.get("name", device_id)
         update_device(device_id, {"active": True})
         append_event(f"Data received: {command}", {"device_id": device_id})
 
@@ -2257,13 +2280,15 @@ async def api_upload_file(request):
             device_id = "unknown"
             log.warning("Upload received without device_id and unknown IP %s", request.remote)
         
-        # Find or register device
-        d = find_device(device_id)
-        if not d and device_id != "unknown":
-            device_data = {"id": device_id, "token": secrets.token_urlsafe(32), "active": True, "name": device_id, "model": "", "brand": "", "os": "", "battery": "", "network": "", "location": "", "last_seen": ts(), "created_at": ts(), "auto_registered": True}
-            add_device(device_data)
-            d = device_data
-            log.info("Auto-registered device (upload): %s", device_id)
+        # Validate device token (use IP-based lookup if no token header)
+        device_token = request.headers.get("X-Device-Token", "")
+        if device_token:
+            d = get_device_by_token(device_id, device_token)
+            if not d:
+                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+        else:
+            # Fallback: IP-based identification already done above
+            d = find_device(device_id) if device_id != "unknown" else None
         
         dev_name = (d.get("name", device_id) if d else device_id) if device_id != "unknown" else "Unknown"
         if device_id != "unknown":
@@ -2346,14 +2371,13 @@ async def api_upload_base64(request):
         if not base64_data:
             return web.json_response({"ok": False, "error": "No base64 data provided"}, status=400)
         
-        # Find or register device
-        d = find_device(device_id)
+        # Validate device token
+        device_token = request.headers.get("X-Device-Token", "")
+        d = get_device_by_token(device_id, device_token)
         if not d:
-            device_data = {"id": device_id, "token": secrets.token_urlsafe(32), "active": True, "name": device_id, "model": "", "brand": "", "os": "", "battery": "", "network": "", "location": "", "last_seen": ts(), "created_at": ts(), "auto_registered": True}
-            add_device(device_data)
-            d = device_data
+            return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
         
-        dev_name = d.get("name", device_id) if d else device_id
+        dev_name = d.get("name", device_id)
         update_device(device_id, {"active": True})
         
         # Decode base64
@@ -2973,6 +2997,10 @@ th{color:var(--text2);font-weight:500}
 <div class="notification" id="notif"></div>
 
 <script>
+function esc(s){
+if(s==null)return '';
+return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 let TOKEN=localStorage.getItem('az_token')||'';
 let POLL_INTERVAL=null;
 let DEVICES=[];
@@ -3030,7 +3058,7 @@ document.getElementById('clock').textContent=now.toLocaleString('ar-SA');
 setInterval(updateClock,1000);updateClock();
 
 function populateDeviceSelects(){
-const html=DEVICES.map(d=>`<option value="${d.id}">${d.name||d.id} (${d.active?'🟢':'🔴'})</option>`).join('');
+const html=DEVICES.map(d=>`<option value="${esc(d.id)}">${esc(d.name||d.id)} (${d.active?'🟢':'🔴'})</option>`).join('');
 ['cmdDevice','fileDevice','dataDevice','monDevice','streamDevice'].forEach(id=>{
 const el=document.getElementById(id);if(el)el.innerHTML=html;
 });
@@ -3047,12 +3075,12 @@ loadSettings();
 function renderStats(s){
 const grid=document.getElementById('statsGrid');
 grid.innerHTML=`
-<div class="stat-card"><div class="label">⏱ Uptime</div><div class="value">${s.uptime_formatted||'-'}</div></div>
-<div class="stat-card"><div class="label">📱 Devices</div><div class="value" style="color:var(--blue)">${s.devices_total}</div><div class="sub">🟢 ${s.devices_online} online</div></div>
-<div class="stat-card"><div class="label">📋 Commands</div><div class="value" style="color:var(--yellow)">${s.total_registered_commands}</div><div class="sub">⏳ ${s.commands_pending} pending</div></div>
-<div class="stat-card"><div class="label">📨 Messages</div><div class="value" style="color:var(--purple)">${s.messages_sent}</div></div>
-<div class="stat-card"><div class="label">📡 API</div><div class="value">${s.api_hits}</div><div class="sub">hits</div></div>
-<div class="stat-card"><div class="label">✅ Completed</div><div class="value" style="color:var(--green)">${s.commands_completed}</div></div>`;
+<div class="stat-card"><div class="label">⏱ Uptime</div><div class="value">${esc(s.uptime_formatted||'-')}</div></div>
+<div class="stat-card"><div class="label">📱 Devices</div><div class="value" style="color:var(--blue)">${esc(s.devices_total)}</div><div class="sub">🟢 ${esc(s.devices_online)} online</div></div>
+<div class="stat-card"><div class="label">📋 Commands</div><div class="value" style="color:var(--yellow)">${esc(s.total_registered_commands)}</div><div class="sub">⏳ ${esc(s.commands_pending)} pending</div></div>
+<div class="stat-card"><div class="label">📨 Messages</div><div class="value" style="color:var(--purple)">${esc(s.messages_sent)}</div></div>
+<div class="stat-card"><div class="label">📡 API</div><div class="value">${esc(s.api_hits)}</div><div class="sub">hits</div></div>
+<div class="stat-card"><div class="label">✅ Completed</div><div class="value" style="color:var(--green)">${esc(s.commands_completed)}</div></div>`;
 }
 
 function renderDevices(){
@@ -3064,10 +3092,10 @@ dash.innerHTML='<div class="empty">No devices</div>';
 return;
 }
 const card=d=>`
-<div class="device-card" onclick="showDeviceDetail('${d.id}')">
-<div class="name">${d.active?'🟢':'🔴'} ${d.name||d.id}</div>
-<div class="meta">Model: ${d.model||'-'} | OS: ${d.os||'-'}</div>
-<div class="meta">Battery: ${d.battery||'-'}% | Last: ${d.last_seen||'-'}</div>
+<div class="device-card" onclick="showDeviceDetail('${esc(d.id)}')">
+<div class="name">${d.active?'🟢':'🔴'} ${esc(d.name||d.id)}</div>
+<div class="meta">Model: ${esc(d.model||'-')} | OS: ${esc(d.os||'-')}</div>
+<div class="meta">Battery: ${esc(d.battery||'-')}% | Last: ${esc(d.last_seen||'-')}</div>
 </div>`;
 el.innerHTML=DEVICES.map(card).join('');
 dash.innerHTML=DEVICES.slice(0,4).map(card).join('');
@@ -3081,20 +3109,20 @@ const d=r.device;const cmds=r.commands||[];
 const detail=document.getElementById('deviceDetail');
 detail.style.display='block';
 detail.innerHTML=`
-<h2>📱 ${d.name||d.id}</h2>
+<h2>📱 ${esc(d.name||d.id)}</h2>
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
-<div><span style="color:var(--text2)">ID:</span> <code>${d.id}</code></div>
+<div><span style="color:var(--text2)">ID:</span> <code>${esc(d.id)}</code></div>
 <div><span style="color:var(--text2)">Status:</span> ${d.active?'<span class="badge badge-green">Online</span>':'<span class="badge badge-red">Offline</span>'}</div>
-<div><span style="color:var(--text2)">Model:</span> ${d.model||'-'}</div>
-<div><span style="color:var(--text2)">OS:</span> ${d.os||'-'}</div>
-<div><span style="color:var(--text2)">Battery:</span> ${d.battery||'-'}%</div>
-<div><span style="color:var(--text2)">Network:</span> ${d.network||'-'}</div>
-<div><span style="color:var(--text2)">Location:</span> ${d.location||'-'}</div>
-<div><span style="color:var(--text2)">Last Seen:</span> ${d.last_seen||'-'}</div>
+<div><span style="color:var(--text2)">Model:</span> ${esc(d.model||'-')}</div>
+<div><span style="color:var(--text2)">OS:</span> ${esc(d.os||'-')}</div>
+<div><span style="color:var(--text2)">Battery:</span> ${esc(d.battery||'-')}%</div>
+<div><span style="color:var(--text2)">Network:</span> ${esc(d.network||'-')}</div>
+<div><span style="color:var(--text2)">Location:</span> ${esc(d.location||'-')}</div>
+<div><span style="color:var(--text2)">Last Seen:</span> ${esc(d.last_seen||'-')}</div>
 </div>
 <h3>📋 Recent Commands</h3>
-${cmds.length?cmds.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${c.command}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${c.status}</span></div><div style="color:var(--text2);font-size:12px">${c.created_at} | ID: ${c.id}</div></div>`).join(''):'<div class="empty">No commands</div>'}
-<button class="btn btn-danger btn-sm" onclick="unlinkDevice('${d.id}')" style="margin-top:16px">🗑️ Unlink Device</button>`;
+${cmds.length?cmds.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${esc(c.command)}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${esc(c.status)}</span></div><div style="color:var(--text2);font-size:12px">${esc(c.created_at)} | ID: ${esc(c.id)}</div></div>`).join(''):'<div class="empty">No commands</div>'}
+<button class="btn btn-danger btn-sm" onclick="unlinkDevice('${esc(d.id)}')" style="margin-top:16px">🗑️ Unlink Device</button>`;
 detail.scrollIntoView({behavior:'smooth'});
 }catch(e){}
 }
@@ -3174,7 +3202,7 @@ const el=document.getElementById('cmdLog');
 const dash=document.getElementById('dashCommands');
 const items=(cmds||[]).slice(-20).reverse();
 if(!items.length){el.innerHTML='<div class="empty">No commands</div>';dash.innerHTML='';return;}
-const html=items.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${c.command}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${c.status}</span></div><div style="color:var(--text2);font-size:12px">Device: ${c.device_id} | ${c.created_at}</div></div>`).join('');
+const html=items.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${esc(c.command)}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${esc(c.status)}</span></div><div style="color:var(--text2);font-size:12px">Device: ${esc(c.device_id)} | ${esc(c.created_at)}</div></div>`).join('');
 el.innerHTML=html;
 dash.innerHTML=html;
 }
@@ -3183,7 +3211,7 @@ async function loadEvents(){
 const r=await api('web/events');
 if(r.ok){
 const el=document.getElementById('eventLog');
-el.innerHTML=(r.events||[]).slice(-50).reverse().map(e=>`<div class="log-item"><span class="time">${(e.time||'').slice(0,19)}</span><span class="event">${e.event} ${e.details?JSON.stringify(e.details).slice(0,60):''}</span></div>`).join('')||'<div class="empty">No events</div>';
+el.innerHTML=(r.events||[]).slice(-50).reverse().map(e=>`<div class="log-item"><span class="time">${esc((e.time||'').slice(0,19))}</span><span class="event">${esc(e.event)} ${e.details?esc(JSON.stringify(e.details).slice(0,60)):''}</span></div>`).join('')||'<div class="empty">No events</div>';
 }
 }
 
@@ -3192,9 +3220,9 @@ const r=await api('web/settings');
 if(r.ok){
 const s=r.settings;
 document.getElementById('settingsForm').innerHTML=`
-<label style="display:block;margin-bottom:12px">🔑 Admin Password<input id="setPass" value="${s.admin_password||'admin'}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
-<label style="display:block;margin-bottom:12px">⏱️ Sync Interval (sec)<input id="setSync" type="number" value="${s.sync_interval||300}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
-<label style="display:block;margin-bottom:12px">📍 Location Interval (sec)<input id="setLoc" type="number" value="${s.location_interval||60}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
+<label style="display:block;margin-bottom:12px">🔑 Admin Password<input id="setPass" value="${esc(s.admin_password||'admin')}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
+<label style="display:block;margin-bottom:12px">⏱️ Sync Interval (sec)<input id="setSync" type="number" value="${esc(s.sync_interval||300)}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
+<label style="display:block;margin-bottom:12px">📍 Location Interval (sec)<input id="setLoc" type="number" value="${esc(s.location_interval||60)}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
 <label style="display:block;margin-bottom:12px">🌐 Language<select id="setLang" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"><option value="ar" ${s.language==='ar'?'selected':''}>Arabic</option><option value="en" ${s.language==='en'?'selected':''}>English</option></select></label>
 <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setNotif" ${s.notifications?'checked':''}> 🔔 Notifications</label>
 <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoLoc" ${s.auto_location?'checked':''}> 🗺️ Auto Location</label>
@@ -3735,7 +3763,7 @@ async def session_cleanup_loop():
 # ============================================================================
 
 def create_app():
-    app = web.Application(client_max_size=50*1024*1024)  # 50MB for file uploads
+    app = web.Application(middlewares=[cors_middleware], client_max_size=50*1024*1024)  # 50MB for file uploads
     
     @web.middleware
     async def log_requests(request, handler):
@@ -3795,6 +3823,11 @@ def create_app():
 
             if not device_id or not event_type:
                 return web.json_response({"ok": False, "error": "device_id and event_type required"}, status=400)
+
+            # Validate device token
+            device_token = request.headers.get("X-Device-Token", "")
+            if not get_device_by_token(device_id, device_token):
+                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
 
             # Append to events log
             event_entry = {
@@ -4180,6 +4213,11 @@ def create_app():
             stream_type = body.get("stream_type", "")
             config = body.get("config", {})
 
+            # Validate device token
+            device_token = request.headers.get("X-Device-Token", "")
+            if not get_device_by_token(device_id, device_token):
+                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
+
             update_device(device_id, {"streaming": True, "stream_id": stream_id, "stream_type": stream_type})
             append_event("Stream started", {"device_id": device_id, "stream_id": stream_id, "type": stream_type})
             log.info("Stream started: device=%s stream=%s type=%s", device_id, stream_id, stream_type)
@@ -4198,6 +4236,11 @@ def create_app():
             stream_id = body.get("stream_id", "")
             duration = body.get("duration", 0)
             bytes_sent = body.get("bytes_sent", 0)
+
+            # Validate device token
+            device_token = request.headers.get("X-Device-Token", "")
+            if not get_device_by_token(device_id, device_token):
+                return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
 
             update_device(device_id, {"streaming": False, "stream_id": ""})
 

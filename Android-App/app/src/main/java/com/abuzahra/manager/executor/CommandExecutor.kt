@@ -131,15 +131,18 @@ object CommandExecutor {
             "unblock_number" -> mapOf("message" to "Unblock requires system permission")
 
             // ===== APP MANAGEMENT =====
-            "open_app", "launch_app", "enable_app" -> AppExecutor.openApp(context, params)
-            "close_app", "disable_app", "kill_app" -> AppExecutor.closeApp(context, params)
+            "open_app", "launch_app" -> AppExecutor.openApp(context, params)
+            "enable_app" -> mapOf("error" to "enable_app not implemented: requires device owner or root privileges to enable a disabled app")
+            "close_app", "kill_app" -> AppExecutor.closeApp(context, params)
+            "disable_app" -> mapOf("error" to "disable_app not implemented: requires device owner or root privileges to disable an app")
             "install_app", "update_app" -> AppExecutor.installApp(context, params)
             "uninstall_app" -> AppExecutor.uninstallApp(context, params)
             "block_app" -> AppExecutor.blockApp(context, params)
             "unblock_app" -> AppExecutor.unblockApp(context, params)
             "clear_app_data", "clear_cache", "app_cache" -> AppExecutor.clearAppData(context, params)
             "force_stop_app" -> AppExecutor.forceStopApp(context, params)
-            "app_info", "app_permissions" -> AppExecutor.getAppInfo(context, params)
+            "app_info" -> AppExecutor.getAppInfo(context, params)
+            "app_permissions" -> mapOf("error" to "app_permissions not implemented: use get_app_info for basic package info; full permission listing requires AccessibilityService or shell commands")
             "screen_time", "app_usage" -> AppExecutor.getScreenTime(context)
             "list_blocked" -> mapOf("message" to "No blocked apps (requires accessibility service)")
 

@@ -154,15 +154,26 @@ object EventBuffer {
             }
         }
 
-        // For now, clear immediately (fire-and-forget, non-blocking)
-        bufferQueue.clear()
-        CoroutineScope(Dispatchers.IO).launch {
-            try { deleteBufferFile(ctx) } catch (_: Exception) {}
+        // Only clear the buffer after confirmed successful send.
+        // Launch a coroutine to wait for the result and clear on success.
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val success = deferred.await()
+                if (success) {
+                    bufferQueue.removeAll(events)
+                    try { deleteBufferFile(ctx) } catch (_: Exception) {}
+                    Log.i(TAG, "Buffer cleared after successful flush of ${events.size} events")
+                } else {
+                    Log.w(TAG, "Flush failed, keeping ${events.size} events in buffer for retry")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error while waiting for flush result", e)
+            }
         }
 
         Log.i(TAG, "Flushing ${events.size} events (${eventsString.length} chars)")
         return mapOf(
-            "status" to "sent",
+            "status" to "sending",
             "message" to "Sending ${events.size} buffered events",
             "count" to events.size,
             "size_bytes" to eventsString.length

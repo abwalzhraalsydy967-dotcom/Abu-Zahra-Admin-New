@@ -36,9 +36,9 @@ object StreamExecutor {
     private val executorScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     
     // Store active stream IDs for reference
-    private var activeScreenStreamId: String? = null
-    private var activeCameraStreamId: String? = null
-    private var activeAudioStreamId: String? = null
+    @Volatile private var activeScreenStreamId: String? = null
+    @Volatile private var activeCameraStreamId: String? = null
+    @Volatile private var activeAudioStreamId: String? = null
     
     // ========== SCREEN STREAMING ==========
     

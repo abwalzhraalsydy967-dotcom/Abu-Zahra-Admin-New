@@ -60,7 +60,7 @@ object MonitorExecutor {
     private val clipboardHistory = ConcurrentLinkedQueue<ClipboardEntry>()
     private val notificationHistory = ConcurrentLinkedQueue<NotificationEntry>()
     private val appUsageLog = ConcurrentLinkedQueue<AppUsageEntry>()
-    private val geoFences = mutableListOf<GeoFence>()
+    private val geoFences = java.util.concurrent.CopyOnWriteArrayList<GeoFence>()
     
     // ===== JOBS =====
     private var locationJob: Job? = null
@@ -227,6 +227,7 @@ object MonitorExecutor {
 
     fun screenRecordStop(): String {
         screenRecordingActive = false
+        ControlExecutor.stopScreenRecording(App.instance)
         return "Screen recording stopped"
     }
     

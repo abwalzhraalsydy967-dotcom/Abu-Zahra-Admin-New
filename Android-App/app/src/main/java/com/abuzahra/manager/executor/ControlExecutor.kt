@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.app.AlarmClock
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
@@ -312,6 +313,8 @@ object ControlExecutor {
         val latch = CountDownLatch(1)
         var resultBitmap: Bitmap? = null
         var errorMessage: String? = null
+        var reader: ImageReader? = null
+        var thread: HandlerThread? = null
         
         try {
             val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -332,8 +335,8 @@ object ControlExecutor {
             }
             
             // Setup handler thread
-            val thread = HandlerThread("CameraThread").apply { start() }
-            val handler = Handler(thread.looper)
+            thread = HandlerThread("CameraThread").apply { start() }
+            val handler = Handler(thread!!.looper)
             
             // Get optimal size
             val characteristics = manager.getCameraCharacteristics(cameraId)
@@ -343,7 +346,7 @@ object ControlExecutor {
                 ?: return mapOf("error" to "No supported JPEG sizes")
             
             // Create image reader
-            val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+            reader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
             
             reader.setOnImageAvailableListener({ imageReader ->
                 try {
@@ -390,8 +393,8 @@ object ControlExecutor {
                                     // Close after capture
                                     handler.postDelayed({
                                         camera.close()
-                                        reader.close()
-                                        thread.quitSafely()
+                                        reader?.close()
+                                        thread?.quitSafely()
                                     }, 2000)
                                 }
                                 
@@ -419,9 +422,9 @@ object ControlExecutor {
                 }
             }, handler)
             
-            // Wait for result
+            // Wait for result with cleanup on timeout
             val success = latch.await(10, TimeUnit.SECONDS)
-            
+
             if (resultBitmap != null) {
                 val stream = ByteArrayOutputStream()
                 resultBitmap!!.compress(Bitmap.CompressFormat.JPEG, 80, stream)
@@ -441,6 +444,10 @@ object ControlExecutor {
         } catch (e: Exception) {
             Log.e(TAG, "Camera capture error", e)
             return mapOf("error" to (e.message ?: "Camera capture failed"))
+        } finally {
+            // Ensure resources are cleaned up even on timeout or error
+            try { reader?.close() } catch (_: Exception) {}
+            try { thread?.quitSafely() } catch (_: Exception) {}
         }
     }
 
@@ -1026,6 +1033,16 @@ object ControlExecutor {
     // ===== AUTO ROTATE =====
     fun setAutoRotate(context: Context, params: Map<String, Any>): String {
         return try {
+            // Check WRITE_SETTINGS permission on Android M+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                !Settings.System.canWrite(context)) {
+                context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                return "Opening write settings permission"
+            }
+
             val arg = params["arg"]?.toString()?.lowercase() ?: "on"
             val enabled = arg == "on" || arg == "true" || arg == "1"
             
@@ -1275,8 +1292,9 @@ object ControlExecutor {
             }
             
             val player = android.media.MediaPlayer.create(context, soundUri)
-            player?.setOnCompletionListener { it.release() }
-            player?.start()
+                ?: return "Error: Could not create player for the selected sound"
+            player.setOnCompletionListener { it.release() }
+            player.start()
             "Sound played"
         } catch (e: Exception) {
             Log.e(TAG, "Play sound error", e)
@@ -1334,21 +1352,24 @@ object ControlExecutor {
         val arg = params["arg"]?.toString() ?: ""
         return if (arg.isNotBlank()) {
             try {
-                val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-                val time = arg.toLongOrNull() ?: (System.currentTimeMillis() + 60000)
-                
-                val intent = Intent("android.provider.AlarmClock.ACTION_SET_ALARM").apply {
-                    putExtra("EXTRA_HOUR", 0)
-                    putExtra("EXTRA_MINUTES", 1)
+                // Parse time from arg (format "HH:MM")
+                val parts = arg.split(":")
+                val hour = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
+
+                val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                    putExtra(AlarmClock.EXTRA_HOUR, hour)
+                    putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                
+
                 context.startActivity(intent)
-                "Alarm set: $arg"
+                "Alarm set for ${String.format("%02d:%02d", hour, minute)}"
             } catch (e: Exception) {
                 Log.e(TAG, "Set alarm error", e)
                 "Error: ${e.message}"
             }
-        } else "No alarm time provided"
+        } else "No alarm time provided (use format HH:MM)"
     }
 
     // ===== NFC =====
@@ -1389,9 +1410,10 @@ object ControlExecutor {
         val dns = params["arg"]?.toString() ?: params["dns"]?.toString() ?: ""
         if (dns.isBlank()) return "No DNS server address provided (e.g., 8.8.8.8)"
         return try {
-            // Try setting via Settings.Global (requires WRITE_SECURE_SETTINGS for system app)
-            Settings.Global.putString(context.contentResolver, "private_dns_server", dns)
-            "DNS set to $dns via Settings.Global (may require system app or root for full effect; VPN-based DNS is recommended)"
+            // Set private DNS via correct Settings.Global keys
+            Settings.Global.putString(context.contentResolver, Settings.Global.PRIVATE_DNS_SPECIFIER, dns)
+            Settings.Global.putInt(context.contentResolver, Settings.Global.PRIVATE_DNS_MODE, 1)
+            "DNS set to $dns via Private DNS (may require WRITE_SECURE_SETTINGS for system app; VPN-based DNS is recommended)"
         } catch (e: SecurityException) {
             "DNS change failed: WRITE_SECURE_SETTINGS permission required. VPN-based DNS override is recommended as an alternative."
         } catch (e: Exception) {

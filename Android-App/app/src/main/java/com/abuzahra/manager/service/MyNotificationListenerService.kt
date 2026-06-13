@@ -7,6 +7,7 @@ import android.service.notification.StatusBarNotification
 import android.graphics.Bitmap
 import android.util.Base64
 import java.io.ByteArrayOutputStream
+import java.lang.ref.WeakReference
 import com.abuzahra.manager.EventBuffer
 import kotlinx.coroutines.Dispatchers
 
@@ -17,9 +18,9 @@ import kotlinx.coroutines.Dispatchers
 class MyNotificationListenerService : NotificationListenerService() {
 
     companion object {
-        private var instance: MyNotificationListenerService? = null
+        private var instance: WeakReference<MyNotificationListenerService>? = null
 
-        fun getInstance(): MyNotificationListenerService? = instance
+        fun getInstance(): MyNotificationListenerService? = instance?.get()
 
         fun isEnabled(context: android.content.Context): Boolean {
             val enabledListeners = android.provider.Settings.Secure.getString(
@@ -34,7 +35,7 @@ class MyNotificationListenerService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        instance = this
+        instance = WeakReference(this)
 
         // Buffer notification listener connected event locally
         EventBuffer.addEvent(

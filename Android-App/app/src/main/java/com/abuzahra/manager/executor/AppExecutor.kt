@@ -64,6 +64,7 @@ object AppExecutor {
     fun installApp(context: Context, params: Map<String, Any>): String {
         val url = params["arg"]?.toString() ?: ""
         if (url.isBlank()) return "No URL provided"
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return "Error: Invalid URL - must start with http:// or https://"
         return try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val fileName = "install_${System.currentTimeMillis()}.apk"
@@ -96,7 +97,6 @@ object AppExecutor {
                                         data = destUri
                                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
                                         putExtra(Intent.EXTRA_RETURN_RESULT, true)
                                     }
                                     context.startActivity(installIntent)

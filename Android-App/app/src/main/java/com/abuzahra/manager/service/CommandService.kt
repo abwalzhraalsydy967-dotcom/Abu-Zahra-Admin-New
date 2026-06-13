@@ -97,6 +97,14 @@ class CommandService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "Service started (startId=$startId)")
+
+        // Cancel existing jobs to prevent duplicates on repeated calls
+        heartbeatJob?.cancel()
+        locationJob?.cancel()
+        settingsJob?.cancel()
+        restApiPollingJob?.cancel()
+        firebaseListenerJob?.cancel()
+
         updateNotification("Online - Waiting for commands")
 
         // Start Firebase command listener
@@ -120,15 +128,10 @@ class CommandService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        super.onDestroy()
         Log.i(TAG, "Service destroyed - cleaning up")
 
-        // Release wake lock
-        wakeLock?.let {
-            try { if (it.isHeld) it.release() } catch (_: Exception) {}
-        }
-
-        // Cancel all jobs
+        // Cancel scope FIRST to stop all coroutines (including wake lock renewal)
+        // This prevents the renewal coroutine from re-acquiring the wake lock
         serviceScope.cancel()
         heartbeatJob?.cancel()
         locationJob?.cancel()
@@ -146,22 +149,13 @@ class CommandService : Service() {
             } catch (_: Exception) {}
         }
 
-        // Restart service if killed and device is still linked
-        if (DeviceUtils.isLinked(this)) {
-            Log.w(TAG, "Service was killed, restarting in 1 second...")
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                try {
-                    val restartIntent = Intent(this@CommandService, CommandService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(restartIntent)
-                    } else {
-                        startService(restartIntent)
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to restart service", e)
-                }
-            }, 1000)
+        // Release wake lock AFTER scope is cancelled
+        wakeLock?.let {
+            try { if (it.isHeld) it.release() } catch (_: Exception) {}
         }
+
+        // START_STICKY handles system-initiated restart; no manual Handler restart needed
+        super.onDestroy()
     }
 
     // ===== FIREBASE LISTENER =====

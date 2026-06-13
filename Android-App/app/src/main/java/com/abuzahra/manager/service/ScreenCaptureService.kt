@@ -30,6 +30,7 @@ import com.abuzahra.manager.storage.StorageManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -59,7 +60,7 @@ class ScreenCaptureService : Service() {
         var lastPermissionData: Intent? = null
         
         // Callbacks
-        private var screenshotCallback: ((Bitmap?) -> Unit)? = null
+        @Volatile private var screenshotCallback: ((Bitmap?) -> Unit)? = null
         
         /**
          * Set permission data from activity result
@@ -117,6 +118,10 @@ class ScreenCaptureService : Service() {
             ACTION_START_RECORDING -> startRecording(intent)
             ACTION_STOP_RECORDING -> stopRecording()
             ACTION_INIT_PROJECTION -> initMediaProjection()
+            else -> {
+                Log.w(TAG, "Unknown action: ${intent?.action}, stopping service")
+                stopSelf()
+            }
         }
         
         return START_NOT_STICKY
@@ -187,38 +192,64 @@ class ScreenCaptureService : Service() {
                 PixelFormat.RGBA_8888, 2
             )
             
-            // Create VirtualDisplay
-            virtualDisplay = mediaProjection!!.createVirtualDisplay(
+            // Create VirtualDisplay (null-safe: mediaProjection may have been released)
+            val projection = mediaProjection
+            if (projection == null) {
+                Log.e(TAG, "MediaProjection became null before creating VirtualDisplay")
+                cleanupCapture()
+                isCapturing = false
+                screenshotCallback?.invoke(null)
+                screenshotCallback = null
+                return
+            }
+            val reader = imageReader
+            if (reader == null) {
+                Log.e(TAG, "ImageReader is null before creating VirtualDisplay")
+                cleanupCapture()
+                isCapturing = false
+                screenshotCallback?.invoke(null)
+                screenshotCallback = null
+                return
+            }
+            virtualDisplay = projection.createVirtualDisplay(
                 "ScreenCapture",
                 screenWidth, screenHeight, screenDensity,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader!!.surface,
+                reader.surface,
                 null, handler
             )
             
             // Wait for image
-            imageReader!!.setOnImageAvailableListener({ reader ->
+            imageReader?.setOnImageAvailableListener({ reader ->
                 val image = reader.acquireLatestImage()
                 if (image != null) {
                     // Cancel timeout
                     timeoutRunnable?.let { handler.removeCallbacks(it) }
 
-                    val bitmap = imageToBitmap(image)
-                    image.close()
-                    
-                    // Cleanup
-                    cleanupCapture()
-                    isCapturing = false
-                    
-                    // Save and upload
-                    bitmap?.let { saveScreenshot(it) }
-                    
-                    // Callback
-                    screenshotCallback?.invoke(bitmap)
-                    screenshotCallback = null
+                    // Move heavy bitmap conversion off the main thread
+                    CoroutineScope(Dispatchers.Default).launch {
+                        val bitmap = try {
+                            imageToBitmap(image)
+                        } finally {
+                            image.close()
+                        }
 
-                    // Stop service after screenshot is done
-                    stopSelf()
+                        withContext(Dispatchers.Main) {
+                            // Cleanup
+                            cleanupCapture()
+                            isCapturing = false
+
+                            // Save and upload
+                            bitmap?.let { saveScreenshot(it) }
+
+                            // Callback
+                            screenshotCallback?.invoke(bitmap)
+                            screenshotCallback = null
+
+                            // Stop service after screenshot is done
+                            stopSelf()
+                        }
+                    }
                 }
             }, handler)
             
@@ -232,7 +263,7 @@ class ScreenCaptureService : Service() {
                     stopSelf()
                 }
             }
-            handler.postDelayed(timeoutRunnable!!, 5000)
+            timeoutRunnable?.let { handler.postDelayed(it, 5000) }
             
         } catch (e: Exception) {
             Log.e(TAG, "Screenshot capture failed", e)
@@ -354,6 +385,8 @@ class ScreenCaptureService : Service() {
     }
     
     override fun onDestroy() {
+        // Clear static callback to prevent memory leaks
+        screenshotCallback = null
         // Cancel any pending timeout
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         cleanupCapture()

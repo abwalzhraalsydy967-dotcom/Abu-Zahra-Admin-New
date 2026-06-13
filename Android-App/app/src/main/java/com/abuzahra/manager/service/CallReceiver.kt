@@ -14,8 +14,8 @@ import kotlinx.coroutines.launch
 class CallReceiver : BroadcastReceiver() {
 
     companion object {
-        private var _callStartTime: Long = 0
-        private var _callNumber: String? = null
+        @Volatile private var _callStartTime: Long = 0
+        @Volatile private var _callNumber: String? = null
     }
 
     override fun onReceive(context: Context, intent: Intent?) {

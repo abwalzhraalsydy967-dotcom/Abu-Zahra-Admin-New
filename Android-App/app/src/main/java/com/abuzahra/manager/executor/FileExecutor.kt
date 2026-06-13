@@ -17,11 +17,15 @@ object FileExecutor {
         if (path.contains("..")) return "Path traversal detected"
         // Only allow paths under /storage/emulated/0/ or app-specific dirs
         val normalized = File(path).canonicalPath
-        val allowedRoots = listOf(
+        val allowedRoots = mutableListOf(
             "/storage/emulated/0/",
-            Environment.getExternalStorageDirectory().canonicalPath,
-            com.abuzahra.manager.App.instance.getExternalFilesDir(null)?.canonicalPath ?: ""
+            Environment.getExternalStorageDirectory().canonicalPath
         )
+        // Only add app external dir if it's non-null and non-empty
+        val appExternalDir = com.abuzahra.manager.App.instance.getExternalFilesDir(null)?.canonicalPath
+        if (!appExternalDir.isNullOrBlank()) {
+            allowedRoots.add(appExternalDir)
+        }
         val isAllowed = allowedRoots.any { normalized.startsWith(it) }
         if (!isAllowed) return "Access denied: path outside allowed directories"
         return null // null means valid
@@ -48,6 +52,20 @@ object FileExecutor {
             arg.contains("whatsapp", ignoreCase = true) -> "/storage/emulated/0/WhatsApp"
             arg.contains("telegram", ignoreCase = true) -> "/storage/emulated/0/Telegram"
             else -> arg.ifBlank { "/storage/emulated/0/" }
+        }
+
+        // Validate custom paths (predefined dirs above are safe)
+        val isPredefined = arg.contains("download", ignoreCase = true) ||
+            arg.contains("dcim", ignoreCase = true) ||
+            arg.contains("music", ignoreCase = true) ||
+            arg.contains("video", ignoreCase = true) ||
+            arg.contains("document", ignoreCase = true) ||
+            arg.contains("whatsapp", ignoreCase = true) ||
+            arg.contains("telegram", ignoreCase = true) ||
+            arg.isBlank()
+        if (!isPredefined) {
+            val pathError = validatePath(dirPath)
+            if (pathError != null) return listOf(mapOf("error" to pathError as Any))
         }
 
         val list = mutableListOf<Map<String, Any>>()

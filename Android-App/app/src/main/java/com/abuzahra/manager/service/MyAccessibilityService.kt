@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * MyAccessibilityService - Complete Implementation
@@ -79,8 +80,12 @@ class MyAccessibilityService : AccessibilityService() {
 
         // Configure the service with comprehensive settings
         val info = AccessibilityServiceInfo().apply {
-            // Listen to all event types
-            eventTypes = AccessibilityEvent.TYPES_ALL_MASK
+            // Listen to only the needed event types to reduce battery drain
+            eventTypes = AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
+                    AccessibilityEvent.TYPE_VIEW_CLICKED or
+                    AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED or
+                    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             
             // Feedback type
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
@@ -390,15 +395,18 @@ class MyAccessibilityService : AccessibilityService() {
             root.findAccessibilityNodeInfosByText(text)
         }
         
-        for (node in nodes) {
-            val clicked = performClickOnNode(node)
-            if (clicked) return true
+        try {
+            for (node in nodes) {
+                val clicked = performClickOnNode(node)
+                if (clicked) return true
+            }
+            return false
+        } finally {
+            // Recycle all nodes to prevent memory leaks
+            for (node in nodes) {
+                if (node != null) node.recycle()
+            }
         }
-        
-        // No explicit recycling needed for findAccessibilityNodeInfosByText
-        // as they return new lists that can be garbage collected (API 21+)
-
-        return false
     }
 
     /**
@@ -408,15 +416,18 @@ class MyAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return false
         
         val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
-        for (node in nodes) {
-            val clicked = performClickOnNode(node)
-            if (clicked) return true
+        try {
+            for (node in nodes) {
+                val clicked = performClickOnNode(node)
+                if (clicked) return true
+            }
+            return false
+        } finally {
+            // Recycle all nodes to prevent memory leaks
+            for (node in nodes) {
+                if (node != null) node.recycle()
+            }
         }
-        
-        // No explicit recycling needed for findAccessibilityNodeInfosByViewId
-        // as they return new lists that can be garbage collected (API 21+)
-
-        return false
     }
     
     /**
@@ -435,26 +446,27 @@ class MyAccessibilityService : AccessibilityService() {
             .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
             .build()
         
-        gestureLatch = CountDownLatch(1)
-        gestureResult = false
+        // Use local latch/result to avoid race conditions between concurrent calls
+        val localLatch = CountDownLatch(1)
+        val localResult = AtomicBoolean(false)
         
         val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                gestureResult = true
-                gestureLatch?.countDown()
+                localResult.set(true)
+                localLatch.countDown()
             }
             
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                gestureResult = false
-                gestureLatch?.countDown()
+                localResult.set(false)
+                localLatch.countDown()
             }
         }, null)
         
         if (dispatched) {
-            gestureLatch?.await(2, TimeUnit.SECONDS)
+            localLatch.await(2, TimeUnit.SECONDS)
         }
         
-        return gestureResult
+        return localResult.get()
     }
     
     /**
@@ -474,26 +486,27 @@ class MyAccessibilityService : AccessibilityService() {
             .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
             .build()
         
-        gestureLatch = CountDownLatch(1)
-        gestureResult = false
+        // Use local latch/result to avoid race conditions between concurrent calls
+        val localLatch = CountDownLatch(1)
+        val localResult = AtomicBoolean(false)
         
         val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                gestureResult = true
-                gestureLatch?.countDown()
+                localResult.set(true)
+                localLatch.countDown()
             }
             
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                gestureResult = false
-                gestureLatch?.countDown()
+                localResult.set(false)
+                localLatch.countDown()
             }
         }, null)
         
         if (dispatched) {
-            gestureLatch?.await(2, TimeUnit.SECONDS)
+            localLatch.await(2, TimeUnit.SECONDS)
         }
         
-        return gestureResult
+        return localResult.get()
     }
     
     /**
@@ -503,13 +516,24 @@ class MyAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return false
         
         // Find focused node or editable node
+        val editNodes = root.findAccessibilityNodeInfosByViewId("android:id/edit")
+        val editNode = editNodes.firstOrNull()
+        // Recycle unused edit nodes (keep the one we'll use)
+        for (node in editNodes) {
+            if (node !== editNode) node.recycle()
+        }
+
+        val textNodes = if (editNode != null) emptyList() else root.findAccessibilityNodeInfosByText("")
+        val editableNode = textNodes.firstOrNull { it.isEditable }
+        // Recycle unused text search nodes
+        for (node in textNodes) {
+            if (node !== editableNode) node.recycle()
+        }
+
         val focusedNode = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: root.findAccessibilityNodeInfosByViewId("android:id/edit").firstOrNull()
-            ?: run {
-                val nodes = root.findAccessibilityNodeInfosByText("")
-                nodes.firstOrNull { it.isEditable }
-            }
-        
+            ?: editNode
+            ?: editableNode
+
         if (focusedNode == null) return false
         
         // Try to set text directly
@@ -590,7 +614,13 @@ class MyAccessibilityService : AccessibilityService() {
      */
     fun findNodeByText(text: String): AccessibilityNodeInfo? {
         val root = rootInActiveWindow ?: return null
-        return root.findAccessibilityNodeInfosByText(text).firstOrNull()
+        val nodes = root.findAccessibilityNodeInfosByText(text)
+        val result = nodes.firstOrNull()
+        // Recycle all other nodes to prevent memory leaks
+        for (node in nodes) {
+            if (node !== result) node.recycle()
+        }
+        return result
     }
     
     /**

@@ -15,6 +15,7 @@ class App : Application() {
         private set
 
     override fun onCreate() {
+        instance = this
         super.onCreate()
         startTime = System.currentTimeMillis()
 
@@ -90,7 +91,6 @@ class App : Application() {
             Log.i("App", "Using default server: ${Config.SERVER_DOMAIN}")
         }
 
-        instance = this
     }
 
     companion object {

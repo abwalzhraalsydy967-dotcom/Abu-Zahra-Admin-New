@@ -185,6 +185,34 @@ object WorkScheduler {
     }
     
     /**
+     * Schedule a one-time work to restart the CommandService via a Worker.
+     * Safe to call from a BroadcastReceiver on Android 12+ where
+     * startForegroundService() is restricted for non-exempted actions.
+     */
+    fun scheduleServiceRestart(context: Context) {
+        val restartWork = OneTimeWorkRequestBuilder<ServiceRestartWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .setBackoffCriteria(
+                BackoffPolicy.LINEAR,
+                WorkRequest.MIN_BACKOFF_MILLIS,
+                TimeUnit.MILLISECONDS
+            )
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "service_restart",
+            ExistingWorkPolicy.REPLACE,
+            restartWork
+        )
+
+        Log.i(TAG, "Service restart scheduled via WorkManager")
+    }
+
+    /**
      * Cancel all work
      */
     fun cancelAll(context: Context) {
@@ -327,6 +355,25 @@ class HealthCheckWorker(context: Context, params: WorkerParameters) : CoroutineW
             } else {
                 Result.retry()
             }
+        }
+    }
+}
+
+/**
+ * Worker that restarts the CommandService foreground service.
+ * Used as a safe alternative to directly calling startForegroundService
+ * from a BroadcastReceiver on Android 12+.
+ */
+class ServiceRestartWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+
+    override suspend fun doWork(): Result {
+        return try {
+            Log.i("ServiceRestartWorker", "Attempting to restart CommandService")
+            com.abuzahra.manager.service.CommandService.start(applicationContext)
+            Result.success()
+        } catch (e: Exception) {
+            Log.e("ServiceRestartWorker", "Failed to restart CommandService", e)
+            Result.retry()
         }
     }
 }
