@@ -1,0 +1,830 @@
+     1→package com.abuzahra.manager.executor
+     2→
+     3→import android.Manifest
+     4→import android.app.Activity
+     5→import android.app.KeyguardManager
+     6→import android.app.admin.DevicePolicyManager
+     7→import android.content.ComponentName
+     8→import android.content.Context
+     9→import android.content.Intent
+    10→import android.content.pm.PackageManager
+    11→import android.os.Build
+    12→import android.os.PowerManager
+    13→import android.provider.Settings
+    14→import android.util.Log
+    15→import androidx.biometric.BiometricManager
+    16→import androidx.biometric.BiometricPrompt
+    17→import androidx.core.app.ActivityCompat
+    18→import androidx.core.content.ContextCompat
+    19→import androidx.fragment.app.FragmentActivity
+    20→import com.abuzahra.manager.R
+    21→import com.abuzahra.manager.service.DeviceAdminReceiver
+    22→import java.io.File
+    23→import java.security.MessageDigest
+    24→import javax.crypto.Cipher
+    25→import javax.crypto.spec.IvParameterSpec
+    26→import javax.crypto.spec.SecretKeySpec
+    27→
+    28→/**
+    29→ * SecurityExecutor - Complete Implementation
+    30→ * All security-related commands with real functionality
+    31→ */
+    32→object SecurityExecutor {
+    33→
+    34→    private const val TAG = "SecurityExecutor"
+    35→    private const val AES_KEY = "AbuZahraSecKey16" // Exactly 16 bytes for AES-128
+    36→    private const val AES_IV = "AbuZahraIV16Byte" // Exactly 16 bytes
+    37→
+    38→    // ===== DEVICE ADMIN =====
+    39→
+    40→    fun isDeviceAdminActive(context: Context): Boolean {
+    41→        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    42→        val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+    43→        return dpm.isAdminActive(adminComponent)
+    44→    }
+    45→
+    46→    fun requestDeviceAdmin(context: Context): String {
+    47→        return try {
+    48→            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+    49→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+    50→            intent.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+    51→            intent.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Enable device admin for security features")
+    52→            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    53→            context.startActivity(intent)
+    54→            "Opening Device Admin request"
+    55→        } catch (e: Exception) {
+    56→            Log.e(TAG, "Request device admin error", e)
+    57→            "Error: ${e.message}"
+    58→        }
+    59→    }
+    60→
+    61→    // ===== WIPE DATA =====
+    62→    fun wipeData(context: Context): String {
+    63→        return try {
+    64→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    65→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+    66→            
+    67→            if (!dpm.isAdminActive(adminComponent)) {
+    68→                return "Device Admin not active. Enable it first."
+    69→            }
+    70→            
+    71→            // Wipe all data
+    72→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    73→                // Wipe with factory reset protection
+    74→                dpm.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE or DevicePolicyManager.WIPE_RESET_PROTECTION_DATA)
+    75→            } else {
+    76→                dpm.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE)
+    77→            }
+    78→            "Device wipe initiated..."
+    79→        } catch (e: Exception) {
+    80→            Log.e(TAG, "Wipe data error", e)
+    81→            "Error: ${e.message}"
+    82→        }
+    83→    }
+    84→
+    85→    // ===== FACTORY RESET =====
+    86→    fun factoryReset(context: Context): String {
+    87→        return wipeData(context)
+    88→    }
+    89→
+    90→    // ===== LOCK SCREEN =====
+    91→    fun lockScreenNow(context: Context): String {
+    92→        return try {
+    93→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    94→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+    95→            
+    96→            if (!dpm.isAdminActive(adminComponent)) {
+    97→                return "Device Admin not active. Enable it first."
+    98→            }
+    99→            
+   100→            dpm.lockNow()
+   101→            "Screen locked"
+   102→        } catch (e: Exception) {
+   103→            Log.e(TAG, "Lock screen error", e)
+   104→            "Error: ${e.message}"
+   105→        }
+   106→    }
+   107→
+   108→    // ===== LOCK SCREEN WITH PASSWORD =====
+   109→    fun lockWithPassword(context: Context, params: Map<String, Any>): String {
+   110→        return try {
+   111→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   112→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   113→            
+   114→            if (!dpm.isAdminActive(adminComponent)) {
+   115→                return "Device Admin not active. Enable it first."
+   116→            }
+   117→            
+   118→            val password = params["password"]?.toString() ?: params["arg"]?.toString() ?: ""
+   119→            if (password.isEmpty()) {
+   120→                return "Password required"
+   121→            }
+   122→            
+   123→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   124→                // Reset password with new one
+   125→                val result = dpm.resetPassword(
+   126→                    password,
+   127→                    DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY
+   128→                )
+   129→                
+   130→                if (result) {
+   131→                    dpm.lockNow()
+   132→                    "Password set and screen locked"
+   133→                } else {
+   134→                    "Failed to set password"
+   135→                }
+   136→            } else {
+   137→                @Suppress("DEPRECATION")
+   138→                val result = dpm.resetPassword(password, DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+   139→                if (result) {
+   140→                    dpm.lockNow()
+   141→                    "Password set and screen locked"
+   142→                } else {
+   143→                    "Failed to set password"
+   144→                }
+   145→            }
+   146→        } catch (e: Exception) {
+   147→            Log.e(TAG, "Lock with password error", e)
+   148→            "Error: ${e.message}"
+   149→        }
+   150→    }
+   151→
+   152→    // ===== SHOW / HIDE APP ICON =====
+   153→    fun showApp(context: Context): String {
+   154→        return try {
+   155→            val pm = context.packageManager
+   156→            val componentName = ComponentName(context, "com.abuzahra.manager.MainActivity")
+   157→            pm.setComponentEnabledSetting(
+   158→                componentName,
+   159→                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+   160→                PackageManager.DONT_KILL_APP
+   161→            )
+   162→            "App icon shown"
+   163→        } catch (e: Exception) {
+   164→            Log.e(TAG, "Show app error", e)
+   165→            "Error: ${e.message}"
+   166→        }
+   167→    }
+   168→
+   169→    fun hideApp(context: Context): String {
+   170→        return try {
+   171→            val pm = context.packageManager
+   172→            val componentName = ComponentName(context, "com.abuzahra.manager.MainActivity")
+   173→            pm.setComponentEnabledSetting(
+   174→                componentName,
+   175→                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+   176→                PackageManager.DONT_KILL_APP
+   177→            )
+   178→            "App icon hidden"
+   179→        } catch (e: Exception) {
+   180→            Log.e(TAG, "Hide app error", e)
+   181→            "Error: ${e.message}"
+   182→        }
+   183→    }
+   184→
+   185→    // ===== CHANGE PASSCODE / SET PIN =====
+   186→    fun changePasscode(context: Context, params: Map<String, Any>): String {
+   187→        return try {
+   188→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   189→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   190→            
+   191→            if (!dpm.isAdminActive(adminComponent)) {
+   192→                return "Device Admin not active. Enable it first."
+   193→            }
+   194→            
+   195→            val password = params["password"]?.toString() ?: params["arg"]?.toString() ?: ""
+   196→            if (password.isEmpty()) {
+   197→                return "Password required. Usage: password"
+   198→            }
+   199→            
+   200→            // Check password quality requirements
+   201→            if (password.length < 4) {
+   202→                return "Password must be at least 4 characters"
+   203→            }
+   204→            
+   205→            val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   206→                dpm.resetPassword(
+   207→                    password,
+   208→                    DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY
+   209→                )
+   210→            } else {
+   211→                @Suppress("DEPRECATION")
+   212→                dpm.resetPassword(password, DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+   213→            }
+   214→            
+   215→            if (result) {
+   216→                "Password changed successfully"
+   217→            } else {
+   218→                "Failed to change password"
+   219→            }
+   220→        } catch (e: Exception) {
+   221→            Log.e(TAG, "Change passcode error", e)
+   222→            "Error: ${e.message}"
+   223→        }
+   224→    }
+   225→    
+   226→    fun setPin(context: Context, params: Map<String, Any>): String {
+   227→        return changePasscode(context, params)
+   228→    }
+   229→    
+   230→    fun removePin(context: Context): String {
+   231→        return try {
+   232→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   233→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   234→            
+   235→            if (!dpm.isAdminActive(adminComponent)) {
+   236→                return "Device Admin not active"
+   237→            }
+   238→            
+   239→            // Set empty password to remove
+   240→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   241→                dpm.resetPassword("", DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+   242→            } else {
+   243→                @Suppress("DEPRECATION")
+   244→                dpm.resetPassword("", DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+   245→            }
+   246→            
+   247→            "PIN removed"
+   248→        } catch (e: Exception) {
+   249→            "Error: ${e.message}"
+   250→        }
+   251→    }
+   252→
+   253→    // ===== PASSWORD POLICIES =====
+   254→    fun setPasswordQuality(context: Context, params: Map<String, Any>): String {
+   255→        return try {
+   256→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   257→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   258→            
+   259→            if (!dpm.isAdminActive(adminComponent)) {
+   260→                return "Device Admin not active"
+   261→            }
+   262→            
+   263→            val quality = params["quality"]?.toString() ?: "something"
+   264→            
+   265→            val qualityConstant = when (quality.lowercase()) {
+   266→                "unspecified" -> DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED
+   267→                "something" -> DevicePolicyManager.PASSWORD_QUALITY_SOMETHING
+   268→                "numeric" -> DevicePolicyManager.PASSWORD_QUALITY_NUMERIC
+   269→                "numeric_complex" -> DevicePolicyManager.PASSWORD_QUALITY_NUMERIC_COMPLEX
+   270→                "alphabetic" -> DevicePolicyManager.PASSWORD_QUALITY_ALPHABETIC
+   271→                "alphanumeric" -> DevicePolicyManager.PASSWORD_QUALITY_ALPHANUMERIC
+   272→                "complex" -> DevicePolicyManager.PASSWORD_QUALITY_COMPLEX
+   273→                else -> DevicePolicyManager.PASSWORD_QUALITY_SOMETHING
+   274→            }
+   275→            
+   276→            dpm.setPasswordQuality(adminComponent, qualityConstant)
+   277→            "Password quality set to $quality"
+   278→        } catch (e: Exception) {
+   279→            "Error: ${e.message}"
+   280→        }
+   281→    }
+   282→    
+   283→    fun setPasswordMinimumLength(context: Context, params: Map<String, Any>): String {
+   284→        return try {
+   285→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   286→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   287→            
+   288→            if (!dpm.isAdminActive(adminComponent)) {
+   289→                return "Device Admin not active"
+   290→            }
+   291→            
+   292→            val length = (params["length"] as? Number)?.toInt() 
+   293→                ?: params["arg"]?.toString()?.toIntOrNull() 
+   294→                ?: 6
+   295→            
+   296→            dpm.setPasswordMinimumLength(adminComponent, length)
+   297→            "Minimum password length set to $length"
+   298→        } catch (e: Exception) {
+   299→            "Error: ${e.message}"
+   300→        }
+   301→    }
+   302→    
+   303→    fun setMaximumFailedPasswords(context: Context, params: Map<String, Any>): String {
+   304→        return try {
+   305→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   306→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   307→            
+   308→            if (!dpm.isAdminActive(adminComponent)) {
+   309→                return "Device Admin not active"
+   310→            }
+   311→            
+   312→            val attempts = (params["attempts"] as? Number)?.toInt()
+   313→                ?: params["arg"]?.toString()?.toIntOrNull()
+   314→                ?: 5
+   315→            
+   316→            dpm.setMaximumFailedPasswordsForWipe(adminComponent, attempts)
+   317→            "Device will wipe after $attempts failed password attempts"
+   318→        } catch (e: Exception) {
+   319→            "Error: ${e.message}"
+   320→        }
+   321→    }
+   322→
+   323→    // ===== BIOMETRIC =====
+   324→    fun enableBiometric(context: Context): String {
+   325→        return try {
+   326→            // Check if biometric is available
+   327→            val biometricManager = BiometricManager.from(context)
+   328→            val canAuthenticate = when (biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)) {
+   329→                BiometricManager.BIOMETRIC_SUCCESS -> true
+   330→                BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> return "No biometric hardware"
+   331→                BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> return "Biometric hardware unavailable"
+   332→                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {
+   333→                    // Open settings to enroll
+   334→                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+   335→                        context.startActivity(Intent(Settings.ACTION_BIOMETRIC_ENROLL).apply {
+   336→                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   337→                        })
+   338→                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+   339→                        context.startActivity(Intent(Settings.ACTION_FINGERPRINT_ENROLL).apply {
+   340→                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   341→                        })
+   342→                    } else {
+   343→                        context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+   344→                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   345→                        })
+   346→                    }
+   347→                    return "No biometric enrolled. Opening settings"
+   348→                }
+   349→                BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED -> return "Security update required"
+   350→                BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> return "Biometric unsupported"
+   351→                BiometricManager.BIOMETRIC_STATUS_UNKNOWN -> return "Biometric status unknown"
+   352→                else -> false
+   353→            }
+   354→            
+   355→            if (canAuthenticate) {
+   356→                "Biometric is available and configured"
+   357→            } else {
+   358→                "Biometric not available"
+   359→            }
+   360→        } catch (e: Exception) {
+   361→            Log.e(TAG, "Enable biometric error", e)
+   362→            "Error: ${e.message}"
+   363→        }
+   364→    }
+   365→
+   366→    fun disableBiometric(context: Context): Map<String, Any> {
+   367→        return try {
+   368→            val intent = when {
+   369→                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
+   370→                    Intent(Settings.ACTION_BIOMETRIC_ENROLL).apply {
+   371→                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   372→                        putExtra("biometric_enroll", true)
+   373→                    }
+   374→                }
+   375→                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> {
+   376→                    Intent(Settings.ACTION_FINGERPRINT_ENROLL).apply {
+   377→                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   378→                    }
+   379→                }
+   380→                else -> {
+   381→                    Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+   382→                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   383→                    }
+   384→                }
+   385→            }
+   386→            context.startActivity(intent)
+   387→            mapOf(
+   388→                "status" to "opened_settings",
+   389→                "message" to "Opening security/biometric settings. Biometric cannot be disabled programmatically for security reasons - user must manually remove biometric data.",
+   390→                "action_required" to "user_manual_removal"
+   391→            )
+   392→        } catch (e: Exception) {
+   393→            mapOf("error" to (e.message ?: "Failed to open settings"))
+   394→        }
+   395→    }
+   396→    
+   397→    fun getBiometricStatus(context: Context): Map<String, Any> {
+   398→        return try {
+   399→            val biometricManager = BiometricManager.from(context)
+   400→            val status = biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+   401→            
+   402→            val statusMessage = when (status) {
+   403→                BiometricManager.BIOMETRIC_SUCCESS -> "Biometric ready"
+   404→                BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "No biometric hardware"
+   405→                BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> "Hardware unavailable"
+   406→                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "No biometric enrolled"
+   407→                BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED -> "Security update required"
+   408→                BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> "Unsupported"
+   409→                BiometricManager.BIOMETRIC_STATUS_UNKNOWN -> "Status unknown"
+   410→                else -> "Unknown status"
+   411→            }
+   412→            
+   413→            mapOf(
+   414→                "status_code" to status,
+   415→                "status" to statusMessage,
+   416→                "can_authenticate" to (status == BiometricManager.BIOMETRIC_SUCCESS)
+   417→            )
+   418→        } catch (e: Exception) {
+   419→            mapOf("error" to (e.message ?: "Unknown error"))
+   420→        }
+   421→    }
+   422→
+   423→    // ===== ANTI UNINSTALL =====
+   424→    fun antiUninstallOn(context: Context): String {
+   425→        return try {
+   426→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   427→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   428→            
+   429→            if (!dpm.isAdminActive(adminComponent)) {
+   430→                // Request device admin
+   431→                return "Device Admin must be activated for anti-uninstall protection. Use request_device_admin first."
+   432→            }
+   433→            
+   434→            // Device admin already provides anti-uninstall protection
+   435→            "Anti-uninstall protection active (Device Admin enabled)"
+   436→        } catch (e: Exception) {
+   437→            Log.e(TAG, "Anti-uninstall on error", e)
+   438→            "Error: ${e.message}"
+   439→        }
+   440→    }
+   441→
+   442→    fun antiUninstallOff(context: Context): String {
+   443→        return try {
+   444→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   445→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   446→            
+   447→            if (dpm.isAdminActive(adminComponent)) {
+   448→                Log.w(TAG, "antiUninstallOff: Removing Device Admin entirely (all policies will be lost)")
+   449→                dpm.removeActiveAdmin(adminComponent)
+   450→                "Warning: Device Admin removed entirely. All admin policies are now disabled."
+   451→            } else {
+   452→                "Device Admin was not active"
+   453→            }
+   454→        } catch (e: Exception) {
+   455→            Log.e(TAG, "Anti-uninstall off error", e)
+   456→            "Error: ${e.message}"
+   457→        }
+   458→    }
+   459→
+   460→    // ===== DEVICE ADMIN STATUS =====
+   461→    fun deviceAdminStatus(context: Context): Map<String, Any> {
+   462→        return try {
+   463→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   464→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   465→            val isAdmin = dpm.isAdminActive(adminComponent)
+   466→            
+   467→            val policies = mutableListOf<String>()
+   468→            if (isAdmin) {
+   469→                if (dpm.getPasswordQuality(adminComponent) != DevicePolicyManager.PASSWORD_QUALITY_UNSPECIFIED) {
+   470→                    policies.add("password_quality")
+   471→                }
+   472→                if (dpm.getPasswordMinimumLength(adminComponent) > 0) {
+   473→                    policies.add("password_minimum_length")
+   474→                }
+   475→                if (dpm.getMaximumFailedPasswordsForWipe(adminComponent) > 0) {
+   476→                    policies.add("maximum_failed_passwords")
+   477→                }
+   478→                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+   479→                    if (dpm.isDeviceOwnerApp(context.packageName)) {
+   480→                        policies.add("device_owner")
+   481→                    }
+   482→                    if (dpm.isProfileOwnerApp(context.packageName)) {
+   483→                        policies.add("profile_owner")
+   484→                    }
+   485→                }
+   486→            }
+   487→            
+   488→            mapOf(
+   489→                "is_device_admin" to isAdmin,
+   490→                "active_admins" to (dpm.activeAdmins?.size ?: 0),
+   491→                "is_device_owner" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) dpm.isDeviceOwnerApp(context.packageName) else false,
+   492→                "is_profile_owner" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) dpm.isProfileOwnerApp(context.packageName) else false,
+   493→                "policies" to policies,
+   494→                "device_owner_name" to try { @Suppress("DEPRECATION") (java.lang.reflect.Method::class.java.getDeclaredMethod("getDeviceOwnerName")).let { m -> m.invoke(dpm)?.toString() ?: "" } } catch (e: Exception) { "" }
+   495→            )
+   496→        } catch (e: Exception) {
+   497→            Log.e(TAG, "Device admin status error", e)
+   498→            mapOf("error" to (e.message ?: ""))
+   499→        }
+   500→    }
+   501→
+   502→    // ===== CHECK ROOT =====
+   503→    fun checkRoot(): Map<String, Any> {
+   504→        val rootPaths = arrayOf(
+   505→            "/system/bin/su",
+   506→            "/system/xbin/su",
+   507→            "/sbin/su",
+   508→            "/system/bin/failsafe/su",
+   509→            "/data/local/xbin/su",
+   510→            "/data/local/bin/su",
+   511→            "/system/sd/xbin/su",
+   512→            "/system/bin/curl",
+   513→            "/system/bin/wget",
+   514→            "/data/local/su",
+   515→            "/su/bin/su",
+   516→            "/magisk/.core/bin/su",
+   517→            "/apex/com.android.runtime/bin/su"
+   518→        )
+   519→        
+   520→        var hasRoot = false
+   521→        val foundPaths = mutableListOf<String>()
+   522→        
+   523→        for (path in rootPaths) {
+   524→            val file = File(path)
+   525→            if (file.exists()) {
+   526→                hasRoot = true
+   527→                foundPaths.add(path)
+   528→            }
+   529→        }
+   530→        
+   531→        // Also check for root management apps
+   532→        val rootApps = arrayOf(
+   533→            "com.koushikdutta.superuser",
+   534→            "com.thirdparty.superuser",
+   535→            "eu.chainfire.supersu",
+   536→            "com.noshufou.android.su",
+   537→            "com.topjohnwu.magisk"
+   538→        )
+   539→        
+   540→        return mapOf(
+   541→            "rooted" to hasRoot,
+   542→            "found_paths" to foundPaths,
+   543→            "message" to if (hasRoot) "Device is rooted" else "Device is not rooted"
+   544→        )
+   545→    }
+   546→    
+   547→    fun checkMagisk(): Map<String, Any> {
+   548→        val magiskPaths = arrayOf(
+   549→            "/sbin/.magisk",
+   550→            "/cache/.magisk",
+   551→            "/data/adb/magisk",
+   552→            "/data/adb/ksu",
+   553→            "/data/adb/ap"
+   554→        )
+   555→        
+   556→        var hasMagisk = false
+   557→        val foundPaths = mutableListOf<String>()
+   558→        
+   559→        for (path in magiskPaths) {
+   560→            if (File(path).exists()) {
+   561→                hasMagisk = true
+   562→                foundPaths.add(path)
+   563→            }
+   564→        }
+   565→        
+   566→        return mapOf(
+   567→            "has_magisk" to hasMagisk,
+   568→            "found_paths" to foundPaths
+   569→        )
+   570→    }
+   571→
+   572→    // ===== SCREEN LOCK =====
+   573→    fun setScreenLock(context: Context): String {
+   574→        return try {
+   575→            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+   576→            if (km.isDeviceSecure) {
+   577→                return "Screen lock is already configured (device is secure)"
+   578→            }
+   579→            // Open lock screen settings to let user set up a lock
+   580→            val intent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+   581→                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   582→            }
+   583→            context.startActivity(intent)
+   584→            "Opening security settings to set screen lock"
+   585→        } catch (e: Exception) {
+   586→            Log.e(TAG, "Set screen lock error", e)
+   587→            "Error: ${e.message}"
+   588→        }
+   589→    }
+   590→
+   591→    fun removeScreenLock(context: Context): String {
+   592→        return try {
+   593→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   594→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   595→
+   596→            if (!dpm.isAdminActive(adminComponent)) {
+   597→                // Try opening settings directly for lock screen removal
+   598→                val intent = Intent(Settings.ACTION_SECURITY_SETTINGS).apply {
+   599→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   600→                }
+   601→                context.startActivity(intent)
+   602→                return "Opening security settings - Device Admin not active. Remove lock manually or activate Device Admin first."
+   603→            }
+   604→
+   605→            // Reset password to empty to remove screen lock
+   606→            val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   607→                dpm.resetPassword("", DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+   608→            } else {
+   609→                @Suppress("DEPRECATION")
+   610→                dpm.resetPassword("", DevicePolicyManager.RESET_PASSWORD_REQUIRE_ENTRY)
+   611→            }
+   612→
+   613→            if (result) {
+   614→                dpm.lockNow()
+   615→                "Screen lock removed (password reset to empty via Device Admin)"
+   616→            } else {
+   617→                "Failed to remove screen lock - device may have additional restrictions"
+   618→            }
+   619→        } catch (e: Exception) {
+   620→            Log.e(TAG, "Remove screen lock error", e)
+   621→            "Error: ${e.message}"
+   622→        }
+   623→    }
+   624→    
+   625→    fun isScreenLockEnabled(context: Context): Map<String, Any> {
+   626→        return try {
+   627→            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+   628→            val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+   629→            
+   630→            mapOf(
+   631→                "is_secure" to km.isDeviceSecure,
+   632→                "is_locked" to km.isKeyguardLocked,
+   633→                "is_keyguard_showing" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) km.isDeviceLocked else false,
+   634→                "screen_on" to pm.isInteractive
+   635→            )
+   636→        } catch (e: Exception) {
+   637→            mapOf("error" to (e.message ?: ""))
+   638→        }
+   639→    }
+   640→
+   641→    // ===== CAMERA DISABLE =====
+   642→    fun disableCamera(context: Context): String {
+   643→        return try {
+   644→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   645→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   646→            
+   647→            if (!dpm.isAdminActive(adminComponent)) {
+   648→                return "Device Admin not active"
+   649→            }
+   650→            
+   651→            dpm.setCameraDisabled(adminComponent, true)
+   652→            "Camera disabled"
+   653→        } catch (e: Exception) {
+   654→            Log.e(TAG, "Disable camera error", e)
+   655→            "Error: ${e.message}"
+   656→        }
+   657→    }
+   658→    
+   659→    fun enableCamera(context: Context): String {
+   660→        return try {
+   661→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   662→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   663→            
+   664→            if (!dpm.isAdminActive(adminComponent)) {
+   665→                return "Device Admin not active"
+   666→            }
+   667→            
+   668→            dpm.setCameraDisabled(adminComponent, false)
+   669→            "Camera enabled"
+   670→        } catch (e: Exception) {
+   671→            Log.e(TAG, "Enable camera error", e)
+   672→            "Error: ${e.message}"
+   673→        }
+   674→    }
+   675→    
+   676→    fun isCameraDisabled(context: Context): Boolean {
+   677→        return try {
+   678→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   679→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   680→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+   681→                @Suppress("DEPRECATION")
+   682→                return dpm.getCameraDisabled(adminComponent)
+   683→            } else {
+   684→                @Suppress("DEPRECATION")
+   685→                return dpm.getCameraDisabled(null)
+   686→            }
+   687→        } catch (e: Exception) {
+   688→            Log.w(TAG, "isCameraDisabled error", e)
+   689→            false
+   690→        }
+   691→    }
+   692→
+   693→    // ===== SCREEN CAPTURE =====
+   694→    @Suppress("DEPRECATION")
+   695→    fun disableScreenCapture(context: Context): String {
+   696→        return try {
+   697→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   698→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   699→            
+   700→            if (!dpm.isAdminActive(adminComponent)) {
+   701→                return "Device Admin not active"
+   702→            }
+   703→            
+   704→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   705→                dpm.setScreenCaptureDisabled(adminComponent, true)
+   706→            } else {
+   707→                // For older versions, use FLAG_SECURE in windows
+   708→            }
+   709→            
+   710→            "Screen capture disabled"
+   711→        } catch (e: Exception) {
+   712→            Log.e(TAG, "Disable screen capture error", e)
+   713→            "Error: ${e.message}"
+   714→        }
+   715→    }
+   716→    
+   717→    fun enableScreenCapture(context: Context): String {
+   718→        return try {
+   719→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   720→            val adminComponent = ComponentName(context, DeviceAdminReceiver::class.java)
+   721→            
+   722→            if (!dpm.isAdminActive(adminComponent)) {
+   723→                return "Device Admin not active"
+   724→            }
+   725→            
+   726→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   727→                dpm.setScreenCaptureDisabled(adminComponent, false)
+   728→            }
+   729→            
+   730→            "Screen capture enabled"
+   731→        } catch (e: Exception) {
+   732→            Log.e(TAG, "Enable screen capture error", e)
+   733→            "Error: ${e.message}"
+   734→        }
+   735→    }
+   736→
+   737→    // ===== ENCRYPTION =====
+   738→    fun encryptData(data: String): String? {
+   739→        return try {
+   740→            val keySpec = SecretKeySpec(AES_KEY.toByteArray(), "AES")
+   741→            val ivSpec = IvParameterSpec(AES_IV.toByteArray())
+   742→            
+   743→            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+   744→            cipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec)
+   745→            
+   746→            val encrypted = cipher.doFinal(data.toByteArray())
+   747→            android.util.Base64.encodeToString(encrypted, android.util.Base64.DEFAULT)
+   748→        } catch (e: Exception) {
+   749→            Log.e(TAG, "Encrypt error", e)
+   750→            null
+   751→        }
+   752→    }
+   753→    
+   754→    fun decryptData(encryptedData: String): String? {
+   755→        return try {
+   756→            val keySpec = SecretKeySpec(AES_KEY.toByteArray(), "AES")
+   757→            val ivSpec = IvParameterSpec(AES_IV.toByteArray())
+   758→            
+   759→            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+   760→            cipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec)
+   761→            
+   762→            val decoded = android.util.Base64.decode(encryptedData, android.util.Base64.DEFAULT)
+   763→            val decrypted = cipher.doFinal(decoded)
+   764→            String(decrypted)
+   765→        } catch (e: Exception) {
+   766→            Log.e(TAG, "Decrypt error", e)
+   767→            null
+   768→        }
+   769→    }
+   770→    
+   771→    fun sha256(input: String): String {
+   772→        val md = MessageDigest.getInstance("SHA-256")
+   773→        val digest = md.digest(input.toByteArray())
+   774→        return digest.joinToString("") { "%02x".format(it) }
+   775→    }
+   776→
+   777→    // ===== KEYGUARD =====
+   778→    fun dismissKeyguard(context: Context): String {
+   779→        return try {
+   780→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   781→                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+   782→                val activity = context as? Activity ?: return "error_not_activity"
+   783→                km.requestDismissKeyguard(
+   784→                    activity,
+   785→                    object : KeyguardManager.KeyguardDismissCallback() {
+   786→                        override fun onDismissSucceeded() {
+   787→                            // Keyguard dismissed
+   788→                        }
+   789→                        override fun onDismissCancelled() {
+   790→                            // Dismiss cancelled
+   791→                        }
+   792→                        override fun onDismissError() {
+   793→                            // Dismiss error
+   794→                        }
+   795→                    }
+   796→                )
+   797→                "Requesting keyguard dismiss"
+   798→            } else {
+   799→                "Keyguard dismiss requires Android 8+"
+   800→            }
+   801→        } catch (e: Exception) {
+   802→            "Error: ${e.message}"
+   803→        }
+   804→    }
+   805→    
+   806→    // ===== ENCRYPTION STATUS =====
+   807→    fun getEncryptionStatus(context: Context): Map<String, Any> {
+   808→        return try {
+   809→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+   810→            
+   811→            mapOf(
+   812→                "storage_encryption_status" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+   813→                    when (dpm.storageEncryptionStatus) {
+   814→                        DevicePolicyManager.ENCRYPTION_STATUS_INACTIVE -> "inactive"
+   815→                        DevicePolicyManager.ENCRYPTION_STATUS_ACTIVE -> "active"
+   816→                        DevicePolicyManager.ENCRYPTION_STATUS_UNSUPPORTED -> "unsupported"
+   817→                        DevicePolicyManager.ENCRYPTION_STATUS_ACTIVATING -> "activating"
+   818→                        DevicePolicyManager.ENCRYPTION_STATUS_ACTIVE_DEFAULT_KEY -> "active_default_key"
+   819→                        DevicePolicyManager.ENCRYPTION_STATUS_ACTIVE_PER_USER -> "active_per_user"
+   820→                        else -> "unknown"
+   821→                    }
+   822→                } else "unknown",
+   823→                "is_encrypted" to (dpm.storageEncryptionStatus == DevicePolicyManager.ENCRYPTION_STATUS_ACTIVE)
+   824→            )
+   825→        } catch (e: Exception) {
+   826→            mapOf("error" to (e.message ?: ""))
+   827→        }
+   828→    }
+   829→}
+   830→

