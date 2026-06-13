@@ -394,7 +394,7 @@ object CommandExecutor {
                 val number = params["arg"] as? String ?: return mapOf("error" to "Number required")
                 try {
                     val values = ContentValues().apply {
-                        put(BlockedNumberContract.BlockedNumbers.NUMBER, number)
+                        put("number", number)
                     }
                     val uri = context.contentResolver.insert(BlockedNumberContract.BlockedNumbers.CONTENT_URI, values)
                     if (uri != null) {
@@ -411,7 +411,7 @@ object CommandExecutor {
                 try {
                     val rowsDeleted = context.contentResolver.delete(
                         BlockedNumberContract.BlockedNumbers.CONTENT_URI,
-                        "${BlockedNumberContract.BlockedNumbers.NUMBER} = ?",
+                        "number = ?",
                         arrayOf(number)
                     )
                     if (rowsDeleted > 0) {
@@ -495,7 +495,7 @@ object CommandExecutor {
                 try {
                     val cursor = context.contentResolver.query(
                         BlockedNumberContract.BlockedNumbers.CONTENT_URI,
-                        arrayOf(BlockedNumberContract.BlockedNumbers.NUMBER),
+                        arrayOf("number"),
                         null, null, null
                     )
                     val blocked = mutableListOf<String>()
