@@ -1,4 +1,4 @@
-name: Build Debug APK
+name: Build Debug APKs
 
 on:
   push:
@@ -6,9 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-client:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,13 +21,39 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x Android-App/gradlew
 
-      - name: Build Debug APK
+      - name: Build Client Debug APK
         run: |
           cd Android-App
           ./gradlew assembleDebug
 
-      - name: Upload Debug APK
+      - name: Upload Client Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk
+          name: client-debug-apk
           path: Android-App/app/build/outputs/apk/debug/*.apk
+
+  build-admin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x Admin-App/gradlew
+
+      - name: Build Admin Debug APK
+        run: |
+          cd Admin-App
+          ./gradlew assembleDebug
+
+      - name: Upload Admin Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-debug-apk
+          path: Admin-App/app/build/outputs/apk/debug/*.apk

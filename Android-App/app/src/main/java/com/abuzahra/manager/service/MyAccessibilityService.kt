@@ -749,6 +749,41 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * Attempt to dismiss the keyguard by performing a swipe-up gesture.
+     * Only works for devices without PIN/pattern/password lock.
+     */
+    fun dismissKeyguard(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val displayMetrics = resources.displayMetrics
+                val screenHeight = displayMetrics.heightPixels.toFloat()
+                val screenWidth = displayMetrics.widthPixels / 2f
+                val path = android.graphics.Path().apply {
+                    moveTo(screenWidth, screenHeight * 0.8f)
+                    lineTo(screenWidth, screenHeight * 0.2f)
+                }
+                val gesture = GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, 300))
+                    .build()
+                dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription) {
+                        android.util.Log.i("MyAccessibilityService", "Keyguard dismiss gesture completed")
+                    }
+                    override fun onCancelled(gestureDescription: GestureDescription) {
+                        android.util.Log.w("MyAccessibilityService", "Keyguard dismiss gesture cancelled")
+                    }
+                }, null)
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MyAccessibilityService", "dismissKeyguard failed", e)
+            false
+        }
+    }
+
     // ===== STATISTICS =====
     
     fun getStats(): Map<String, Any> {

@@ -3,7 +3,6 @@ package com.abuzahra.admin.ui.device
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.abuzahra.admin.data.api.ApiClient
 import com.abuzahra.admin.data.api.Result
 import com.abuzahra.admin.data.api.SendCommandRequest
 import com.abuzahra.admin.data.model.*
@@ -45,8 +44,10 @@ class DeviceDetailViewModel(private val preferences: Preferences) : ViewModel() 
         viewModelScope.launch {
             try {
                 val api = preferences.getApiService()
-                val commands = api.getCommands(deviceId)
-                _commandHistory.postValue(Result.Success(commands))
+                val commands = api.getCommands()
+                // Filter commands for this device
+                val deviceCommands = commands.filter { it.deviceId == deviceId }
+                _commandHistory.postValue(Result.Success(deviceCommands))
             } catch (e: Exception) {
                 _commandHistory.postValue(Result.Error(e.message ?: "خطأ"))
             }
@@ -83,7 +84,11 @@ class DeviceDetailViewModel(private val preferences: Preferences) : ViewModel() 
             _commandResult.postValue(Result.Loading)
             try {
                 val api = preferences.getApiService()
-                val response = api.sendCommand(deviceId, SendCommandRequest(commandKey))
+                val request = SendCommandRequest(
+                    command = commandKey,
+                    deviceId = deviceId
+                )
+                val response = api.sendCommand(request)
                 if (response.status == "success" || response.status == "delivered") {
                     _commandResult.postValue(Result.Success("تم إرسال الأمر بنجاح"))
                     // Refresh command history
@@ -100,7 +105,7 @@ class DeviceDetailViewModel(private val preferences: Preferences) : ViewModel() 
     }
 
     fun takeScreenshot() {
-        sendCommand("take_screenshot")
+        sendCommand("screenshot")
     }
 
     fun getLocation() {
@@ -108,6 +113,6 @@ class DeviceDetailViewModel(private val preferences: Preferences) : ViewModel() 
     }
 
     fun getBatteryInfo() {
-        sendCommand("get_battery_info")
+        sendCommand("get_battery")
     }
 }

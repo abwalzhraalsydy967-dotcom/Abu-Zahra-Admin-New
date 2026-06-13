@@ -4,9 +4,12 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.SendCommandRequest
 import com.abuzahra.admin.data.model.Device
 import com.abuzahra.admin.data.model.RemoteFile
 import com.abuzahra.admin.util.Preferences
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.launch
 
 class FilesViewModel(private val preferences: Preferences) : ViewModel() {
@@ -16,6 +19,8 @@ class FilesViewModel(private val preferences: Preferences) : ViewModel() {
 
     private val _files = MutableLiveData<Result<List<RemoteFile>>>()
     val files: MutableLiveData<Result<List<RemoteFile>>> = _files
+
+    private val gson = Gson()
 
     fun loadDevices() {
         viewModelScope.launch {
@@ -34,7 +39,36 @@ class FilesViewModel(private val preferences: Preferences) : ViewModel() {
             _files.postValue(Result.Loading)
             try {
                 val api = preferences.getApiService()
-                val fileList = api.getFiles(deviceId, path)
+                val request = SendCommandRequest(
+                    command = "list_files",
+                    deviceId = deviceId,
+                    params = mapOf("arg" to path)
+                )
+                val responseBody = api.sendCommandRaw(request)
+                val jsonString = responseBody.string()
+
+                // Try to parse the response as a list of RemoteFile
+                val fileList = try {
+                    val type = object : TypeToken<List<RemoteFile>>() {}.type
+                    gson.fromJson<List<RemoteFile>>(jsonString, type) ?: emptyList()
+                } catch (e: Exception) {
+                    // Server might wrap the result in an object with a "result" or "data" field
+                    try {
+                        val wrapper = gson.fromJson<Map<String, Any>>(jsonString, Map::class.java)
+                        val resultData = wrapper["result"] ?: wrapper["data"]
+                        if (resultData is List<*>) {
+                            gson.fromJson(
+                                gson.toJson(resultData),
+                                object : TypeToken<List<RemoteFile>>() {}.type
+                            ) ?: emptyList()
+                        } else {
+                            emptyList()
+                        }
+                    } catch (e2: Exception) {
+                        emptyList()
+                    }
+                }
+
                 _files.postValue(Result.Success(fileList))
             } catch (e: retrofit2.HttpException) {
                 if (e.code() == 401) {

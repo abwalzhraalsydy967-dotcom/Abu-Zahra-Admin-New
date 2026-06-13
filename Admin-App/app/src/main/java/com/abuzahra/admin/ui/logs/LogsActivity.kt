@@ -1,74 +1,176 @@
 package com.abuzahra.admin.ui.logs
 
-import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
+import android.content.Intent
+import android.os.Bundle
+import android.view.View
+import android.view.inputmethod.EditorInfo
+import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.doOnTextChanged
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.abuzahra.admin.R
 import com.abuzahra.admin.data.api.Result
 import com.abuzahra.admin.data.model.Event
+import com.abuzahra.admin.databinding.ActivityLogsBinding
+import com.abuzahra.admin.ui.login.LoginActivity
 import com.abuzahra.admin.util.Preferences
-import kotlinx.coroutines.launch
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
 
-class LogsViewModel(private val preferences: Preferences) : ViewModel() {
+class LogsActivity : AppCompatActivity() {
 
-    private val _events = MutableLiveData<Result<List<Event>>>()
-    val events: MutableLiveData<Result<List<Event>>> = _events
+    private lateinit var binding: ActivityLogsBinding
+    private val viewModel: LogsViewModel by viewModels {
+        LogsViewModelFactory(Preferences.getInstance(this))
+    }
+    private val logAdapter: LogAdapter by lazy {
+        LogAdapter { event ->
+            showEventDetails(event)
+        }
+    }
 
-    private val _searchQuery = MutableLiveData("")
-    private val _filterType = MutableLiveData(FilterType.ALL)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = ActivityLogsBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-    private var allEvents: List<Event> = emptyList()
+        setupToolbar()
+        setupRecyclerView()
+        setupSearch()
+        setupFilterChips()
+        setupSwipeRefresh()
+        observeViewModel()
+        viewModel.loadEvents()
+    }
 
-    enum class FilterType { ALL, CONNECTION, COMMAND, ALERT }
+    private fun setupToolbar() {
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.title = getString(R.string.logs)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        binding.toolbar.setNavigationOnClickListener { finish() }
+    }
 
-    fun loadEvents() {
-        viewModelScope.launch {
-            try {
-                val api = preferences.getApiService()
-                val eventList = api.getEvents()
-                allEvents = eventList
-                applyFilters()
-            } catch (e: retrofit2.HttpException) {
-                if (e.code() == 401) {
-                    _events.postValue(Result.Error("انتهت صلاحية الجلسة", 401))
-                } else {
-                    _events.postValue(Result.Error("خطأ: ${e.code()}"))
+    private fun setupRecyclerView() {
+        binding.rvLogs.apply {
+            layoutManager = LinearLayoutManager(this@LogsActivity)
+            adapter = logAdapter
+            setHasFixedSize(false)
+        }
+    }
+
+    private fun setupSearch() {
+        binding.etSearch.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                viewModel.setSearchQuery(binding.etSearch.text.toString().trim())
+                true
+            } else {
+                false
+            }
+        }
+        binding.etSearch.doOnTextChanged { text, _, _, _ ->
+            viewModel.setSearchQuery(text.toString().trim())
+        }
+    }
+
+    private fun setupFilterChips() {
+        binding.chipAllEvents.setOnClickListener {
+            viewModel.setFilter(LogsViewModel.FilterType.ALL)
+        }
+        binding.chipConnection.setOnClickListener {
+            viewModel.setFilter(LogsViewModel.FilterType.CONNECTION)
+        }
+        binding.chipCommand.setOnClickListener {
+            viewModel.setFilter(LogsViewModel.FilterType.COMMAND)
+        }
+        binding.chipAlert.setOnClickListener {
+            viewModel.setFilter(LogsViewModel.FilterType.ALERT)
+        }
+    }
+
+    private fun setupSwipeRefresh() {
+        binding.swipeRefresh.setOnRefreshListener {
+            viewModel.loadEvents()
+        }
+    }
+
+    private fun observeViewModel() {
+        viewModel.events.observe(this) { result ->
+            binding.loadingOverlay.visibility = View.GONE
+            binding.swipeRefresh.isRefreshing = false
+
+            when (result) {
+                is Result.Loading -> {
+                    binding.loadingOverlay.visibility = View.VISIBLE
                 }
-            } catch (e: Exception) {
-                _events.postValue(Result.Error(e.message ?: "خطأ في الاتصال"))
+                is Result.Success -> {
+                    val events = result.data
+                    logAdapter.submitList(events)
+                    updateEmptyState(events.isEmpty())
+                }
+                is Result.Error -> {
+                    updateEmptyState(true)
+                    if (result.code == 401) {
+                        showSessionExpired()
+                    } else {
+                        Snackbar.make(
+                            binding.root.rootView,
+                            result.message,
+                            Snackbar.LENGTH_LONG
+                        ).setAction(R.string.retry) { viewModel.loadEvents() }.show()
+                    }
+                }
             }
         }
     }
 
-    fun setSearchQuery(query: String) {
-        _searchQuery.value = query
-        applyFilters()
+    private fun updateEmptyState(isEmpty: Boolean) {
+        binding.emptyState.visibility = if (isEmpty) View.VISIBLE else View.GONE
+        binding.rvLogs.visibility = if (isEmpty) View.GONE else View.VISIBLE
     }
 
-    fun setFilter(type: FilterType) {
-        _filterType.value = type
-        applyFilters()
-    }
-
-    private fun applyFilters() {
-        val query = _searchQuery.value.orEmpty().lowercase()
-        val filter = _filterType.value ?: FilterType.ALL
-
-        val filtered = allEvents.filter { event ->
-            val matchesSearch = query.isBlank() ||
-                    event.displayEvent.lowercase().contains(query) ||
-                    event.deviceName.lowercase().contains(query) ||
-                    event.details?.lowercase()?.contains(query) == true
-
-            val matchesFilter = when (filter) {
-                FilterType.ALL -> true
-                FilterType.CONNECTION -> event.eventTypeCategory == "اتصال"
-                FilterType.COMMAND -> event.eventTypeCategory == "أوامر"
-                FilterType.ALERT -> event.eventTypeCategory == "تنبيهات"
+    private fun showEventDetails(event: Event) {
+        val message = buildString {
+            append(event.displayEvent)
+            if (event.deviceName.isNotEmpty()) {
+                append("\n\nالجهاز: ${event.deviceName}")
             }
-
-            matchesSearch && matchesFilter
+            if (!event.details.isNullOrEmpty()) {
+                append("\n\nالتفاصيل: ${event.details}")
+            }
+            if (event.timestamp.isNotEmpty()) {
+                append("\n\nالتوقيت: ${event.displayTime}")
+            }
         }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.details)
+            .setMessage(message)
+            .setPositiveButton(R.string.ok, null)
+            .show()
+    }
 
-        _events.value = Result.Success(filtered)
+    private fun showSessionExpired() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.session_expired)
+            .setMessage("يرجى تسجيل الدخول مرة أخرى")
+            .setPositiveButton(R.string.ok) { _, _ ->
+                Preferences.getInstance(this).clear()
+                startActivity(Intent(this, LoginActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                })
+                finish()
+            }
+            .setCancelable(false)
+            .show()
+    }
+}
+
+class LogsViewModelFactory(private val preferences: Preferences) :
+    androidx.lifecycle.ViewModelProvider.Factory {
+    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(LogsViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return LogsViewModel(preferences) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
     }
 }
