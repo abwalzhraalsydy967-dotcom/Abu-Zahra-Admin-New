@@ -30,12 +30,15 @@ data class Command(
         }
 
     val displayTime: String
-        get() = if (createdAt.isNullOrEmpty()) "" else try {
-            val inputFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
-            val date = inputFormat.parse(createdAt) ?: return createdAt
-            val outputFormat = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.US)
-            outputFormat.format(date)
-        } catch (e: Exception) {
-            createdAt
+        get() {
+            if (createdAt.isNullOrEmpty()) return ""
+            return try {
+                val inputFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                val date = inputFormat.parse(createdAt) ?: return createdAt
+                val outputFormat = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.US)
+                outputFormat.format(date)
+            } catch (e: Exception) {
+                createdAt
+            }
         }
 }

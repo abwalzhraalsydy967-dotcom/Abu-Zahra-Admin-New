@@ -139,7 +139,7 @@ object ApiClient {
                             override fun contentType(): MediaType? = contentType
                             override fun contentLength(): Long = contentLength
 
-                            override fun source(): okio.Source = bufferedSource
+                            override fun source(): okio.BufferedSource = bufferedSource
                         }
                     } else {
                         responseBody

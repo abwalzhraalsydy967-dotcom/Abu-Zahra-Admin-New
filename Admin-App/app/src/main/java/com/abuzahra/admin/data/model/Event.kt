@@ -35,35 +35,41 @@ data class Event(
         }
 
     val displayTime: String
-        get() = if (timestamp.isNullOrEmpty()) "" else try {
-            val inputFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
-            val date = inputFormat.parse(timestamp) ?: return timestamp
-            val outputFormat = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.US)
-            outputFormat.format(date)
-        } catch (e: Exception) {
-            timestamp
+        get() {
+            if (timestamp.isNullOrEmpty()) return ""
+            return try {
+                val inputFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                val date = inputFormat.parse(timestamp) ?: return timestamp
+                val outputFormat = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.US)
+                outputFormat.format(date)
+            } catch (e: Exception) {
+                timestamp
+            }
         }
 
     val relativeTime: String
-        get() = if (timestamp.isNullOrEmpty()) "" else try {
-            val inputFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
-            val date = inputFormat.parse(timestamp) ?: return timestamp
-            val now = System.currentTimeMillis()
-            val diff = now - date.time
+        get() {
+            if (timestamp.isNullOrEmpty()) return ""
+            return try {
+                val inputFormat = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                val date = inputFormat.parse(timestamp) ?: return timestamp
+                val now = System.currentTimeMillis()
+                val diff = now - date.time
 
-            val seconds = diff / 1000
-            val minutes = seconds / 60
-            val hours = minutes / 60
-            val days = hours / 24
+                val seconds = diff / 1000
+                val minutes = seconds / 60
+                val hours = minutes / 60
+                val days = hours / 24
 
-            when {
-                seconds < 60 -> "الآن"
-                minutes < 60 -> "منذ ${minutes} دقيقة"
-                hours < 24 -> "منذ ${hours} ساعة"
-                days < 7 -> "منذ ${days} يوم"
-                else -> displayTime
+                when {
+                    seconds < 60 -> "الآن"
+                    minutes < 60 -> "منذ ${minutes} دقيقة"
+                    hours < 24 -> "منذ ${hours} ساعة"
+                    days < 7 -> "منذ ${days} يوم"
+                    else -> displayTime
+                }
+            } catch (e: Exception) {
+                timestamp
             }
-        } catch (e: Exception) {
-            timestamp
         }
 }

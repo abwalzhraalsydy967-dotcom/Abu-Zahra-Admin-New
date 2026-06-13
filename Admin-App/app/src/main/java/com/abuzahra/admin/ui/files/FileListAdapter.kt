@@ -63,7 +63,7 @@ class FileListAdapter(
                 if (pos == 0 && showParent) {
                     onParentClick()
                 } else if (viewType == TYPE_FILE) {
-                    val filePos = if (showParent) pos - 1 : pos
+                    val filePos = if (showParent) { pos - 1 } else { pos }
                     if (filePos >= 0 && filePos < currentList.size) {
                         val file = getItem(filePos)
                         if (file.isDirectory) {
@@ -76,7 +76,7 @@ class FileListAdapter(
             binding.ivDownload.setOnClickListener {
                 val pos = bindingAdapterPosition
                 if (viewType == TYPE_FILE && pos != RecyclerView.NO_POSITION) {
-                    val filePos = if (showParent) pos - 1 : pos
+                    val filePos = if (showParent) { pos - 1 } else { pos }
                     if (filePos >= 0 && filePos < currentList.size) {
                         onDownloadClick(getItem(filePos))
                     }

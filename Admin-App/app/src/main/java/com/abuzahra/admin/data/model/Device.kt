@@ -20,7 +20,7 @@ data class Device(
     @SerializedName("screen_resolution") val screenResolution: String = "",
     @SerializedName("imei") val imei: String = "",
     @SerializedName("serial") val serial: String = ""
-) {
+) : java.io.Serializable {
     val displayLastSeen: String
         get() = if (lastSeen.isNullOrEmpty()) "أبداً" else formatRelativeTime(lastSeen)
 

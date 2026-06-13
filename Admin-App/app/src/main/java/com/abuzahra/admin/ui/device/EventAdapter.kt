@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import android.content.res.ColorStateList
 import com.abuzahra.admin.R
 import com.abuzahra.admin.data.model.Command
 import com.abuzahra.admin.databinding.ItemEventBinding
@@ -34,8 +35,8 @@ class EventAdapter(
         init {
             binding.root.setOnClickListener {
                 val pos = bindingAdapterPosition
-                if (pos != RecyclerView.NO_POSITION && onItemClick != null) {
-                    onItemClick(getItem(pos))
+                if (pos != RecyclerView.NO_POSITION) {
+                    onItemClick?.invoke(getItem(pos))
                 }
             }
         }
@@ -57,13 +58,13 @@ class EventAdapter(
             // Status chip
             binding.chipStatus.text = command.displayStatus
             val chipColor = when (command.statusColor) {
-                0 -> com.google.android.material.chip.ChipBackgroundColor(
+                0 -> ColorStateList.valueOf(
                     ContextCompat.getColor(binding.root.context, R.color.success)
                 )
-                1 -> com.google.android.material.chip.ChipBackgroundColor(
+                1 -> ColorStateList.valueOf(
                     ContextCompat.getColor(binding.root.context, R.color.error)
                 )
-                else -> com.google.android.material.chip.ChipBackgroundColor(
+                else -> ColorStateList.valueOf(
                     ContextCompat.getColor(binding.root.context, R.color.pending_color)
                 )
             }
