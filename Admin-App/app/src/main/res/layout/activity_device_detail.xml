@@ -416,7 +416,7 @@
     </FrameLayout>
 
     <!-- Snackbar slot -->
-    <com.google.android.material.snackbar.SnackbarLayout
+    <FrameLayout
         android:id="@+id/snackbar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
