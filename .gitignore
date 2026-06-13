@@ -95,5 +95,7 @@ venv/
 ENV/
 
 # Server data
-data/
+Server/data/
+!Admin-App/**/data/
 *.json
+!Admin-App/**/*.json
