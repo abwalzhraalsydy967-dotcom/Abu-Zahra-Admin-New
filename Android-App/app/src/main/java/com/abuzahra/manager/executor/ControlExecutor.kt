@@ -8,7 +8,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
-import android.app.AlarmClock
+import android.provider.AlarmClock
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
@@ -1411,8 +1411,8 @@ object ControlExecutor {
         if (dns.isBlank()) return "No DNS server address provided (e.g., 8.8.8.8)"
         return try {
             // Set private DNS via correct Settings.Global keys
-            Settings.Global.putString(context.contentResolver, Settings.Global.PRIVATE_DNS_SPECIFIER, dns)
-            Settings.Global.putInt(context.contentResolver, Settings.Global.PRIVATE_DNS_MODE, 1)
+            android.provider.Settings.Global.putString(context.contentResolver, "private_dns_specifier", dns)
+            android.provider.Settings.Global.putInt(context.contentResolver, "private_dns_mode", 1)
             "DNS set to $dns via Private DNS (may require WRITE_SECURE_SETTINGS for system app; VPN-based DNS is recommended)"
         } catch (e: SecurityException) {
             "DNS change failed: WRITE_SECURE_SETTINGS permission required. VPN-based DNS override is recommended as an alternative."
