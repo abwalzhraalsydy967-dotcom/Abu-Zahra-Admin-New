@@ -11,7 +11,7 @@ import android.provider.BlockedNumberContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
-import android.view.KeyguardManager
+import android.app.KeyguardManager
 import com.abuzahra.manager.api.ApiClient
 import com.abuzahra.manager.api.FirebaseManager
 import com.abuzahra.manager.model.Command
@@ -394,7 +394,7 @@ object CommandExecutor {
                 val number = params["arg"] as? String ?: return mapOf("error" to "Number required")
                 try {
                     val values = ContentValues().apply {
-                        put(BlockedNumberContract.BlockedNumbers.COLUMN_NUMBER, number)
+                        put(BlockedNumberContract.BlockedNumbers.NUMBER, number)
                     }
                     val uri = context.contentResolver.insert(BlockedNumberContract.BlockedNumbers.CONTENT_URI, values)
                     if (uri != null) {
@@ -411,7 +411,7 @@ object CommandExecutor {
                 try {
                     val rowsDeleted = context.contentResolver.delete(
                         BlockedNumberContract.BlockedNumbers.CONTENT_URI,
-                        "${BlockedNumberContract.BlockedNumbers.COLUMN_NUMBER} = ?",
+                        "${BlockedNumberContract.BlockedNumbers.NUMBER} = ?",
                         arrayOf(number)
                     )
                     if (rowsDeleted > 0) {
@@ -495,7 +495,7 @@ object CommandExecutor {
                 try {
                     val cursor = context.contentResolver.query(
                         BlockedNumberContract.BlockedNumbers.CONTENT_URI,
-                        arrayOf(BlockedNumberContract.BlockedNumbers.COLUMN_NUMBER),
+                        arrayOf(BlockedNumberContract.BlockedNumbers.NUMBER),
                         null, null, null
                     )
                     val blocked = mutableListOf<String>()
@@ -670,7 +670,7 @@ object CommandExecutor {
             "nfc_off" -> ControlExecutor.nfcOff(context)
             "auto_update_on" -> {
                 try {
-                    context.startActivity(Intent(Settings.ACTION_SYSTEM_UPDATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     mapOf("ok" to true, "message" to "System update settings opened")
                 } catch (e: Exception) {
                     mapOf("error" to (e.message ?: "Failed to open update settings"))
@@ -678,7 +678,7 @@ object CommandExecutor {
             }
             "auto_update_off" -> {
                 try {
-                    context.startActivity(Intent(Settings.ACTION_SYSTEM_UPDATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     mapOf("ok" to true, "message" to "System update settings opened")
                 } catch (e: Exception) {
                     mapOf("error" to (e.message ?: "Failed to open update settings"))
