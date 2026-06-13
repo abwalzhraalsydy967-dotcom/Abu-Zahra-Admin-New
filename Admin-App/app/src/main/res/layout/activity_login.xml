@@ -152,7 +152,7 @@
                     android:layout_marginTop="@dimen/margin_md"
                     android:indeterminate="true"
                     android:visibility="gone"
-                    app:trackColor="transparent" />
+                    app:trackColor="@android:color/transparent" />
 
             </LinearLayout>
 
