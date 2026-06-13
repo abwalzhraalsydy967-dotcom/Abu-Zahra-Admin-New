@@ -15,7 +15,7 @@ import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.abuzahra.admin.R
 import com.abuzahra.admin.data.api.ApiClient
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
 import com.abuzahra.admin.data.model.RemoteFile
 import com.abuzahra.admin.databinding.ActivityFilesBinding
 import com.abuzahra.admin.ui.login.LoginActivity
@@ -168,7 +168,7 @@ class FilesActivity : AppCompatActivity() {
                 )
 
                 when (result) {
-                    is Result.Success -> {
+                    is ApiResult.Success -> {
                         runOnUiThread {
                             Snackbar.make(
                                 binding.root,
@@ -178,7 +178,7 @@ class FilesActivity : AppCompatActivity() {
                             viewModel.loadFiles(deviceId, currentPath)
                         }
                     }
-                    is Result.Error -> {
+                    is ApiResult.Error -> {
                         runOnUiThread {
                             Snackbar.make(
                                 binding.root,
@@ -297,10 +297,10 @@ class FilesActivity : AppCompatActivity() {
             binding.loadingOverlay.visibility = View.GONE
 
             when (result) {
-                is Result.Loading -> {
+                is ApiResult.Loading -> {
                     binding.loadingOverlay.visibility = View.VISIBLE
                 }
-                is Result.Success -> {
+                is ApiResult.Success -> {
                     val sorted = result.data.sortedWith(
                         compareByDescending<RemoteFile> { it.isDirectory }
                             .thenBy { it.name.lowercase() }
@@ -309,7 +309,7 @@ class FilesActivity : AppCompatActivity() {
                     fileAdapter.setShowParent(currentPath != "/")
                     updateEmptyState(sorted.isEmpty())
                 }
-                is Result.Error -> {
+                is ApiResult.Error -> {
                     if (result.code == 401) {
                         showSessionExpired()
                     } else {

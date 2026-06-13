@@ -9,7 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.abuzahra.admin.R
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
 import com.abuzahra.admin.databinding.ActivityLoginBinding
 import com.abuzahra.admin.ui.dashboard.DashboardActivity
 import com.abuzahra.admin.util.Preferences
@@ -94,19 +94,19 @@ class LoginActivity : AppCompatActivity() {
     private fun observeViewModel() {
         viewModel.loginResult.observe(this) { result ->
             when (result) {
-                is Result.Loading -> {
+                is ApiResult.Loading -> {
                     binding.progressBar.visibility = View.VISIBLE
                     binding.btnLogin.isEnabled = false
                     binding.btnLogin.text = getString(R.string.logging_in)
                     binding.tvError.visibility = View.GONE
                 }
-                is Result.Success -> {
+                is ApiResult.Success -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnLogin.isEnabled = true
                     binding.btnLogin.text = getString(R.string.login)
                     navigateToDashboard()
                 }
-                is Result.Error -> {
+                is ApiResult.Error -> {
                     binding.progressBar.visibility = View.GONE
                     binding.btnLogin.isEnabled = true
                     binding.btnLogin.text = getString(R.string.login)

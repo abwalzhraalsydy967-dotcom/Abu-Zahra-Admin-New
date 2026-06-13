@@ -9,7 +9,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.abuzahra.admin.R
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
+import com.abuzahra.admin.data.model.Command
 import com.abuzahra.admin.data.model.CommandDefinitions
 import com.abuzahra.admin.data.model.Device
 import com.abuzahra.admin.data.model.Event
@@ -167,14 +168,14 @@ class DeviceDetailActivity : AppCompatActivity() {
 
         viewModel.commandHistory.observe(this) { result ->
             when (result) {
-                is Result.Success -> commandHistoryAdapter.submitList(result.data)
+                is ApiResult.Success -> commandHistoryAdapter.submitList(result.data)
                 else -> {}
             }
         }
 
         viewModel.events.observe(this) { result ->
             when (result) {
-                is Result.Success -> {
+                is ApiResult.Success -> {
                     // Convert events to commands for the adapter (reuse layout)
                     val eventCommands = result.data.map { event ->
                         Command(
@@ -193,13 +194,13 @@ class DeviceDetailActivity : AppCompatActivity() {
 
         viewModel.commandResult.observe(this) { result ->
             when (result) {
-                is Result.Loading -> {
+                is ApiResult.Loading -> {
                     // Could show a small progress indicator
                 }
-                is Result.Success -> {
+                is ApiResult.Success -> {
                     Snackbar.make(binding.coordinator, result.data, Snackbar.LENGTH_SHORT).show()
                 }
-                is Result.Error -> {
+                is ApiResult.Error -> {
                     if (result.code == 401) {
                         showSessionExpired()
                     } else {

@@ -3,7 +3,7 @@ package com.abuzahra.admin.ui.dashboard
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
 import com.abuzahra.admin.data.api.StatsResponse
 import com.abuzahra.admin.data.model.Device
 import com.abuzahra.admin.util.Preferences
@@ -11,11 +11,11 @@ import kotlinx.coroutines.launch
 
 class DashboardViewModel(private val preferences: Preferences) : ViewModel() {
 
-    private val _devices = MutableLiveData<Result<List<Device>>>()
-    val devices: MutableLiveData<Result<List<Device>>> = _devices
+    private val _devices = MutableLiveData<ApiResult<List<Device>>>()
+    val devices: MutableLiveData<ApiResult<List<Device>>> = _devices
 
-    private val _stats = MutableLiveData<Result<StatsResponse>>()
-    val stats: MutableLiveData<Result<StatsResponse>> = _stats
+    private val _stats = MutableLiveData<ApiResult<StatsResponse>>()
+    val stats: MutableLiveData<ApiResult<StatsResponse>> = _stats
 
     private val _searchQuery = MutableLiveData("")
     val searchQuery: MutableLiveData<String> = _searchQuery
@@ -49,12 +49,12 @@ class DashboardViewModel(private val preferences: Preferences) : ViewModel() {
                 applyFilters()
             } catch (e: retrofit2.HttpException) {
                 if (e.code() == 401) {
-                    _devices.postValue(Result.Error("انتهت صلاحية الجلسة", 401))
+                    _devices.postValue(ApiResult.Error("انتهت صلاحية الجلسة", 401))
                 } else {
-                    _devices.postValue(Result.Error("خطأ في تحميل الأجهزة: ${e.code()}"))
+                    _devices.postValue(ApiResult.Error("خطأ في تحميل الأجهزة: ${e.code()}"))
                 }
             } catch (e: Exception) {
-                _devices.postValue(Result.Error("خطأ في الاتصال: ${e.message}"))
+                _devices.postValue(ApiResult.Error("خطأ في الاتصال: ${e.message}"))
             }
         }
     }
@@ -64,10 +64,10 @@ class DashboardViewModel(private val preferences: Preferences) : ViewModel() {
             try {
                 val api = preferences.getApiService()
                 val statsResponse = api.getStats()
-                _stats.postValue(Result.Success(statsResponse))
+                _stats.postValue(ApiResult.Success(statsResponse))
             } catch (e: Exception) {
                 // Stats are secondary, don't show error
-                _stats.postValue(Result.Success(StatsResponse()))
+                _stats.postValue(ApiResult.Success(StatsResponse()))
             }
         }
     }
@@ -102,7 +102,7 @@ class DashboardViewModel(private val preferences: Preferences) : ViewModel() {
             matchesSearch && matchesFilter
         }
 
-        _devices.value = Result.Success(filtered)
+        _devices.value = ApiResult.Success(filtered)
     }
 
     fun logout() {

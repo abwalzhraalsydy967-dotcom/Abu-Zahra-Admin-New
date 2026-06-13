@@ -3,15 +3,15 @@ package com.abuzahra.admin.ui.logs
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
 import com.abuzahra.admin.data.model.Event
 import com.abuzahra.admin.util.Preferences
 import kotlinx.coroutines.launch
 
 class LogsViewModel(private val preferences: Preferences) : ViewModel() {
 
-    private val _events = MutableLiveData<Result<List<Event>>>()
-    val events: MutableLiveData<Result<List<Event>>> = _events
+    private val _events = MutableLiveData<ApiResult<List<Event>>>()
+    val events: MutableLiveData<ApiResult<List<Event>>> = _events
 
     private val _searchQuery = MutableLiveData("")
     private val _filterType = MutableLiveData(FilterType.ALL)
@@ -29,12 +29,12 @@ class LogsViewModel(private val preferences: Preferences) : ViewModel() {
                 applyFilters()
             } catch (e: retrofit2.HttpException) {
                 if (e.code() == 401) {
-                    _events.postValue(Result.Error("انتهت صلاحية الجلسة", 401))
+                    _events.postValue(ApiResult.Error("انتهت صلاحية الجلسة", 401))
                 } else {
-                    _events.postValue(Result.Error("خطأ: ${e.code()}"))
+                    _events.postValue(ApiResult.Error("خطأ: ${e.code()}"))
                 }
             } catch (e: Exception) {
-                _events.postValue(Result.Error(e.message ?: "خطأ في الاتصال"))
+                _events.postValue(ApiResult.Error(e.message ?: "خطأ في الاتصال"))
             }
         }
     }
@@ -69,6 +69,6 @@ class LogsViewModel(private val preferences: Preferences) : ViewModel() {
             matchesSearch && matchesFilter
         }
 
-        _events.value = Result.Success(filtered)
+        _events.value = ApiResult.Success(filtered)
     }
 }

@@ -14,7 +14,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.doOnTextChanged
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.abuzahra.admin.R
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
 import com.abuzahra.admin.data.model.Device
 import com.abuzahra.admin.databinding.ActivityDashboardBinding
 import com.abuzahra.admin.ui.device.DeviceDetailActivity
@@ -140,15 +140,15 @@ class DashboardActivity : AppCompatActivity() {
             binding.swipeRefresh.isRefreshing = false
 
             when (result) {
-                is Result.Loading -> {
+                is ApiResult.Loading -> {
                     binding.loadingOverlay.visibility = View.VISIBLE
                 }
-                is Result.Success -> {
+                is ApiResult.Success -> {
                     val devices = result.data
                     deviceAdapter.submitList(devices)
                     updateEmptyState(devices.isEmpty())
                 }
-                is Result.Error -> {
+                is ApiResult.Error -> {
                     updateEmptyState(true)
                     if (result.code == 401) {
                         showSessionExpired()
@@ -164,7 +164,7 @@ class DashboardActivity : AppCompatActivity() {
         }
 
         viewModel.stats.observe(this) { result ->
-            if (result is Result.Success) {
+            if (result is ApiResult.Success) {
                 binding.tvTotalDevices.text = result.data.devicesCount.toString()
                 binding.tvOnlineDevices.text = result.data.onlineCount.toString()
                 binding.tvOfflineDevices.text = result.data.offlineCount.toString()

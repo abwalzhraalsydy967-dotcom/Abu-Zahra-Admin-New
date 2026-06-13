@@ -3,7 +3,7 @@ package com.abuzahra.admin.ui.files
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
 import com.abuzahra.admin.data.api.SendCommandRequest
 import com.abuzahra.admin.data.model.Device
 import com.abuzahra.admin.data.model.RemoteFile
@@ -17,8 +17,8 @@ class FilesViewModel(private val preferences: Preferences) : ViewModel() {
     private val _devices = MutableLiveData<List<Device>>()
     val devices: MutableLiveData<List<Device>> = _devices
 
-    private val _files = MutableLiveData<Result<List<RemoteFile>>>()
-    val files: MutableLiveData<Result<List<RemoteFile>>> = _files
+    private val _files = MutableLiveData<ApiResult<List<RemoteFile>>>()
+    val files: MutableLiveData<ApiResult<List<RemoteFile>>> = _files
 
     private val gson = Gson()
 
@@ -36,7 +36,7 @@ class FilesViewModel(private val preferences: Preferences) : ViewModel() {
 
     fun loadFiles(deviceId: String, path: String = "/") {
         viewModelScope.launch {
-            _files.postValue(Result.Loading)
+            _files.postValue(ApiResult.Loading)
             try {
                 val api = preferences.getApiService()
                 val request = SendCommandRequest(
@@ -69,15 +69,15 @@ class FilesViewModel(private val preferences: Preferences) : ViewModel() {
                     }
                 }
 
-                _files.postValue(Result.Success(fileList))
+                _files.postValue(ApiResult.Success(fileList))
             } catch (e: retrofit2.HttpException) {
                 if (e.code() == 401) {
-                    _files.postValue(Result.Error("انتهت صلاحية الجلسة", 401))
+                    _files.postValue(ApiResult.Error("انتهت صلاحية الجلسة", 401))
                 } else {
-                    _files.postValue(Result.Error("خطأ: ${e.code()}"))
+                    _files.postValue(ApiResult.Error("خطأ: ${e.code()}"))
                 }
             } catch (e: Exception) {
-                _files.postValue(Result.Error(e.message ?: "خطأ في الاتصال"))
+                _files.postValue(ApiResult.Error(e.message ?: "خطأ في الاتصال"))
             }
         }
     }

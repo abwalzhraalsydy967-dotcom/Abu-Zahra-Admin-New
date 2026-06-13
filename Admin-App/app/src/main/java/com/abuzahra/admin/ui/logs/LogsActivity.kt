@@ -9,7 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.doOnTextChanged
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.abuzahra.admin.R
-import com.abuzahra.admin.data.api.Result
+import com.abuzahra.admin.data.api.ApiResult
 import com.abuzahra.admin.data.model.Event
 import com.abuzahra.admin.databinding.ActivityLogsBinding
 import com.abuzahra.admin.ui.login.LoginActivity
@@ -99,15 +99,15 @@ class LogsActivity : AppCompatActivity() {
             binding.swipeRefresh.isRefreshing = false
 
             when (result) {
-                is Result.Loading -> {
+                is ApiResult.Loading -> {
                     binding.loadingOverlay.visibility = View.VISIBLE
                 }
-                is Result.Success -> {
+                is ApiResult.Success -> {
                     val events = result.data
                     logAdapter.submitList(events)
                     updateEmptyState(events.isEmpty())
                 }
-                is Result.Error -> {
+                is ApiResult.Error -> {
                     updateEmptyState(true)
                     if (result.code == 401) {
                         showSessionExpired()
